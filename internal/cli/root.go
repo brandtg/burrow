@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/brandtg/burrow/internal/distro"
 	"github.com/brandtg/burrow/internal/engine"
 	"github.com/brandtg/burrow/internal/i18n"
 	"github.com/brandtg/burrow/internal/journal"
@@ -40,6 +41,11 @@ type App struct {
 	Getenv  func(string) string
 	Geteuid func() int
 
+	// Distro and Adapter override detection for tests and the container
+	// matrix.
+	Distro  *distro.Info
+	Adapter distro.Adapter
+
 	env    *engine.Env
 	envErr error
 }
@@ -60,6 +66,8 @@ func (a *App) Env() (*engine.Env, error) {
 		Geteuid:    a.Geteuid,
 		ConfigPath: a.Flags.Config,
 		DryRun:     a.Flags.DryRun,
+		Distro:     a.Distro,
+		Adapter:    a.Adapter,
 	})
 	return a.env, a.envErr
 }
@@ -98,7 +106,7 @@ func (a *App) Root() *cobra.Command {
 		a.newConfigCmd(),
 		a.newHistoryCmd(),
 		a.newAnalyzeCmd(),
-		a.newStubCmd("clean", "categorized cleaner"),
+		a.newCleanCmd(),
 		a.newStubCmd("purge", "remove rebuildable project artifacts"),
 		a.newStubCmd("status", "one-shot system snapshot"),
 	)

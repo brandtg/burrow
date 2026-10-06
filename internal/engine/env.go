@@ -22,6 +22,10 @@ type ResolveOptions struct {
 	ConfigPath string
 	// DryRun is propagated to the owner runner.
 	DryRun bool
+	// Distro overrides /etc/os-release detection (tests, container matrix).
+	Distro *distro.Info
+	// Adapter overrides the adapter selected for the detected distro.
+	Adapter distro.Adapter
 }
 
 func (o ResolveOptions) getenv() func(string) string {
@@ -69,9 +73,19 @@ func Resolve(opts ResolveOptions) (*Env, error) {
 		return nil, err
 	}
 
-	info, err := distro.Detect()
-	if err != nil {
-		info = distro.Info{}
+	var info distro.Info
+	if opts.Distro != nil {
+		info = *opts.Distro
+	} else {
+		detected, derr := distro.Detect()
+		if derr != nil {
+			detected = distro.Info{}
+		}
+		info = detected
+	}
+	adapter := opts.Adapter
+	if adapter == nil {
+		adapter = distro.For(info)
 	}
 
 	env := &Env{
@@ -86,7 +100,7 @@ func Resolve(opts ResolveOptions) (*Env, error) {
 		Whitelist:  wl,
 		Cfg:        cfg,
 		Distro:     info,
-		Adapter:    distro.For(info),
+		Adapter:    adapter,
 		Paths:      paths,
 		DryRun:     opts.DryRun,
 	}

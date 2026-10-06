@@ -65,9 +65,27 @@ func (r Risk) String() string {
 
 // Result is the outcome of executing an Action.
 type Result struct {
-	Status string
-	Bytes  int64
-	Reason string
+	Status   string
+	Bytes    int64
+	Reason   string
+	Argv     []string
+	TimedOut bool
+}
+
+// Status values for a planned item and an action result.
+const (
+	StatusPending = "pending"
+	StatusOK      = "ok"
+	StatusSkipped = "skipped"
+	StatusFailed  = "failed"
+	StatusDryRun  = "dry-run"
+)
+
+// ArgvPlanner is implemented by owner-command actions so the review screen can
+// list the exact argv that will run. It is an optional interface; the Action
+// contract itself is unchanged.
+type ArgvPlanner interface {
+	PlannedArgv() []string
 }
 
 // Action performs a mutation. Implementations must be idempotent and must

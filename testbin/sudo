@@ -1,0 +1,8 @@
+#!/bin/sh
+# Test stub for sudo. Records the elevated argv and executes the remainder so
+# the integration test observes the exact command that would run as root.
+log="${BURROW_TESTBIN_LOG:-/dev/null}"
+{ printf 'argv: sudo'; for a in "$@"; do printf ' %s' "$a"; done; printf '\n'; } >>"$log"
+if [ "$1" = "--" ]; then shift; fi
+if [ -n "$1" ]; then exec "$@"; fi
+exit 0

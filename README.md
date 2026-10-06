@@ -12,9 +12,11 @@ things:
 
 It is an **orchestrator with a safety contract**, not a path-deleter.
 
-> Status: in progress. Plan 01 (foundation + safety core) has landed; the product
-> spec and the remaining work are broken into dependency-ordered plans under
-> `docs/plans/`. See [Development](#development) to build and test.
+> Status: in progress. Plan 01 (foundation + safety core), Plan 02 (analyze
+> TUI + scan adapter), and Plan 03 (clean engine, owner/distro layer, preview UI,
+> `system`/apt catalog) have landed; the product spec and the remaining work are
+> broken into dependency-ordered plans under `docs/plans/`. See
+> [Development](#development) to build and test.
 
 ## Why this exists
 
@@ -87,6 +89,27 @@ violated (`internal/safe`, `safety_test.go`).
 
 See `docs/burrow-spec.md` §7 for the full contract, including path validation and
 identity snapshots (TOCTOU defense).
+
+## Cleanup catalog (v0.1)
+
+The `system` category on Debian/Ubuntu (apt/dpkg). Every mutating row is an
+allow-listed owner command; discovery and measurement are read-only. High-risk
+rows are always shown but never auto-selected.
+
+| Item | Owner command | Recovery | Root | Guard | Risk | Default |
+|---|---|---|---|---|---|---|
+| `system.pkg-cache` | `apt-get clean` | owner | yes | apt/dpkg idle | low | on |
+| `system.orphans` | `apt-get autoremove --purge` | owner | yes | apt idle | high | off |
+| `system.residual-config` | `dpkg --purge <pkgs>` (pkgs from `dpkg -l` `^rc`) | owner | yes | dpkg idle | med | off |
+| `system.old-kernels` | `apt-get autoremove --purge` | owner | yes | apt idle | high | off |
+| `system.journald` | `journalctl --vacuum-size=<cfg>` (default 500M) | owner | yes | — | low | on |
+| `system.rotated-logs` | `systemd-tmpfiles --clean` | owner | yes | — | med | off |
+| `system.tmp` | `systemd-tmpfiles --clean` | owner | yes | — | low | off |
+| `system.core-dumps` | trash user-owned core files | trash | no | — | low | off |
+| `system.crash` | `systemd-tmpfiles --clean` | owner | yes | — | low | off |
+
+Other distros are detected behind the `internal/distro` adapter interface; their
+package rows are detection stubs until their plans land (Plan 07).
 
 ## Architecture
 

@@ -1,6 +1,6 @@
 # Plan 03 — Clean engine, owner/distro layer, preview UI, `system`/apt catalog
 
-**Status:** not started
+**Status:** in review
 **Milestone:** M2
 **Depends on:** 01
 **Blocks:** 04, 05, 07
