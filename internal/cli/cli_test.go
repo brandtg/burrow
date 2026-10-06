@@ -125,7 +125,7 @@ func TestHistoryJSON(t *testing.T) {
 }
 
 func TestStubCommandsExitUsage(t *testing.T) {
-	for _, name := range []string{"clean", "purge", "status"} {
+	for _, name := range []string{"purge", "status"} {
 		te := newTestApp(t, nil)
 		if code := te.run(name); code != ExitUsage {
 			t.Fatalf("%s: exit code = %d, want %d", name, code, ExitUsage)

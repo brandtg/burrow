@@ -11,7 +11,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -74,7 +77,21 @@ func (r *Runner) Run(ctx context.Context, argv []string, timeout time.Duration, 
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(runCtx, finalArgv[0], finalArgv[1:]...)
+	// Resolve the binary to an absolute path as the invoking user before
+	// elevating, so sudo runs a known binary rather than resolving through its
+	// own secure_path (spec §7.6).
+	execArgv := append([]string(nil), argv...)
+	resolved, err := resolveExecutable(execArgv[0], r.Env)
+	if err != nil {
+		return res, err
+	}
+	execArgv[0] = resolved
+	if elevate {
+		execArgv = append([]string{"sudo", "--"}, execArgv...)
+	}
+	res.Argv = execArgv
+
+	cmd := exec.CommandContext(runCtx, execArgv[0], execArgv[1:]...)
 	cmd.Env = r.Env
 	cmd.Dir = r.Dir
 	var stdout, stderr bytes.Buffer
@@ -82,7 +99,7 @@ func (r *Runner) Run(ctx context.Context, argv []string, timeout time.Duration, 
 	cmd.Stderr = &stderr
 
 	start := time.Now()
-	err := cmd.Run()
+	err = cmd.Run()
 	res.Duration = time.Since(start)
 	res.Stdout = stdout.String()
 	res.Stderr = stderr.String()
@@ -105,4 +122,69 @@ func (r *Runner) Run(ctx context.Context, argv []string, timeout time.Duration, 
 	}
 	res.ExitCode = 0
 	return res, nil
+}
+
+// Probe runs a read-only command and returns its stdout. Probes are never
+// elevated and never dry-run: measurement and detection must see real output
+// even when the run itself is a dry-run.
+func (r *Runner) Probe(ctx context.Context, argv []string, timeout time.Duration) (string, error) {
+	if len(argv) == 0 {
+		return "", errors.New("owner: empty argv")
+	}
+	probe := *r
+	probe.DryRun = false
+	res, err := probe.Run(ctx, argv, timeout, false)
+	if err != nil {
+		return "", err
+	}
+	return res.Stdout, nil
+}
+
+// resolveExecutable returns the absolute path of name, searching env's PATH
+// when set and otherwise the process PATH. It refuses a path that is not an
+// executable regular file.
+func resolveExecutable(name string, env []string) (string, error) {
+	if name == "" {
+		return "", errors.New("owner: empty executable")
+	}
+	if filepath.IsAbs(name) {
+		if err := executableFile(name); err != nil {
+			return "", err
+		}
+		return name, nil
+	}
+	pathEnv := os.Getenv("PATH")
+	for _, kv := range env {
+		if v, ok := strings.CutPrefix(kv, "PATH="); ok {
+			pathEnv = v
+		}
+	}
+	for _, dir := range filepath.SplitList(pathEnv) {
+		if dir == "" {
+			dir = "."
+		}
+		candidate := filepath.Join(dir, name)
+		if err := executableFile(candidate); err == nil {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("owner: executable %q not found in PATH", name)
+}
+
+// Available reports whether name resolves to an executable on the current
+// PATH. It is used by discovery to skip an item whose owner command is absent.
+func Available(name string) bool {
+	_, err := resolveExecutable(name, nil)
+	return err == nil
+}
+
+func executableFile(path string) error {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if fi.IsDir() || fi.Mode()&0o111 == 0 {
+		return fmt.Errorf("owner: %s is not executable", path)
+	}
+	return nil
 }

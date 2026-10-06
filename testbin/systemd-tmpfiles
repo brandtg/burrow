@@ -1,0 +1,5 @@
+#!/bin/sh
+# Test stub for systemd-tmpfiles. Records argv and emits canned output.
+log="${BURROW_TESTBIN_LOG:-/dev/null}"
+{ printf 'argv: systemd-tmpfiles'; for a in "$@"; do printf ' %s' "$a"; done; printf '\n'; } >>"$log"
+echo "Cleaning up"

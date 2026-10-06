@@ -10,6 +10,8 @@ import (
 	"io"
 	"os"
 	"strings"
+
+	"github.com/brandtg/burrow/internal/owner"
 )
 
 // Info is the parsed /etc/os-release.
@@ -82,7 +84,9 @@ func (i Info) Family() string {
 	return "unknown"
 }
 
-// Adapter describes a package-manager family.
+// Adapter describes a package-manager family. The command methods return
+// allow-listed argv (invariant I4); a zero-value OwnerCommand means the family
+// does not implement that item yet, and the system catalog skips it.
 type Adapter interface {
 	// ID is the family identifier, e.g. "apt".
 	ID() string
@@ -92,6 +96,16 @@ type Adapter interface {
 	LockFiles() []string
 	// NeedsRoot reports whether owner commands for this family need elevation.
 	NeedsRoot() bool
+	// PackageCacheAction empties the package-manager cache.
+	PackageCacheAction() owner.OwnerCommand
+	// OrphansAction removes packages no longer required.
+	OrphansAction() owner.OwnerCommand
+	// ResidualConfigAction purges the given residual-config packages.
+	ResidualConfigAction(pkgs []string) (owner.OwnerCommand, error)
+	// OldKernelsAction removes old kernels.
+	OldKernelsAction() owner.OwnerCommand
+	// LockGuard names the locks and processes that indicate a busy manager.
+	LockGuard() LockProbe
 }
 
 // For returns the adapter for an os-release.
