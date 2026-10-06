@@ -1,6 +1,6 @@
 # Plan 02 — Scan adapter, `analyze` TUI, `--json`
 
-**Status:** not started
+**Status:** done
 **Milestone:** M1
 **Depends on:** 01
 **Blocks:** 06, 07
@@ -49,6 +49,9 @@ testdata/analyze/           fixture tree + golden JSON
       Children  []*Node
       SizeKnown bool // added in Plan 02 for fallback sizing
   }
+  // DisplaySize returns Apparent when apparent is true, else Size. It is the
+  // single selector presentation layers use; the two fields are never swapped.
+  func (n *Node) DisplaySize(apparent bool) int64
   ```
 - Translate gdu's `fs.Item` tree into our `Node` model. Use `fs.HardLinkedItems`
   semantics so shared inodes are not double-counted (spec §8.8).
@@ -122,3 +125,70 @@ testdata/analyze/           fixture tree + golden JSON
 
 UI shape and keybindings mirror Mole's analyze TUI behaviorally; the scanner is
 gdu (MIT) wrapped, not copied. No Mole source used.
+
+---
+
+## Implementation notes (Plan 02)
+
+Recorded after landing the plan. Acceptance criteria pass and `scripts/check.sh`
+is green (golangci-lint and govulncheck warn as not installed on the authoring
+host, matching Plan 01).
+
+### Scan strategy
+
+- In-process gdu import retained, pinned at `v5.38.0` (spec D2). The shell-out
+  fallback remains a one-file change confined to `internal/scan`.
+- `Scanner` is the stable interface; `GDU` is the default and `Analyze` is kept
+  as the Plan 01 entry point.
+
+### Node naming
+
+- `Size` is on-disk usage (`blocks*512`); `Apparent` is the apparent size. The
+  earlier doc ambiguity is resolved by `Node.DisplaySize(apparent bool)`, the
+  single selector every presentation layer uses. The fields themselves are never
+  swapped.
+
+### Options semantics
+
+- `Depth <= 0` means unlimited; `Depth 1` keeps the root and its immediate
+  children.
+- `Options.Apparent` is a presentation hint only; it is recorded on the options
+  but not read inside `scan` (both sizes are always populated).
+
+### --json shape
+
+- `entries` defaults to direct children when depth is unlimited (`entryDepth`),
+  so the payload stays bounded; `largest` uses `scan.Flatten` over the retained
+  tree and the top-N selector.
+- `scan_status` is `partial` when any node has `SizeKnown=false` and
+  `unavailable` when the root is an unreadable empty directory.
+
+### Fallback sizing
+
+- Directories the engine flags unreadable fall back to `du -skP` under
+  `owner.TimeoutScanPerRoot`; single files use `os.Stat` (`Blocks*512` on-disk,
+  `Size()` apparent). Failure leaves `SizeKnown=false`, rendered "unknown",
+  which drives `scan_status=partial` rather than a fake 0.
+
+### Hardlinks
+
+- De-duplication is wired via a single shared, non-nil `fs.HardLinkedItems` map
+  passed to the root `UpdateStats` call, so a shared inode counts once
+  (spec §8.8). Covered by `TestHardlinksNotDoubleCounted`.
+
+### Deviations and judgement calls
+
+- `--no-hidden` needed both the directory-ignore predicate and gdu's file-type
+  filter, because gdu applies the ignore predicate only to directories.
+- The TUI `parent()` cursor restore happens after `rebuildEntries` re-sorts the
+  list, and `removeNode` subtracts the removed subtree's `ItemCount` (gdu counts
+  the node itself) to keep the `c` column honest.
+
+### Known gaps
+
+- No benchmark asserts the "10 GB warm scan < 2 s" M1 criterion; the 10 GB
+  fixture is impractical here, so it is tracked separately.
+- `Options.Apparent` is not read inside `scan` (presentation-only), as noted
+  above.
+- Memory for very large trees is unaddressed; the badger analyzer is imported
+  but unused (spec risk table).

@@ -66,7 +66,7 @@ Machine-readable form (one edge per line, `A -> B` means B depends on A):
 | Plan | File | Milestone | Depends on | Blocks | Parallel with | Status |
 |------|------|-----------|------------|--------|---------------|--------|
 | 01 | `01-foundation-safety-core.md` | M0 | — | all | — | done |
-| 02 | `02-analyze.md` | M1 | 01 | 06, 07 | 03 | not started |
+| 02 | `02-analyze.md` | M1 | 01 | 06, 07 | 03 | done |
 | 03 | `03-clean-engine-system-apt.md` | M2 | 01 | 04, 05, 07 | 02 | not started |
 | 04 | `04-dev-user-cache-downloads.md` | M3 | 03 | 07 | 05, 06 | not started |
 | 05 | `05-containers-desktop-pkgs.md` | M4 | 03 | 07 | 04, 06 | not started |

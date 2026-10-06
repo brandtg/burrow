@@ -1,0 +1,46 @@
+{
+  "path": "<ROOT>",
+  "total_size": 10106,
+  "total_files": 4,
+  "entries": [
+    {
+      "name": "sub",
+      "path": "<ROOT>/sub",
+      "size": 5010,
+      "is_dir": true
+    },
+    {
+      "name": "b.bin",
+      "path": "<ROOT>/b.bin",
+      "size": 4096,
+      "is_dir": false
+    },
+    {
+      "name": "a.txt",
+      "path": "<ROOT>/a.txt",
+      "size": 1000,
+      "is_dir": false
+    }
+  ],
+  "largest": [
+    {
+      "name": "sub",
+      "path": "<ROOT>/sub",
+      "size": 5010,
+      "is_dir": true
+    },
+    {
+      "name": "d.txt",
+      "path": "<ROOT>/sub/d.txt",
+      "size": 5000,
+      "is_dir": false
+    },
+    {
+      "name": "b.bin",
+      "path": "<ROOT>/b.bin",
+      "size": 4096,
+      "is_dir": false
+    }
+  ],
+  "scan_status": "complete"
+}
