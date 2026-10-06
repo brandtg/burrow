@@ -1,6 +1,7 @@
 package safe
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -12,21 +13,33 @@ import (
 // write bit. This backs invariant I7 (a privileged delete must not traverse a
 // user-mutable ancestor).
 //
+// It fails closed: if any ancestor cannot be inspected, it returns an error
+// rather than reporting "no mutable ancestor", because an uninspectable
+// ancestor is not provably safe. Callers must treat the error as an unknown
+// guard-stop. Symlinks are followed (os.Stat) because that is the path a
+// privileged delete would traverse.
+//
 // Provenance: independent reimplementation of Mole's
 // _mole_privileged_path_has_mutable_ancestor.
-func MutableAncestor(path string) (string, bool) {
+func MutableAncestor(path string) (string, bool, error) {
 	dir := filepath.Dir(filepath.Clean(path))
 	for {
-		if fi, err := os.Lstat(dir); err == nil && fi.IsDir() {
-			if st, ok := fi.Sys().(*syscall.Stat_t); ok {
-				if isMutableDir(st) {
-					return dir, true
-				}
+		fi, err := os.Stat(dir)
+		if err != nil {
+			return "", false, fmt.Errorf("cannot inspect ancestor %s: %w", dir, err)
+		}
+		if fi.IsDir() {
+			st, ok := fi.Sys().(*syscall.Stat_t)
+			if !ok {
+				return "", false, fmt.Errorf("cannot read stat for ancestor %s", dir)
+			}
+			if isMutableDir(st) {
+				return dir, true, nil
 			}
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return "", false
+			return "", false, nil
 		}
 		dir = parent
 	}

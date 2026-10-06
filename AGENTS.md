@@ -25,7 +25,9 @@ Plan 01 is done. What exists and what to build on:
 - internal/engine has the `Env` and the Target/Action/Category/Guard/Recovery/
   Risk contract (spec §6.2) plus `engine.Resolve`. The run pipeline is NOT
   implemented; it lands in Plan 03. Plan 03 owns reshaping the pipeline, but
-  keep `Env` and the contract types backward compatible.
+  keep `Env` and the contract types backward compatible. Note: `engine.Action`
+  also carries `Recovery() Recovery`, an addition beyond the original §6.2
+  signature that lets I2 be enforced at the action boundary; keep it.
 - `internal/safe` built-in protected roots protect the roots themselves;
   config `clean.protected_paths` entries are prefix-protected (merged in by the
   engine). `/home` itself is protected but its subtrees are not.
@@ -146,9 +148,14 @@ go run ./scripts/safety-gate .   # exit 1 if a sink is outside safe/trash/owner
 ```
 
 The static gate is an AST checker (not grep): it maps import aliases and flags
-`os.Remove`, `os.RemoveAll`, `os.Truncate`, and `syscall.Unlink` outside
-internal/safe, internal/trash, internal/owner, and itself. It skips `_test.go`
-files. A planted `os.Remove` outside those packages must fail it.
+`os.Remove`, `os.RemoveAll`, `os.Truncate`, `syscall.Unlink/Unlinkat/Rmdir/
+Ftruncate/Truncate`, and the `golang.org/x/sys/unix` equivalents outside
+internal/safe, internal/trash, internal/owner, and itself. It also flags any
+method call named `Truncate` (e.g. `(*os.File).Truncate`) and bare calls from a
+dot-import of a forbidden package. It skips `_test.go` files. A planted
+`os.Remove` outside those packages must fail it. Known limitation: a sink
+assigned to a variable first (`remove := os.Remove; remove(p)`) is not detected,
+and the method heuristic can false-positive on `bytes.Buffer.Truncate`.
 
 Testing expectations (spec §14):
 

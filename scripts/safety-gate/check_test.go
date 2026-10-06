@@ -59,6 +59,74 @@ func Ok(p string) error {
 	}
 }
 
+func TestGateFlagsUnixSink(t *testing.T) {
+	root := t.TempDir()
+	writeGo(t, filepath.Join(root, "internal", "catalog", "bad.go"), `package catalog
+
+import "golang.org/x/sys/unix"
+
+func Bad(p string) error { return unix.Unlinkat(0, p, 0) }
+`)
+	violations, err := Check(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(violations) != 1 || violations[0].Sink != "golang.org/x/sys/unix.Unlinkat" {
+		t.Fatalf("expected unix.Unlinkat violation, got %v", violations)
+	}
+}
+
+func TestGateFlagsMethodTruncate(t *testing.T) {
+	root := t.TempDir()
+	writeGo(t, filepath.Join(root, "internal", "catalog", "bad.go"), `package catalog
+
+import "os"
+
+func Bad(f *os.File) error { return f.Truncate(0) }
+`)
+	violations, err := Check(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(violations) != 1 || violations[0].Sink != "(method).Truncate" {
+		t.Fatalf("expected method Truncate violation, got %v", violations)
+	}
+}
+
+func TestGateFlagsDotImport(t *testing.T) {
+	root := t.TempDir()
+	writeGo(t, filepath.Join(root, "internal", "catalog", "bad.go"), `package catalog
+
+import . "os"
+
+func Bad(p string) error { return Remove(p) }
+`)
+	violations, err := Check(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(violations) != 1 || violations[0].Sink != "os.Remove" {
+		t.Fatalf("expected dot-import os.Remove violation, got %v", violations)
+	}
+}
+
+func TestGateFlagsAliasedImport(t *testing.T) {
+	root := t.TempDir()
+	writeGo(t, filepath.Join(root, "internal", "catalog", "bad.go"), `package catalog
+
+import o "os"
+
+func Bad(p string) error { return o.Remove(p) }
+`)
+	violations, err := Check(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(violations) != 1 || violations[0].Sink != "os.Remove" {
+		t.Fatalf("expected aliased os.Remove violation, got %v", violations)
+	}
+}
+
 func TestGateSkipsTestFiles(t *testing.T) {
 	root := t.TempDir()
 	writeGo(t, filepath.Join(root, "internal", "catalog", "bad_test.go"), `package catalog

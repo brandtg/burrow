@@ -189,6 +189,10 @@ type Target struct {
 // must re-validate identity at the moment of execution (see §7).
 type Action interface {
     Describe() string
+    // Recovery declares the contract (RecoveryTrash | RecoveryOwner) so I2 can
+    // be enforced at the action boundary. Addition landed in Plan 01
+    // (internal/engine/types.go); Plan 03 must keep it.
+    Recovery() Recovery
     // Run executes; dryRun must compute the same plan without mutating.
     Run(ctx context.Context, dryRun bool) (Result, error)
 }

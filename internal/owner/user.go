@@ -65,6 +65,12 @@ type Dirs struct {
 //
 // When elevated, the XDG_* variables in the environment belong to root, so they
 // are ignored and the invoking user's defaults are derived from their HOME.
+//
+// When not elevated, HOME is still taken from the passwd entry (u.HomeDir), not
+// $HOME. This is deliberate: the passwd entry cannot be redirected by a spoofed
+// environment. The trade-off is that a container or dev shell with a modified
+// HOME resolves config/journal/trash under the passwd home rather than the
+// shell's tree. Absolute XDG_* overrides are still honored.
 func UserDirs(u *user.User, elevated bool, getenv func(string) string) Dirs {
 	if getenv == nil {
 		getenv = os.Getenv

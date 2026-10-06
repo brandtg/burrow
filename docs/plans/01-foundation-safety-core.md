@@ -294,8 +294,11 @@ Full evidence is committed in `internal/scan/README.md`. Summary:
   contract or a mismatched action.
 - I3 — allow-list validator rejects paths outside `Roots`; `WithinRoot` boundary
   property.
-- I4 — owner argv is executed verbatim (dry-run and a real `echo` with shell
-  metacharacters proves no shell interpolation).
+- I4 — owner argv is passed verbatim. `safety_test.go`
+  `TestI4OwnerCommandsVerbatim` covers the dry-run plan; the real execution
+  proof is `internal/owner/runner_test.go` `TestRunExecutesVerbatimWithoutShell`
+  (a real `echo` with shell metacharacters, showing `exec.Command` never invokes
+  a shell).
 - I5 — `trash.Put` against an unavailable trash fails and leaves the source.
 - I6 — `engine.Resolve` refuses euid 0 without `SUDO_USER`; non-root resolves.
 - I7 — `safe.MutableAncestor` finds a user-writable ancestor and the resulting

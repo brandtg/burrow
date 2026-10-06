@@ -31,6 +31,11 @@ type Entry struct {
 	DeletionDate time.Time
 }
 
+// errSourceNotRemoved is returned by move when the cross-device copy reached
+// the trash but the source could not be removed. The trash entry is valid and
+// restorable; the item may also still exist (partially) at the source.
+var errSourceNotRemoved = errors.New("trash: copied to trash but source could not be removed")
+
 // Trash is a handle to a user's trash. The home trash is the primary location;
 // items on other filesystems are stored in per-mount trash directories.
 type Trash struct {
@@ -118,8 +123,15 @@ func (t *Trash) Put(path string) (Entry, error) {
 
 	dest := filepath.Join(filesDir, name)
 	if err := move(abs, dest, fi); err != nil {
-		// Roll back the info file so the trash does not contain a dangling
-		// entry; the source is untouched.
+		if errors.Is(err, errSourceNotRemoved) {
+			// The item is fully in the trash; keep the .trashinfo so the entry
+			// stays consistent and restorable. The source removal failed, so
+			// the item may exist in both places. Return the valid Entry
+			// alongside the error so callers can still recover it.
+			return Entry{Name: name, InfoPath: infoPath, Path: abs, DeletionDate: when}, fmt.Errorf("trash: %s: %w", abs, err)
+		}
+		// The move did not place the item; roll back the info file so the
+		// trash does not contain a dangling entry. The source is untouched.
 		_ = os.Remove(infoPath)
 		return Entry{}, fmt.Errorf("trash: cannot move %s to trash: %w", abs, err)
 	}
@@ -246,9 +258,17 @@ func move(src, dst string, fi os.FileInfo) error {
 		_ = os.RemoveAll(tmp)
 		return err
 	}
-	return os.RemoveAll(src)
+	if err := os.RemoveAll(src); err != nil {
+		return fmt.Errorf("%w: %v", errSourceNotRemoved, err)
+	}
+	return nil
 }
 
+// copyRecursive copies a tree for the cross-device fallback. It preserves file
+// mode and symlinks but not mtime, ownership, or extended attributes; restored
+// items get fresh mtimes. That is acceptable for trash semantics (the content
+// and structure are preserved) and avoids depending on platform-specific
+// xattr/chown support.
 func copyRecursive(src, dst string, fi os.FileInfo) error {
 	switch {
 	case fi.Mode()&os.ModeSymlink != 0:
