@@ -97,7 +97,7 @@ func (a *App) Root() *cobra.Command {
 		a.newVersionCmd(),
 		a.newConfigCmd(),
 		a.newHistoryCmd(),
-		a.newStubCmd("analyze", "interactive disk explorer"),
+		a.newAnalyzeCmd(),
 		a.newStubCmd("clean", "categorized cleaner"),
 		a.newStubCmd("purge", "remove rebuildable project artifacts"),
 		a.newStubCmd("status", "one-shot system snapshot"),

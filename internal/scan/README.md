@@ -39,3 +39,22 @@ Findings (measured on Fedora 44, Go 1.26.8, `CGO_ENABLED=0`):
 compiles and the cost (~5 MiB static binary, ~2 s build) is acceptable for a
 one-shot CLI. If the API ever stops compiling, switch to the `gdu --json`
 shell-out adapter without changing any other package.
+
+## Plan 02 additions
+
+- `Scanner` is the stable interface; `GDU` is the default implementation and
+  `Analyze` remains as the Plan 01 entry point.
+- `Options` gained `Apparent` (a presentation hint) and `Depth`. `Node` gained
+  `SizeKnown`.
+- Hardlink de-duplication is wired: a single non-nil `fs.HardLinkedItems` map is
+  shared across the root `UpdateStats` call, so a shared inode counts once
+  (spec §8.8). Covered by `TestHardlinksNotDoubleCounted`.
+- Fallback sizing: `du -skP` (bounded by `owner.TimeoutScanPerRoot`) for
+  directories the engine flags unreadable, and `os.Stat` (`Blocks*512` on-disk,
+  `Size()` apparent) for single files. Failure leaves `SizeKnown=false`, which
+  renders "unknown" and drives `scan_status=partial` rather than showing 0.
+- `--no-hidden` needs both the directory-ignore predicate and the file-type
+  filter: gdu applies the ignore predicate only to directories, so hidden files
+  are filtered by the third `AnalyzeDir` argument.
+- Per-root deadline is `owner.TimeoutScanPerRoot` (90s); cancellation is via
+  `ctx` and `analyzer.Cancel()`.
