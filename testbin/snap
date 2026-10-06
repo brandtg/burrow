@@ -1,0 +1,13 @@
+#!/bin/sh
+# Test stub for snap. Records argv and emits canned output.
+log="${BURROW_TESTBIN_LOG:-/dev/null}"
+{ printf 'argv: snap'; for a in "$@"; do printf ' %s' "$a"; done; printf '\n'; } >>"$log"
+case "$1" in
+  list)
+    echo "Name    Version   Rev   Tracking   Publisher   Notes"
+    echo "core20  20240111  2015  latest/stable  canonical  disabled"
+    ;;
+  *)
+    echo ""
+    ;;
+esac

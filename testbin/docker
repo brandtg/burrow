@@ -1,0 +1,14 @@
+#!/bin/sh
+# Test stub for docker. Records argv and emits canned output.
+log="${BURROW_TESTBIN_LOG:-/dev/null}"
+{ printf 'argv: docker'; for a in "$@"; do printf ' %s' "$a"; done; printf '\n'; } >>"$log"
+case "$1" in
+  system)
+    echo "TYPE            TOTAL     ACTIVE    SIZE      RECLAIMABLE"
+    echo "Images          10        3         2.5GB     1.2GB (48%)"
+    echo "Build Cache     42        0         800MB     800MB"
+    ;;
+  *)
+    echo "Total reclaimed space: 1.2GB"
+    ;;
+esac

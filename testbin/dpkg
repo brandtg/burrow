@@ -1,0 +1,5 @@
+#!/bin/sh
+# Test stub for dpkg. Records argv and emits canned output.
+log="${BURROW_TESTBIN_LOG:-/dev/null}"
+{ printf 'argv: dpkg'; for a in "$@"; do printf ' %s' "$a"; done; printf '\n'; } >>"$log"
+echo "Desired=Unknown/Install/Remove/Purge/Hold"

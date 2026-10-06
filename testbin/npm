@@ -1,0 +1,8 @@
+#!/bin/sh
+# Test stub for npm. Records argv and emits canned output.
+log="${BURROW_TESTBIN_LOG:-/dev/null}"
+{ printf 'argv: npm'; for a in "$@"; do printf ' %s' "$a"; done; printf '\n'; } >>"$log"
+case "$1 $2 $3" in
+  "config get cache") echo "/home/testuser/.npm" ;;
+  *) echo "" ;;
+esac

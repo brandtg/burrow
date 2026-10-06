@@ -1,0 +1,4 @@
+# burrow whitelist fixture: paths that the generic user-cache sweep must skip.
+# A whitelisted path protects itself and its parent.
+/home/user/.cache/keep-me
+/home/user/.cache/keep-this-too
