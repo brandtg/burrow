@@ -1,0 +1,152 @@
+// Package engine holds the run pipeline's shared contract: the resolved
+// environment and the Target/Action/Category/Guard types. Plan 01 ships the Env
+// and the type contract; the pipeline itself lands in Plan 03.
+package engine
+
+import (
+	"context"
+	"errors"
+	"os/user"
+
+	"github.com/brandtg/burrow/internal/config"
+	"github.com/brandtg/burrow/internal/distro"
+	"github.com/brandtg/burrow/internal/owner"
+	"github.com/brandtg/burrow/internal/whitelist"
+)
+
+// Recovery is the declared recovery contract for a mutation (invariant I2).
+type Recovery int
+
+const (
+	// RecoveryTrash moves the item to the freedesktop Trash (recoverable).
+	RecoveryTrash Recovery = iota + 1
+	// RecoveryOwner invokes the owner command (permanent but re-downloadable).
+	RecoveryOwner
+)
+
+func (r Recovery) String() string {
+	switch r {
+	case RecoveryTrash:
+		return "trash"
+	case RecoveryOwner:
+		return "owner"
+	default:
+		return "invalid"
+	}
+}
+
+// Valid reports whether r is a known contract.
+func (r Recovery) Valid() bool { return r == RecoveryTrash || r == RecoveryOwner }
+
+// Risk drives default selection in the preview.
+type Risk int
+
+const (
+	// RiskLow is safe to pre-select.
+	RiskLow Risk = iota
+	// RiskMed is shown but not pre-selected by default.
+	RiskMed
+	// RiskHigh is never auto-selected.
+	RiskHigh
+)
+
+func (r Risk) String() string {
+	switch r {
+	case RiskLow:
+		return "low"
+	case RiskMed:
+		return "med"
+	case RiskHigh:
+		return "high"
+	default:
+		return "unknown"
+	}
+}
+
+// Result is the outcome of executing an Action.
+type Result struct {
+	Status string
+	Bytes  int64
+	Reason string
+}
+
+// Action performs a mutation. Implementations must be idempotent and must
+// re-validate identity at the moment of execution.
+type Action interface {
+	Describe() string
+	// Recovery declares the contract; it must be valid.
+	Recovery() Recovery
+	// Run executes; dryRun must compute the same plan without mutating.
+	Run(ctx context.Context, dryRun bool) (Result, error)
+}
+
+// Guard fails closed: it returns an error (guard-stop, code 75) when it cannot
+// prove the action is safe right now.
+type Guard interface {
+	Check(ctx context.Context, env *Env) error
+}
+
+// Target is one concrete thing the tool might act on (spec §6.2).
+type Target struct {
+	ID        string
+	Category  string
+	Display   string
+	Path      string
+	SizeBytes int64
+	SizeKnown bool
+	Action    Action
+	Recovery  Recovery
+	NeedsRoot bool
+	Guard     Guard
+	Evidence  []string
+	Risk      Risk
+	DefaultOn bool
+}
+
+// Validate enforces invariant I2: every mutation declares a valid recovery
+// contract and has an action.
+func (t Target) Validate() error {
+	if t.ID == "" {
+		return errors.New("engine: target has no id")
+	}
+	if !t.Recovery.Valid() {
+		return errors.New("engine: target must declare a recovery contract (trash|owner)")
+	}
+	if t.Action == nil {
+		return errors.New("engine: target has no action")
+	}
+	if t.Action.Recovery() != t.Recovery {
+		return errors.New("engine: action recovery does not match target recovery")
+	}
+	if t.Recovery == RecoveryTrash && t.Path == "" {
+		return errors.New("engine: trash-contract target must have a path")
+	}
+	return nil
+}
+
+// Category enumerates targets. Discovery must be side-effect-free.
+type Category interface {
+	ID() string
+	Title() string
+	Discover(ctx context.Context, env *Env) ([]Target, error)
+	PreviewNote() string
+}
+
+// Env carries the resolved user/root context and external command runners.
+type Env struct {
+	User       *user.User
+	Home       string
+	XDGCache   string
+	XDGConfig  string
+	XDGData    string
+	XDGState   string
+	XDGRuntime string
+
+	Run       *owner.Runner
+	Whitelist *whitelist.Set
+	Cfg       *config.Config
+	Distro    distro.Info
+	Adapter   distro.Adapter
+	Paths     config.Paths
+	DryRun    bool
+}

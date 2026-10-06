@@ -1,0 +1,5 @@
+#!/bin/sh
+# Test stub for journalctl. Records argv and emits canned output.
+log="${BURROW_TESTBIN_LOG:-/dev/null}"
+{ printf 'argv: journalctl'; for a in "$@"; do printf ' %s' "$a"; done; printf '\n'; } >>"$log"
+echo "Archived and active journals take up 512.0M in the file system."

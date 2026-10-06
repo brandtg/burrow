@@ -1,0 +1,6 @@
+#!/bin/sh
+# Test stub for apt-get. Records argv and emits canned output.
+log="${BURROW_TESTBIN_LOG:-/dev/null}"
+{ printf 'argv: apt-get'; for a in "$@"; do printf ' %s' "$a"; done; printf '\n'; } >>"$log"
+echo "Reading package lists... Done"
+echo "Building dependency tree... Done"

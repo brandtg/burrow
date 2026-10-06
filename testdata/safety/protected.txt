@@ -1,0 +1,5 @@
+# Additional protected paths (one per line). These are protected in addition to
+# the built-in roots enforced by internal/safe.
+/etc
+/usr
+/var/lib

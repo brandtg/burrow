@@ -1,0 +1,7 @@
+/burrow
+/bw
+/bin/
+/dist/
+*.test
+*.out
+coverage.txt

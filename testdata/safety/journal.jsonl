@@ -1,0 +1,4 @@
+{"ts":"2026-10-05T12:00:00Z","run_id":"01J000000000000000000000AA","command":"clean","item":"","action":"run_start","status":"start","bytes":0,"host":"fixture","burrow_version":"0.1.0"}
+{"ts":"2026-10-05T12:00:01Z","run_id":"01J000000000000000000000AA","command":"clean","item":"dev.npm","action":"owner","argv":["npm","cache","clean","--force"],"path":"","status":"ok","bytes":1048576,"host":"fixture","burrow_version":"0.1.0"}
+{"ts":"2026-10-05T12:00:02Z","run_id":"01J000000000000000000000AA","command":"clean","item":"user-cache.app-caches","action":"trash","path":"/home/user/.cache/example","status":"ok","bytes":4096,"host":"fixture","burrow_version":"0.1.0"}
+{"ts":"2026-10-05T12:00:03Z","run_id":"01J000000000000000000000AA","command":"clean","item":"","action":"run_end","status":"end","bytes":1052672,"host":"fixture","burrow_version":"0.1.0"}
