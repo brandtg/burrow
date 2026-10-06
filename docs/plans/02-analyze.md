@@ -33,16 +33,21 @@ testdata/analyze/           fixture tree + golden JSON
   type Scanner interface {
       Scan(ctx context.Context, root string, opts Options) (*Node, error)
   }
+  // Node matches the struct Plan 01 already shipped in internal/scan/scan.go.
+  // Size is on-disk usage (blocks*512); Apparent is the apparent size. Do not
+  // swap them: a Plan 02 agent that reads `Size` as apparent would render the
+  // TUI and --apparent inverted.
   type Node struct {
-      Name     string
-      Path     string
-      IsDir    bool
-      Size     int64  // apparent
-      Usage    int64  // on-disk (blocks*512)
-      SizeKnown bool
-      Mtime    time.Time
-      Items    int64
-      Children []*Node
+      Name      string
+      Path      string
+      Size      int64 // on-disk (blocks*512)
+      Apparent  int64 // apparent size
+      IsDir     bool
+      Type      string
+      Mtime     time.Time
+      ItemCount int64
+      Children  []*Node
+      SizeKnown bool // added in Plan 02 for fallback sizing
   }
   ```
 - Translate gdu's `fs.Item` tree into our `Node` model. Use `fs.HardLinkedItems`
@@ -50,8 +55,8 @@ testdata/analyze/           fixture tree + golden JSON
 - Honor `Options`: `OneFileSystem`, `NoHidden`, `Apparent`, `Depth`, `Ignore`
   (default `/proc,/dev,/sys,/run`).
 - Fallback sizing: `du -skP` under a 90s timeout when the engine cannot provide a
-  subtree; single files via `os.Stat` (`Blocks*512` for on-disk, `Size()` for
-  apparent).
+  subtree; single files via `os.Stat` (`Blocks*512` fills `Size`/on-disk,
+  `Size()` fills `Apparent`).
 - Unknown/partial -> `SizeKnown=false`, rendered "unknown"; never show 0 as empty
   (spec §8.8, Mole `scan_status` lesson).
 - Per-root timeout from `internal/owner/timeouts.go`; cancellation via `ctx`.
@@ -93,7 +98,11 @@ testdata/analyze/           fixture tree + golden JSON
   subtree is unreadable.
 - Hardlinked fixture is not double-counted.
 - `d`/`D` moves to Trash, writes a journal record, and is restorable via
-  `history --restore`; `--no-delete` disables the keys.
+  `history --restore` when the item lands in the home trash (same filesystem).
+  Cross-filesystem items go to a per-mount trash that `trash.List` does not yet
+  enumerate (Plan 01 known gap); narrowing this acceptance to home-trash items is
+  deliberate, and per-mount listing is a follow-up. `--no-delete` disables the
+  keys.
 - Identity-swap during analyze delete -> guard-stop, not a wrong delete.
 - `scripts/check.sh` green.
 

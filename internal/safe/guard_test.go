@@ -55,11 +55,21 @@ func TestMutableAncestor(t *testing.T) {
 	if err := os.WriteFile(target, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got, found := safe.MutableAncestor(target)
+	got, found, err := safe.MutableAncestor(target)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !found {
 		t.Fatal("expected a mutable ancestor")
 	}
 	if got != mutable {
 		t.Fatalf("expected %s, got %s", mutable, got)
+	}
+}
+
+func TestMutableAncestorFailsClosed(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "does-not-exist", "victim")
+	if _, _, err := safe.MutableAncestor(missing); err == nil {
+		t.Fatal("expected an error for an uninspectable ancestor")
 	}
 }

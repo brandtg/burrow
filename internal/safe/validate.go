@@ -93,6 +93,28 @@ func within(p, root string) bool {
 	return strings.HasPrefix(p, root+string(filepath.Separator))
 }
 
+// physicalPath resolves symlinks in the parent directory only, leaving the
+// final component untouched. Only the deletion root itself must be a real,
+// non-symlink path; ancestors are allowed to be symlinks (spec §7.2, "at the
+// root").
+func physicalPath(clean string) (string, error) {
+	parent, err := filepath.EvalSymlinks(filepath.Dir(clean))
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(parent, filepath.Base(clean)), nil
+}
+
+// resolveOrSelf resolves all symlinks in p, or returns p unchanged when it
+// cannot be resolved (for example, an allow-listed root that does not exist
+// yet).
+func resolveOrSelf(p string) string {
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	return p
+}
+
 // Validator applies the deletion-safety policy. The zero value is not usable;
 // construct one with NewValidator.
 type Validator struct {
@@ -177,18 +199,51 @@ func (v *Validator) Validate(path string) error {
 			return violation(path, i18n.T(i18n.ErrPathNoRoot))
 		}
 	}
-	resolved, err := filepath.EvalSymlinks(clean)
+	fi, err := os.Lstat(clean)
 	if err != nil {
 		return violation(path, i18n.Tf(i18n.ErrPathResolve, err))
 	}
-	if resolved != clean {
+	if fi.Mode()&os.ModeSymlink != 0 {
+		resolved, rerr := filepath.EvalSymlinks(clean)
+		if rerr != nil {
+			resolved = clean
+		}
 		return violation(path, i18n.Tf(i18n.ErrPathSymlink, resolved))
 	}
-	if v.CheckOwnership {
-		fi, err := os.Lstat(clean)
-		if err != nil {
-			return violation(path, i18n.Tf(i18n.ErrPathResolve, err))
+	// Ancestors may legitimately be symlinks (Fedora Silverblue's /home ->
+	// /var/home, symlinked mounts, some container homes). Resolve the parent
+	// only and re-apply the protected and allow-list checks to the physical
+	// path, so an ancestor symlink cannot redirect the target into a protected
+	// directory or outside the allow-listed roots.
+	physical, err := physicalPath(clean)
+	if err != nil {
+		return violation(path, i18n.Tf(i18n.ErrPathResolve, err))
+	}
+	if physical != clean {
+		if isProtectedRoot(physical) {
+			return violation(path, i18n.T(i18n.ErrPathProtected))
 		}
+		for _, p := range v.Protected {
+			pc := filepath.Clean(p)
+			if within(physical, pc) || within(physical, resolveOrSelf(pc)) {
+				return violation(path, i18n.T(i18n.ErrPathProtected))
+			}
+		}
+		if v.RequireRoot {
+			ok := false
+			for _, r := range v.Roots {
+				rc := filepath.Clean(r)
+				if within(physical, rc) || within(physical, resolveOrSelf(rc)) {
+					ok = true
+					break
+				}
+			}
+			if !ok {
+				return violation(path, i18n.T(i18n.ErrPathNoRoot))
+			}
+		}
+	}
+	if v.CheckOwnership {
 		st, ok := fi.Sys().(*syscall.Stat_t)
 		if !ok {
 			return violation(path, i18n.Tf(i18n.ErrPathResolve, "cannot read stat"))

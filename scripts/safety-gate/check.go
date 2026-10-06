@@ -1,7 +1,15 @@
 // Command safety-gate is the static "no direct destructive sink" gate (spec
-// §14.5). It fails if os.Remove, os.RemoveAll, os.Truncate, or syscall.Unlink
-// appear outside the allow-listed packages, mirroring Mole's
+// §14.5). It fails if a destructive sink (os.Remove/RemoveAll/Truncate,
+// syscall.Unlink/Unlinkat/Rmdir/Ftruncate/Truncate, or the x/sys/unix
+// equivalents) appears outside the allow-listed packages, mirroring Mole's
 // audit_destructive_sinks.py.
+//
+// Limitations: the gate is purely syntactic. It also flags method calls named
+// Truncate (e.g. (*os.File).Truncate) regardless of receiver, which can
+// false-positive on bytes.Buffer.Truncate. It handles package aliases and
+// dot-imports, but a sink assigned to a variable first (remove := os.Remove)
+// is not detected; keep sinks behind internal/safe, internal/trash, and
+// internal/owner.
 package main
 
 import (
@@ -46,7 +54,22 @@ var forbidden = []sink{
 	{pkg: "os", name: "RemoveAll"},
 	{pkg: "os", name: "Truncate"},
 	{pkg: "syscall", name: "Unlink"},
+	{pkg: "syscall", name: "Unlinkat"},
+	{pkg: "syscall", name: "Rmdir"},
+	{pkg: "syscall", name: "Ftruncate"},
+	{pkg: "syscall", name: "Truncate"},
+	{pkg: "golang.org/x/sys/unix", name: "Unlink"},
+	{pkg: "golang.org/x/sys/unix", name: "Unlinkat"},
+	{pkg: "golang.org/x/sys/unix", name: "Rmdir"},
+	{pkg: "golang.org/x/sys/unix", name: "Ftruncate"},
+	{pkg: "golang.org/x/sys/unix", name: "Truncate"},
 }
+
+// forbiddenMethods are destructive methods whose receiver type is not
+// statically known (e.g. (*os.File).Truncate). They are flagged regardless of
+// receiver; a false positive on bytes.Buffer.Truncate is preferable to a missed
+// file truncation.
+var forbiddenMethods = []string{"Truncate"}
 
 // Check walks root and returns every disallowed sink call. Test files are
 // skipped: the gate governs production mutation paths.
@@ -110,34 +133,70 @@ func checkFile(path, rel string) ([]Violation, error) {
 		return nil, err
 	}
 	imports := importNames(f)
+	var dotPkgs []string
+	for _, imp := range f.Imports {
+		if imp.Name != nil && imp.Name.Name == "." {
+			dotPkgs = append(dotPkgs, strings.Trim(imp.Path.Value, `"`))
+		}
+	}
 	var out []Violation
 	ast.Inspect(f, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
 			return true
 		}
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok {
-			return true
-		}
-		ident, ok := sel.X.(*ast.Ident)
-		if !ok {
-			return true
-		}
-		pkgPath := imports[ident.Name]
-		for _, s := range forbidden {
-			if pkgPath == s.pkg && sel.Sel.Name == s.name {
-				out = append(out, Violation{
-					File:   rel,
-					Line:   fset.Position(call.Pos()).Line,
-					Sink:   s.pkg + "." + s.name,
-					Reason: "destructive sink outside safe/trash/owner",
-				})
+		switch fun := call.Fun.(type) {
+		case *ast.SelectorExpr:
+			if ident, ok := fun.X.(*ast.Ident); ok {
+				if s, ok := matchSink(imports[ident.Name], fun.Sel.Name); ok {
+					out = append(out, violationAt(rel, fset, call, s.pkg+"."+s.name))
+					return true
+				}
+			}
+			for _, m := range forbiddenMethods {
+				if fun.Sel.Name == m {
+					out = append(out, violationAt(rel, fset, call, "(method)."+m))
+					return true
+				}
+			}
+		case *ast.Ident:
+			for _, s := range forbidden {
+				if fun.Name == s.name && containsString(dotPkgs, s.pkg) {
+					out = append(out, violationAt(rel, fset, call, s.pkg+"."+s.name))
+				}
 			}
 		}
 		return true
 	})
 	return out, nil
+}
+
+// matchSink reports whether pkgPath.name is a forbidden package-level sink.
+func matchSink(pkgPath, name string) (sink, bool) {
+	for _, s := range forbidden {
+		if s.pkg == pkgPath && s.name == name {
+			return s, true
+		}
+	}
+	return sink{}, false
+}
+
+func violationAt(rel string, fset *token.FileSet, call *ast.CallExpr, name string) Violation {
+	return Violation{
+		File:   rel,
+		Line:   fset.Position(call.Pos()).Line,
+		Sink:   name,
+		Reason: "destructive sink outside safe/trash/owner",
+	}
+}
+
+func containsString(xs []string, s string) bool {
+	for _, x := range xs {
+		if x == s {
+			return true
+		}
+	}
+	return false
 }
 
 // importNames maps the local package identifier to its import path.

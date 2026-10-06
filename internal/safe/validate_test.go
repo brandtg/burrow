@@ -99,6 +99,45 @@ func TestValidateSymlinkRoot(t *testing.T) {
 	}
 }
 
+func TestValidateAllowsSymlinkedAncestor(t *testing.T) {
+	base := t.TempDir()
+	real := filepath.Join(base, "real")
+	if err := os.Mkdir(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(link, "entry")
+	if err := os.WriteFile(target, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := safe.ValidateForDeletion(target); err != nil {
+		t.Fatalf("expected a symlinked ancestor to be accepted, got %v", err)
+	}
+}
+
+func TestValidateRejectsAncestorSymlinkEscape(t *testing.T) {
+	base := t.TempDir()
+	protected := filepath.Join(base, "protected")
+	if err := os.Mkdir(protected, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "escape")
+	if err := os.Symlink(protected, link); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(link, "entry")
+	if err := os.WriteFile(target, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	v := safe.NewValidator(-1, protected)
+	if err := v.Validate(target); err == nil {
+		t.Fatal("expected an ancestor symlink escaping into a protected path to be rejected")
+	}
+}
+
 func TestValidateRequireRoot(t *testing.T) {
 	allowed := t.TempDir()
 	other := t.TempDir()

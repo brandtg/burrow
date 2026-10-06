@@ -187,11 +187,14 @@ func TestI7MutableAncestorGuardStop(t *testing.T) {
 	if err := os.WriteFile(target, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	ancestor, found := safe.MutableAncestor(target)
+	ancestor, found, err := safe.MutableAncestor(target)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !found {
 		t.Fatal("expected to find a user-mutable ancestor")
 	}
-	err := safe.GuardStop("privileged path has a user-mutable ancestor: %s", ancestor)
+	err = safe.GuardStop("privileged path has a user-mutable ancestor: %s", ancestor)
 	if code := cli.ExitCode(err); code != cli.ExitGuard {
 		t.Fatalf("guard-stop exit code = %d, want %d", code, cli.ExitGuard)
 	}
