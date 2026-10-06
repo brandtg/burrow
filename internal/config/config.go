@@ -76,7 +76,7 @@ func Default() *Config {
 		},
 		Trash: Trash{Backend: "native", ExternalCommand: ""},
 		Purge: Purge{
-			Paths:        []string{"~/Projects", "~/src", "~/dev"},
+			Paths:        []string{"~/Projects", "~/src", "~/dev", "~/code", "~/work"},
 			ArtifactDirs: []string{"node_modules", "target", ".venv", "venv", "__pycache__", ".next/cache", "build", "dist", ".gradle", "_cacache"},
 			MaxAge:       "7d",
 		},

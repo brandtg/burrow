@@ -59,6 +59,11 @@ These override convenience. Violating one is a bug even if tests pass.
 - Raw `os.Remove`, `os.RemoveAll`, `os.Truncate`, and `syscall.Unlink` are allowed
   only inside internal/safe, internal/trash, and internal/owner. A static gate
   (scripts/check.sh) enforces this. Purge deletes go through internal/safe.
+- `safe.RemoveTree` is the single permanent-delete primitive and is purge-only:
+  it may be called only from internal/purge (plus its definition in
+  internal/safe). Trash-contract code must never call it, or it would silently
+  downgrade a recoverable delete to a permanent one (I5). The static gate
+  enforces this confinement, including inside internal/trash and internal/owner.
 
 If a task seems to require breaking one of these, stop and flag it.
 

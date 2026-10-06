@@ -107,7 +107,7 @@ func (a *App) Root() *cobra.Command {
 		a.newHistoryCmd(),
 		a.newAnalyzeCmd(),
 		a.newCleanCmd(),
-		a.newStubCmd("purge", "remove rebuildable project artifacts"),
+		a.newPurgeCmd(),
 		a.newStubCmd("status", "one-shot system snapshot"),
 	)
 	return root

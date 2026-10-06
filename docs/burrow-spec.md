@@ -120,7 +120,7 @@ burrow version
 
 ### 5.4 `purge` flags
 ```
---paths                   Print/edit the configured project roots.
+--paths                   Print the configured project roots (edit them in config.toml or via BURROW_PURGE_PATHS).
 --age <dur>               Only artifacts with no file activity in this window (default 7d).
 --yes                     Non-interactive (required when not a TTY).
 ```
