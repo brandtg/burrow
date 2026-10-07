@@ -28,12 +28,22 @@ const (
 	StatusEnd     = "end"
 )
 
-// Action values. run_start/run_end frame a run; trash/owner describe a mutation.
+// Action values. run_start/run_end frame a run; trash/owner/purge describe a
+// mutation. purge is a permanent delete of a rebuildable artifact.
 const (
 	ActionTrash    = "trash"
 	ActionOwner    = "owner"
+	ActionPurge    = "purge"
 	ActionRunStart = "run_start"
 	ActionRunEnd   = "run_end"
+)
+
+// Recovery values mirror engine.Recovery so the journal can state the contract
+// that applied to each mutation (invariant I2). They are strings here to keep
+// the journal schema self-describing and free of engine imports.
+const (
+	RecoveryTrash = "trash"
+	RecoveryOwner = "owner"
 )
 
 // Version is stamped at build time with -ldflags.
@@ -46,6 +56,7 @@ type Record struct {
 	Command       string   `json:"command"`
 	Item          string   `json:"item"`
 	Action        string   `json:"action"`
+	Recovery      string   `json:"recovery,omitempty"`
 	Argv          []string `json:"argv,omitempty"`
 	Path          string   `json:"path,omitempty"`
 	Status        string   `json:"status"`

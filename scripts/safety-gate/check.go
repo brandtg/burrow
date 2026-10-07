@@ -4,6 +4,13 @@
 // equivalents) appears outside the allow-listed packages, mirroring Mole's
 // audit_destructive_sinks.py.
 //
+// It additionally enforces a narrower rule for safe.RemoveTree, the permanent
+// delete primitive: it may be called only from internal/purge (and is defined
+// in internal/safe). This keeps a trash-contract caller from silently
+// downgrading a recoverable delete to a permanent one (invariant I5). The rule
+// is checked even inside the packages that are allowed general destructive
+// sinks.
+//
 // Limitations: the gate is purely syntactic. It also flags method calls named
 // Truncate (e.g. (*os.File).Truncate) regardless of receiver, which can
 // false-positive on bytes.Buffer.Truncate. It handles package aliases and
@@ -29,6 +36,20 @@ var allowedPrefixes = []string{
 	filepath.FromSlash("internal/trash"),
 	filepath.FromSlash("internal/owner"),
 	filepath.FromSlash("scripts/safety-gate"),
+}
+
+// safePkgPath is the import path of the safety core. safe.RemoveTree is the
+// single permanent-delete primitive, so calls to it are governed by a narrower
+// allow-list than the general destructive sinks.
+const safePkgPath = "github.com/brandtg/burrow/internal/safe"
+
+// removeTreeAllowedPrefixes are the packages permitted to call
+// safe.RemoveTree. Only the purge path may delete permanently; confining it here
+// means a later trash-contract caller cannot silently downgrade a recoverable
+// delete to a permanent one (invariant I5). internal/safe defines the primitive.
+var removeTreeAllowedPrefixes = []string{
+	filepath.FromSlash("internal/purge"),
+	filepath.FromSlash("internal/safe"),
 }
 
 // Violation is one disallowed sink.
@@ -93,6 +114,16 @@ func Check(root string) ([]Violation, error) {
 		if err != nil {
 			return err
 		}
+		// The RemoveTree confinement rule applies even inside packages that
+		// are allowed general destructive sinks (trash/owner), because those
+		// packages must never reach for the permanent-delete primitive.
+		if !removeTreeAllowed(rel) {
+			rtViolations, err := checkRemoveTree(path, rel)
+			if err != nil {
+				return err
+			}
+			violations = append(violations, rtViolations...)
+		}
 		if isAllowed(rel) {
 			return nil
 		}
@@ -124,6 +155,62 @@ func isAllowed(rel string) bool {
 		}
 	}
 	return false
+}
+
+func removeTreeAllowed(rel string) bool {
+	rel = filepath.ToSlash(rel)
+	for _, p := range removeTreeAllowedPrefixes {
+		p = filepath.ToSlash(p)
+		if rel == p || strings.HasPrefix(rel, p+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// checkRemoveTree flags calls to safe.RemoveTree outside internal/purge (and the
+// package that defines it). It understands import aliases and dot-imports.
+func checkRemoveTree(path, rel string) ([]Violation, error) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, path, nil, 0)
+	if err != nil {
+		return nil, err
+	}
+	imports := importNames(f)
+	dotSafe := false
+	for _, imp := range f.Imports {
+		if imp.Name != nil && imp.Name.Name == "." && strings.Trim(imp.Path.Value, `"`) == safePkgPath {
+			dotSafe = true
+		}
+	}
+	var out []Violation
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		switch fun := call.Fun.(type) {
+		case *ast.SelectorExpr:
+			if ident, ok := fun.X.(*ast.Ident); ok && fun.Sel.Name == "RemoveTree" && imports[ident.Name] == safePkgPath {
+				out = append(out, removeTreeViolation(rel, fset, call))
+			}
+		case *ast.Ident:
+			if dotSafe && fun.Name == "RemoveTree" {
+				out = append(out, removeTreeViolation(rel, fset, call))
+			}
+		}
+		return true
+	})
+	return out, nil
+}
+
+func removeTreeViolation(rel string, fset *token.FileSet, call *ast.CallExpr) Violation {
+	return Violation{
+		File:   rel,
+		Line:   fset.Position(call.Pos()).Line,
+		Sink:   "safe.RemoveTree",
+		Reason: "permanent delete outside internal/purge",
+	}
 }
 
 func checkFile(path, rel string) ([]Violation, error) {
