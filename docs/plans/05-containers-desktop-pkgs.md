@@ -1,6 +1,6 @@
 # Plan 05 — `containers` + `flatpak`/`snap`
 
-**Status:** not started
+**Status:** in review
 **Milestone:** M4
 **Depends on:** 03
 **Blocks:** 07
@@ -101,3 +101,101 @@ testdata/containers/           stubbed runtime fixtures + golden plans
 
 Owner-command lists cross-checked against spec §21.1. Behavioral port of Mole's
 container/desktop cleanup shape, reimplemented clean-room. No Mole source copied.
+
+---
+
+## Implementation notes (Plan 05)
+
+Recorded after landing the plan. Acceptance criteria pass and `scripts/check.sh`
+is green (golangci-lint and govulncheck warn as not installed on the authoring
+host, matching Plans 01/02).
+
+### Docker sizing
+
+- Discovery runs `docker system df` once (read-only) and parses the table by
+  locating the first integer column (TOTAL) to split the possibly multi-word
+  type label, then reading the RECLAIMABLE column. `parseDockerSize` handles
+  docker's decimal (1000-based) suffixes.
+- Per-item sizing: build cache from the `Build Cache` row; unused images from
+  `Images`; volumes from `Local Volumes`; `containers.docker-all` sums every
+  known category. `containers.docker-dangling` is left `SizeKnown=false`:
+  `docker system df` cannot isolate dangling images from other unused images, so
+  showing the whole `Images` figure would overstate the saving (spec §8.8, "no
+  fake savings").
+- The per-category breakdown is recorded in each docker target's `Evidence`
+  (`docker system df reclaimable: ...`). A running `docker build` is detected
+  read-only and appended to the evidence; it does not block the prune.
+
+### Reconciler hook
+
+- `internal/catalog/catalog.go` defines an optional `Reconciler` interface
+  (`Reconcile(*engine.Plan)`). `cli/clean.go` runs it for every selected category
+  after `Build` and again after an interactive selection, so a superset item
+  suppresses its parts in both the preview and the executed plan.
+- `containers` implements it: `docker system prune -a --volumes` supersedes the
+  build-cache, dangling, unused and volume prunes, and `docker image prune -a`
+  supersedes the dangling-only prune.
+
+### Guards and fail-closed behavior
+
+- `internal/distro.CheckContainerRuntime` probes `<binary> info` (docker/podman)
+  read-only. An unreachable daemon or failed probe returns `Unknown`, so the
+  item is skipped with a recorded reason rather than failing or escalating.
+- User-data items re-check app absence at execution via `appAbsentGuard`: if the
+  flatpak/snap inventory is unknown, or the app is now installed, the trash is
+  stopped (fail closed).
+- The snapd-idle guard (`SnapdProbe`/`CheckSnapdIdle`) was prototyped for
+  `snap.cache` but removed with that item (see known gaps); it is not present in
+  the landed code.
+
+### User-data items
+
+- `flatpak.userdata` (`~/.var/app/<id>`) and `snap.userdata` (`~/snap/<name>`)
+  are trash-contract targets. Each is validated against an allow-listed root
+  (`~/.var/app` / `~/snap`), ownership-checked, and snapshotted at discovery;
+  `TrashAction` re-validates and re-checks the snapshot at the sink.
+- Discovery only offers a directory when the installed-app inventory is known
+  and does not contain the app; unknown inventory means no item is offered.
+
+### Deviations and judgement calls
+
+- **snap.cache dropped from v0.1.** The plan/spec item deletes
+  `/var/lib/snapd/cache/*`, but snapd exposes no owner command for it. The first
+  implementation shelled out a fixed `find ... -delete` under sudo, which
+  bypasses `internal/safe` (no validation, no snapshot) and is exactly the
+  generic delete primitive AGENTS.md forbids (I3, D7). It was removed rather
+  than shipped. Reinstating it requires a validated, allow-listed primitive in
+  `internal/safe` (Validator confined to the cache root + discovery-time
+  snapshot), which is a separate change because `safe.RemoveTree` is
+  deliberately purge-only.
+- **k8s-evicted omitted.** It is report-only in v0.1 and the engine requires
+  every target to carry a valid recovery contract and action; it is not a target
+  yet.
+- **flatpak.repair is `NeedsRoot=true`.** It repairs the system flatpak
+  installation; a per-user repair is a separate item if it is ever wanted.
+- **Docker/podman run unelevated.** They are treated as per-user (rootless or
+  the docker group). If the socket is root-only the runtime guard skips the item
+  with a reason instead of silently escalating.
+
+### Known gaps
+
+- snap revision sizing is wired through the generic `engine.Measure` path
+  (`<name>_<rev>.snap` stat); it is covered by a test with a fixture file. There
+  is no explicit `du` under a dedicated timeout beyond the shared size-probe
+  path.
+- snap cache sizing and cleanup are not implemented (see above).
+- **Per-user commands do not drop privileges.** Carried from Plan 04: the owner
+  runner executes per-user commands as the current process user, so under
+  `sudo burrow` (SUDO_USER set) `flatpak uninstall --unused` would run as root.
+  This is an `internal/owner/runner.go` concern, not a catalog one, and is
+  tracked for the owner-package fix.
+
+### Gate hardening
+
+- The static gate now also flags delete-capable external commands in owner argv
+  tables (`rm`, `shred`, `dd`, `truncate`, `unlink`, `wipefs`, `mkfs`, `srm`,
+  `find -delete/-exec`, `xargs rm`, and `sh -c`). It inspects composite-literal
+  `Argv` fields with fully literal string elements, in every package including
+  `internal/owner`; the AST sink gate structurally cannot see inside a shelled
+  command. Planted-violation tests cover `rm`, `find -delete`, and `sh -c`, plus
+  a safe-argv control.

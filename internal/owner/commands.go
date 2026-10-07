@@ -193,6 +193,139 @@ func GhClearCache() OwnerCommand {
 	return OwnerCommand{ID: "dev.gh-cli", Argv: []string{"gh", "config", "clear-cache"}, Timeout: TimeoutOwnerClean}
 }
 
+// --- Containers: docker/podman owner commands (spec §8.2, §21.1). ---
+//
+// Docker/podman are typically reachable as the invoking user (rootless or the
+// docker group), so these run without elevation. If the socket is root-only the
+// command fails; burrow never assumes elevation on the user's behalf.
+
+// DockerBuilderPrune reclaims the build cache.
+func DockerBuilderPrune() OwnerCommand {
+	return OwnerCommand{ID: "containers.docker-build-cache", Argv: []string{"docker", "builder", "prune", "-f"}, Timeout: TimeoutOwnerClean}
+}
+
+// DockerImagePrune removes dangling images only.
+func DockerImagePrune() OwnerCommand {
+	return OwnerCommand{ID: "containers.docker-dangling", Argv: []string{"docker", "image", "prune", "-f"}, Timeout: TimeoutOwnerClean}
+}
+
+// DockerImagePruneAll removes every unused image.
+func DockerImagePruneAll() OwnerCommand {
+	return OwnerCommand{ID: "containers.docker-unused", Argv: []string{"docker", "image", "prune", "-a", "-f"}, Timeout: TimeoutOwnerClean}
+}
+
+// DockerVolumePrune removes unused volumes. Volumes can hold data, not just
+// cache; this is a high-risk action (plan 05 risk note).
+func DockerVolumePrune() OwnerCommand {
+	return OwnerCommand{ID: "containers.docker-volumes", Argv: []string{"docker", "volume", "prune", "-f"}, Timeout: TimeoutOwnerClean}
+}
+
+// DockerSystemPruneAll is the superset prune: every unused image, container,
+// network, build cache, and volume.
+func DockerSystemPruneAll() OwnerCommand {
+	return OwnerCommand{ID: "containers.docker-all", Argv: []string{"docker", "system", "prune", "-a", "--volumes", "-f"}, Timeout: TimeoutOwnerClean}
+}
+
+// PodmanSystemPrune removes unused podman state. Volumes are not included in
+// v0.1 (no opt-in surface yet).
+func PodmanSystemPrune() OwnerCommand {
+	return OwnerCommand{ID: "containers.podman", Argv: []string{"podman", "system", "prune", "-f"}, Timeout: TimeoutOwnerClean}
+}
+
+// DockerSystemDFProbe reports docker's per-category disk usage (read-only).
+func DockerSystemDFProbe() OwnerCommand {
+	return OwnerCommand{ID: "probe.docker.df", Argv: []string{"docker", "system", "df"}, ReadOnly: true, Timeout: TimeoutSizeProbe}
+}
+
+// DockerInfoProbe checks that the docker daemon is reachable (read-only; it
+// never triggers a pull).
+func DockerInfoProbe() OwnerCommand {
+	return OwnerCommand{ID: "probe.docker.info", Argv: []string{"docker", "info"}, ReadOnly: true, Timeout: TimeoutQuickDetect}
+}
+
+// PodmanInfoProbe checks that podman is usable (read-only).
+func PodmanInfoProbe() OwnerCommand {
+	return OwnerCommand{ID: "probe.podman.info", Argv: []string{"podman", "info"}, ReadOnly: true, Timeout: TimeoutQuickDetect}
+}
+
+// --- Desktop packages: flatpak/snap owner commands (spec §8.3, §21.1). ---
+
+// FlatpakUninstallUnused removes unused runtimes. It is per-user; it must never
+// run as root (spec §7.6).
+func FlatpakUninstallUnused() OwnerCommand {
+	return OwnerCommand{ID: "flatpak.unused", Argv: []string{"flatpak", "uninstall", "--unused", "-y"}, Timeout: TimeoutOwnerClean}
+}
+
+// FlatpakRepair repairs the system flatpak installation and needs root.
+func FlatpakRepair() OwnerCommand {
+	return OwnerCommand{ID: "flatpak.repair", Argv: []string{"flatpak", "repair"}, NeedsRoot: true, Timeout: TimeoutOwnerClean}
+}
+
+// FlatpakListAppsProbe lists installed application ids (read-only).
+func FlatpakListAppsProbe() OwnerCommand {
+	return OwnerCommand{ID: "probe.flatpak.apps", Argv: []string{"flatpak", "list", "--app", "--columns=application"}, ReadOnly: true, Timeout: TimeoutSizeProbe}
+}
+
+// SnapListProbe lists installed snaps (read-only).
+func SnapListProbe() OwnerCommand {
+	return OwnerCommand{ID: "probe.snap.list", Argv: []string{"snap", "list"}, ReadOnly: true, Timeout: TimeoutSizeProbe}
+}
+
+// SnapListAllProbe lists installed snaps including disabled revisions
+// (read-only).
+func SnapListAllProbe() OwnerCommand {
+	return OwnerCommand{ID: "probe.snap.list-all", Argv: []string{"snap", "list", "--all"}, ReadOnly: true, Timeout: TimeoutSizeProbe}
+}
+
+// SnapRemoveRevision purges one disabled revision. The name and revision come
+// from `snap list --all` output and are validated before they become argv so no
+// discovered string can smuggle an option into the command (invariant I4).
+func SnapRemoveRevision(name, revision string) (OwnerCommand, error) {
+	if !ValidSnapName(name) {
+		return OwnerCommand{}, fmt.Errorf("owner: invalid snap name %q", name)
+	}
+	if !ValidSnapRevision(revision) {
+		return OwnerCommand{}, fmt.Errorf("owner: invalid snap revision %q", revision)
+	}
+	return OwnerCommand{
+		ID:        "snap.old-revisions",
+		Argv:      []string{"snap", "remove", "--purge", name, "--revision", revision},
+		NeedsRoot: true,
+		Timeout:   TimeoutOwnerClean,
+	}, nil
+}
+
+// ValidSnapName reports whether s is a safe snap name: lowercase letters,
+// digits and single hyphens, not starting or ending with a hyphen. A leading
+// '-' is rejected so a name can never be read as an option.
+func ValidSnapName(s string) bool {
+	if s == "" || s[0] == '-' || s[len(s)-1] == '-' {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// ValidSnapRevision reports whether s is a decimal snap revision.
+func ValidSnapRevision(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // --- Read-only probes used during discovery (never elevated, never mutating). ---
 
 // NpmCacheProbe asks npm where its cache lives.

@@ -41,3 +41,11 @@ func (r *Registry) ByID(id string) (engine.Category, bool) {
 	}
 	return nil, false
 }
+
+// Reconciler is an optional category hook run after Build and before preview.
+// It lets a category drop items that became redundant given the user's
+// selection (for example a superset prune superseding its parts) without the
+// engine knowing any category's internals.
+type Reconciler interface {
+	Reconcile(*engine.Plan)
+}

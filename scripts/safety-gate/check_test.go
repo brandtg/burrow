@@ -219,3 +219,79 @@ func bad(p string) { _ = os.Remove(p) }
 		t.Fatalf("expected test files skipped, got %v", violations)
 	}
 }
+
+func TestGateFlagsDeleteCapableOwnerArgv(t *testing.T) {
+	root := t.TempDir()
+	writeGo(t, filepath.Join(root, "internal", "owner", "bad.go"), `package owner
+
+type OwnerCommand struct{ Argv []string }
+
+func Bad() OwnerCommand {
+	return OwnerCommand{Argv: []string{"rm", "-rf", "/var/lib/snapd/cache"}}
+}
+`)
+	violations, err := Check(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(violations) != 1 || violations[0].Sink != "owner argv" {
+		t.Fatalf("expected one owner argv violation, got %v", violations)
+	}
+}
+
+func TestGateFlagsFindDeleteOwnerArgv(t *testing.T) {
+	root := t.TempDir()
+	writeGo(t, filepath.Join(root, "internal", "owner", "bad.go"), `package owner
+
+type OwnerCommand struct{ Argv []string }
+
+func Bad() OwnerCommand {
+	return OwnerCommand{Argv: []string{"find", "/var/lib/snapd/cache", "-type", "f", "-delete"}}
+}
+`)
+	violations, err := Check(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(violations) != 1 || violations[0].Sink != "owner argv" {
+		t.Fatalf("expected one owner argv violation, got %v", violations)
+	}
+}
+
+func TestGateFlagsShellOwnerArgv(t *testing.T) {
+	root := t.TempDir()
+	writeGo(t, filepath.Join(root, "internal", "owner", "bad.go"), `package owner
+
+type OwnerCommand struct{ Argv []string }
+
+func Bad() OwnerCommand {
+	return OwnerCommand{Argv: []string{"sh", "-c", "rm -rf /tmp/x"}}
+}
+`)
+	violations, err := Check(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(violations) != 1 || violations[0].Sink != "owner argv" {
+		t.Fatalf("expected one owner argv violation, got %v", violations)
+	}
+}
+
+func TestGateAllowsSafeOwnerArgv(t *testing.T) {
+	root := t.TempDir()
+	writeGo(t, filepath.Join(root, "internal", "owner", "ok.go"), `package owner
+
+type OwnerCommand struct{ Argv []string }
+
+func Ok() OwnerCommand {
+	return OwnerCommand{Argv: []string{"docker", "builder", "prune", "-f"}}
+}
+`)
+	violations, err := Check(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(violations) != 0 {
+		t.Fatalf("expected no violations, got %v", violations)
+	}
+}
