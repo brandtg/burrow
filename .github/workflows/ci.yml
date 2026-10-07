@@ -3,6 +3,12 @@ name: ci
 on:
   pull_request:
     branches: [main]
+  # Seed the gate-tools cache in the default-branch scope so PR runs can
+  # restore it. pull_request caches are scoped to the PR merge ref and are not
+  # visible to other PRs, so without this every PR installs the tools cold.
+  push:
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
