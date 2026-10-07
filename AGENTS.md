@@ -154,6 +154,11 @@ warning otherwise.
 - `make gate` — canonical gate (equivalent to `./scripts/check.sh`).
 - `make gate-strict` — same, but fail if golangci-lint/govulncheck/goreleaser are
   missing (`BURROW_REQUIRE_TOOLS=1`). CI (`.github/workflows/ci.yml`) runs this.
+- `make doctor` — check the external gate tools are installed (`scripts/dev-tools.sh`);
+  exits non-zero if any are missing.
+- `make setup-tools` — install the gate tools at the versions CI pins
+  (`scripts/dev-tools.sh --install`). Keep those versions in sync with
+  `.github/workflows/ci.yml`.
 - `make matrix` — container integration matrix (`scripts/matrix.sh`); requires
   docker/podman. CI runs it as a separate job. The gate runs it only when
   `BURROW_MATRIX=1` (skips with a recorded reason if no runtime).
