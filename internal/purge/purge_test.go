@@ -305,8 +305,10 @@ func TestRemoveTreeRejectsChangedIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Replace the artifact with a different directory.
-	if err := os.RemoveAll(art); err != nil {
+	// Replace the artifact with a different directory. Rename the original
+	// away rather than deleting it so its inode stays allocated and the
+	// replacement cannot reuse it; ext4 reuses freed inodes.
+	if err := os.Rename(art, art+".moved"); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(art, 0o755); err != nil {

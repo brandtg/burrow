@@ -17,12 +17,29 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      # Compiling these three tools from source is slow, so cache the binaries.
+      # Restore/save are split and the save runs right after install, before the
+      # gate, so a gate failure still keeps the cache for the next run.
+      - name: Restore gate tools
+        id: gate-tools
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/go/bin
+          key: gate-tools-${{ runner.os }}-${{ runner.arch }}-golangci-lint-v2.14.0-govulncheck-v1.8.0-goreleaser-v2.18.2
       - name: Install gate tools
+        if: steps.gate-tools.outputs.cache-hit != 'true'
         run: |
           go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
           go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
           go install github.com/goreleaser/goreleaser/v2@v2.18.2
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Save gate tools
+        if: steps.gate-tools.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/go/bin
+          key: gate-tools-${{ runner.os }}-${{ runner.arch }}-golangci-lint-v2.14.0-govulncheck-v1.8.0-goreleaser-v2.18.2
+      - name: Add gate tools to PATH
+        run: echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - name: Run gate (fails if a tool is missing)
         run: make gate-strict
 
