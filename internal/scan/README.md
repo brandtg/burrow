@@ -58,3 +58,9 @@ shell-out adapter without changing any other package.
   are filtered by the third `AnalyzeDir` argument.
 - Per-root deadline is `owner.TimeoutScanPerRoot` (90s); cancellation is via
   `ctx` and `analyzer.Cancel()`.
+- `Options.Progress`, when set, receives periodic `Progress` snapshots while a
+  directory scan runs. It polls gdu's atomic counters (`GetProgress`) every
+  100ms on its own goroutine, so the interactive analyze TUI can render a live
+  spinner, item/size totals, and the current directory instead of appearing
+  frozen. gdu's logrus level is raised to error so its permission-denied lines
+  do not print to stderr.

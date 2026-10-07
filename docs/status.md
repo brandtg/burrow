@@ -97,6 +97,20 @@ never offers a permanently-deleted item (which would otherwise try to restore a
 same-path trash entry from another run). Covered by
 `TestExecutePermanentDeletesAndJournals`.
 
+## Resolved UX/perf issues
+
+- **gdu stderr noise.** gdu logged `level=info ... permission denied` to stderr
+  during `analyze` (unreadable subtrees in a real home directory). `internal/scan`
+  now raises gdu's logrus level to error, so the noise is gone while error-level
+  logs stay; unreadable subtrees are still reported via `SizeKnown=false` and
+  `scan_status=partial`.
+- **analyze looked frozen while scanning.** Interactive `analyze` scanned
+  synchronously before opening the TUI, so a cold scan showed nothing until it
+  finished. The model now starts immediately in a loading state and runs the scan
+  on a background goroutine, rendering a spinner, live item/size totals, and the
+  current directory (`scan.Options` gained a `Progress` callback;
+  `tui.AnalyzeConfig` gained `Load`).
+
 ## Known gaps (by design or deferred)
 
 - **Catalog omissions:** `snap.cache` (no safe primitive) and
@@ -118,8 +132,6 @@ same-path trash entry from another run). Covered by
   a low-likelihood wrong-row path.
 - **`dev.pycache` emits one row per `__pycache__` directory**, which swamps the
   preview (327 items / 51 GiB on the review host). Consider grouping per project.
-- **gdu logs `level=info ... permission denied` to stderr** during `analyze`;
-  stdout stays clean JSON, but the noise is worth quieting.
 
 ## Test-coverage gaps
 

@@ -88,16 +88,12 @@ func (a *App) runAnalyze(env *engine.Env, args []string, opts analyzeOptions) er
 		Depth:         opts.depth,
 	}
 
+	if interactive {
+		return a.runAnalyzeTUI(env, paths, scanOpts, opts)
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-
-	if interactive {
-		root, err := a.scanRoots(ctx, paths, scanOpts)
-		if err != nil {
-			return err
-		}
-		return a.runAnalyzeTUI(env, root, opts)
-	}
 	return a.printAnalyzeJSON(ctx, paths[0], scanOpts, opts)
 }
 
@@ -124,14 +120,19 @@ func (a *App) scanRoots(ctx context.Context, paths []string, opts scan.Options) 
 	return synth, nil
 }
 
-func (a *App) runAnalyzeTUI(env *engine.Env, root *scan.Node, opts analyzeOptions) error {
+func (a *App) runAnalyzeTUI(env *engine.Env, paths []string, scanOpts scan.Options, opts analyzeOptions) error {
 	writer, err := journal.NewWriter(env.Paths.Journal)
 	if err != nil {
 		return err
 	}
 	validator := safe.NewValidator(env.UID(), env.Cfg.Clean.ProtectedPaths...)
 	model := tui.NewAnalyzeModel(tui.AnalyzeConfig{
-		Root:      root,
+		// Scan in the background so the TUI can show progress instead of
+		// freezing on a cold cache (the model renders a loading view).
+		Load: func(ctx context.Context, progress func(scan.Progress)) (*scan.Node, error) {
+			scanOpts.Progress = progress
+			return a.scanRoots(ctx, paths, scanOpts)
+		},
 		Apparent:  opts.apparent,
 		NoDelete:  opts.noDelete,
 		Color:     a.colorEnabled(env),

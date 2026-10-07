@@ -8,6 +8,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -19,6 +20,7 @@ import (
 	"github.com/brandtg/burrow/internal/trash"
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -48,11 +50,20 @@ func (s SortMode) String() string {
 	}
 }
 
+// LoadFunc scans the analyze roots, reporting progress until it finishes. It
+// runs on a background goroutine owned by the model.
+type LoadFunc func(ctx context.Context, progress func(scan.Progress)) (*scan.Node, error)
+
 // AnalyzeConfig carries the dependencies the analyze model needs. Root is the
 // already-scanned tree; the model never mutates it except by removing nodes it
 // has successfully trashed.
+//
+// Root and Load are mutually exclusive: when Root is nil the model starts in a
+// loading state and calls Load, rendering progress until the tree is ready.
 type AnalyzeConfig struct {
-	Root     *scan.Node
+	Root *scan.Node
+	Load LoadFunc
+
 	Apparent bool
 	NoDelete bool
 	Color    bool
@@ -64,6 +75,13 @@ type AnalyzeConfig struct {
 	Journal       *journal.Writer
 	CategoryRoots []string
 	Command       string
+}
+
+type progressMsg scan.Progress
+
+type loadDoneMsg struct {
+	root *scan.Node
+	err  error
 }
 
 // AnalyzeModel is the Bubble Tea model for `burrow analyze`.
@@ -92,6 +110,14 @@ type AnalyzeModel struct {
 
 	status string
 	freed  int64
+
+	loading     bool
+	loadErr     error
+	progress    scan.Progress
+	hasProgress bool
+	spin        spinner.Model
+	events      chan tea.Msg
+	cancel      context.CancelFunc
 
 	width  int
 	height int
@@ -126,6 +152,7 @@ func NewAnalyzeModel(cfg AnalyzeConfig) *AnalyzeModel {
 		help:          help.New(),
 		keys:          defaultKeys(),
 		styles:        newStyles(cfg.Color),
+		spin:          spinner.New(spinner.WithSpinner(spinner.Dot)),
 		height:        24,
 		width:         80,
 	}
@@ -135,12 +162,17 @@ func NewAnalyzeModel(cfg AnalyzeConfig) *AnalyzeModel {
 		Journal:   cfg.Journal,
 		Command:   cfg.Command,
 	}
-	m.indexParents(cfg.Root)
-	m.rebuildEntries()
+	if cfg.Root != nil {
+		m.indexParents(cfg.Root)
+		m.rebuildEntries()
+	}
 	return m
 }
 
 func (m *AnalyzeModel) indexParents(n *scan.Node) {
+	if n == nil {
+		return
+	}
 	for _, c := range n.Children {
 		m.parents[c] = n
 		m.indexParents(c)
@@ -150,14 +182,55 @@ func (m *AnalyzeModel) indexParents(n *scan.Node) {
 // Run starts the Bubble Tea program and closes the journal run frame on exit.
 func (m *AnalyzeModel) Run() error {
 	p := tea.NewProgram(m, tea.WithAltScreen())
-	if _, err := p.Run(); err != nil {
+	_, err := p.Run()
+	if m.cancel != nil {
+		m.cancel()
+	}
+	if err != nil {
 		return err
+	}
+	if m.loadErr != nil {
+		return m.loadErr
 	}
 	return m.exec.EndRun(m.freed)
 }
 
-// Init implements tea.Model.
-func (m *AnalyzeModel) Init() tea.Cmd { return nil }
+// Init implements tea.Model. When the tree was not pre-scanned it starts the
+// background load and returns a command that waits for the first event.
+func (m *AnalyzeModel) Init() tea.Cmd {
+	if m.root != nil || m.cfg.Load == nil {
+		return nil
+	}
+	m.loading = true
+	m.events = make(chan tea.Msg, 64)
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancel = cancel
+	return tea.Batch(m.startLoad(ctx), m.spin.Tick, waitForEvent(m.events))
+}
+
+// startLoad runs the scan on a goroutine, forwarding progress and a final
+// done message over m.events.
+func (m *AnalyzeModel) startLoad(ctx context.Context) tea.Cmd {
+	return func() tea.Msg {
+		go func() {
+			root, err := m.cfg.Load(ctx, func(p scan.Progress) {
+				select {
+				case m.events <- progressMsg(p):
+				case <-ctx.Done():
+				}
+			})
+			select {
+			case m.events <- loadDoneMsg{root: root, err: err}:
+			case <-ctx.Done():
+			}
+		}()
+		return nil
+	}
+}
+
+func waitForEvent(ch <-chan tea.Msg) tea.Cmd {
+	return func() tea.Msg { return <-ch }
+}
 
 // Update implements tea.Model.
 func (m *AnalyzeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -166,9 +239,45 @@ func (m *AnalyzeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		m.help.Width = msg.Width
 		return m, nil
+	case progressMsg:
+		m.progress = scan.Progress(msg)
+		m.hasProgress = true
+		return m, waitForEvent(m.events)
+	case loadDoneMsg:
+		return m.finishLoad(msg)
+	case spinner.TickMsg:
+		if !m.loading {
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.spin, cmd = m.spin.Update(msg)
+		return m, cmd
 	case tea.KeyMsg:
+		if m.loading {
+			switch msg.String() {
+			case "q", "ctrl+c", "esc":
+				if m.cancel != nil {
+					m.cancel()
+				}
+				return m, tea.Quit
+			}
+			return m, nil
+		}
 		return m.handleKey(msg)
 	}
+	return m, nil
+}
+
+func (m *AnalyzeModel) finishLoad(msg loadDoneMsg) (tea.Model, tea.Cmd) {
+	m.loading = false
+	if msg.err != nil {
+		m.loadErr = msg.err
+		return m, nil
+	}
+	m.root = msg.root
+	m.dir = msg.root
+	m.indexParents(m.root)
+	m.rebuildEntries()
 	return m, nil
 }
 
@@ -417,6 +526,10 @@ func (m *AnalyzeModel) removeNode(n *scan.Node) {
 }
 
 func (m *AnalyzeModel) rebuildEntries() {
+	if m.dir == nil {
+		m.entries = nil
+		return
+	}
 	var out []*scan.Node
 	q := strings.ToLower(strings.TrimSpace(m.filter.Value()))
 	for _, c := range m.dir.Children {
@@ -477,6 +590,9 @@ func (m *AnalyzeModel) listHeight() int {
 
 // View implements tea.Model.
 func (m *AnalyzeModel) View() string {
+	if m.loading || m.loadErr != nil {
+		return m.loadingView()
+	}
 	if m.help.ShowAll {
 		return m.helpView()
 	}
@@ -487,6 +603,35 @@ func (m *AnalyzeModel) View() string {
 	b.WriteString("\n")
 	b.WriteString(m.footer())
 	return b.String()
+}
+
+func (m *AnalyzeModel) loadingView() string {
+	var b strings.Builder
+	b.WriteString(m.styles.header.Render("Analyzing") + "\n\n")
+	if m.loadErr != nil {
+		b.WriteString(m.styles.warn.Render("  scan failed: "+m.loadErr.Error()) + "\n")
+		b.WriteString("\n" + m.styles.subtle.Render("  q quit") + "\n")
+		return b.String()
+	}
+	b.WriteString("  " + m.spin.View() + " scanning")
+	if m.hasProgress && (m.progress.ItemCount > 0 || m.progress.TotalUsage > 0) {
+		fmt.Fprintf(&b, " \u00b7 %d items \u00b7 %s", m.progress.ItemCount, config.FormatBytes(m.progress.TotalUsage))
+	}
+	b.WriteString("\n")
+	if m.hasProgress && m.progress.CurrentDir != "" {
+		b.WriteString(m.styles.subtle.Render("  "+truncatePath(m.progress.CurrentDir, m.width-4)) + "\n")
+	}
+	b.WriteString("\n" + m.styles.subtle.Render("  q cancel") + "\n")
+	return b.String()
+}
+
+// truncatePath shortens p from the left so the deepest directory stays visible.
+func truncatePath(p string, width int) string {
+	r := []rune(p)
+	if width < 8 || len(r) <= width {
+		return p
+	}
+	return "\u2026" + string(r[len(r)-(width-1):])
 }
 
 func (m *AnalyzeModel) header() string {

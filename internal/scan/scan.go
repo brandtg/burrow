@@ -10,12 +10,14 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/brandtg/burrow/internal/owner"
 	"github.com/dundee/gdu/v5/pkg/analyze"
 	"github.com/dundee/gdu/v5/pkg/fs"
+	log "github.com/sirupsen/logrus"
 )
 
 // DefaultIgnore is the default set of pseudo-filesystems a scan does not
@@ -52,6 +54,18 @@ type Options struct {
 	// Depth limits how many levels of children are retained. Depth <= 0 means
 	// unlimited; Depth 1 keeps the root and its immediate children.
 	Depth int
+	// Progress, when non-nil, receives periodic snapshots of an in-flight
+	// directory scan. It is not called for single-file scans. Callbacks run
+	// on the scan's progress goroutine and must not block.
+	Progress func(Progress)
+}
+
+// Progress is a point-in-time snapshot of a running scan. ItemCount and
+// TotalUsage only ever grow; CurrentDir is the directory most recently read.
+type Progress struct {
+	ItemCount  int64
+	TotalUsage int64
+	CurrentDir string
 }
 
 // Node is burrow's own item model. Other packages never see gdu types.
@@ -93,6 +107,7 @@ func Default() Scanner { return GDU{} }
 // Scan analyzes root and returns a Node tree. It honors ctx cancellation and
 // applies the per-root deadline from owner.TimeoutScanPerRoot.
 func (GDU) Scan(ctx context.Context, root string, opts Options) (*Node, error) {
+	quietGDU()
 	if root == "" {
 		root = "."
 	}
@@ -113,6 +128,10 @@ func (GDU) Scan(ctx context.Context, root string, opts Options) (*Node, error) {
 	}
 
 	analyzer := analyze.CreateAnalyzer()
+	if opts.Progress != nil {
+		stopProgress := startProgress(scanCtx, analyzer, opts.Progress)
+		defer stopProgress()
+	}
 	ignore := makeIgnore(abs, opts)
 	var fileFilter func(string) bool
 	if opts.NoHidden {
@@ -148,6 +167,45 @@ func (GDU) Scan(ctx context.Context, root string, opts Options) (*Node, error) {
 // the Scanner interface.
 func Analyze(ctx context.Context, path string, opts Options) (*Node, error) {
 	return GDU{}.Scan(ctx, path, opts)
+}
+
+var quietGDUOnce sync.Once
+
+// quietGDU raises gdu's logrus level so permission-denied lines from scanning
+// a real home directory do not print to stderr. Unreadable subtrees are already
+// surfaced as SizeKnown=false and scan_status=partial; error-level logs stay.
+func quietGDU() {
+	quietGDUOnce.Do(func() {
+		log.SetLevel(log.ErrorLevel)
+	})
+}
+
+// startProgress polls gdu's atomic progress counters and forwards them to fn
+// until the returned stop function is called.
+func startProgress(ctx context.Context, analyzer *analyze.ParallelAnalyzer, fn func(Progress)) func() {
+	ctx, cancel := context.WithCancel(ctx)
+	go func() {
+		report := func() {
+			p := analyzer.GetProgress()
+			fn(Progress{
+				ItemCount:  p.ItemCount,
+				TotalUsage: p.TotalUsage,
+				CurrentDir: p.CurrentItemName,
+			})
+		}
+		report()
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				report()
+			}
+		}
+	}()
+	return cancel
 }
 
 // build copies the gdu item tree into burrow's Node model, bounded by depth.
