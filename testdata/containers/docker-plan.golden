@@ -1,0 +1,5 @@
+containers.docker-build-cache|low|owner|default=true|selected=true|docker builder prune -f
+containers.docker-dangling|low|owner|default=true|selected=true|docker image prune -f
+containers.docker-unused|med|owner|default=false|selected=false|docker image prune -a -f
+containers.docker-volumes|high|owner|default=false|selected=false|docker volume prune -f
+containers.docker-all|high|owner|default=false|selected=false|docker system prune -a --volumes -f

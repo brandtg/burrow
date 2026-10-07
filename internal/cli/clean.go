@@ -11,6 +11,8 @@ import (
 	"syscall"
 
 	"github.com/brandtg/burrow/internal/catalog"
+	"github.com/brandtg/burrow/internal/catalog/containers"
+	"github.com/brandtg/burrow/internal/catalog/desktoppkgs"
 	"github.com/brandtg/burrow/internal/catalog/dev"
 	"github.com/brandtg/burrow/internal/catalog/downloads"
 	"github.com/brandtg/burrow/internal/catalog/system"
@@ -61,7 +63,7 @@ func (a *App) runClean(f cleanFlags) error {
 		return &ExitError{Code: ExitUsage, Err: err}
 	}
 
-	reg := catalog.NewRegistry(system.New(), dev.New(), usercache.New(), downloads.New())
+	reg := catalog.NewRegistry(system.New(), dev.New(), usercache.New(), downloads.New(), containers.New(), desktoppkgs.New())
 	cats := a.selectCategories(env, reg, f.all)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -79,6 +81,7 @@ func (a *App) runClean(f cleanFlags) error {
 	if err != nil {
 		return err
 	}
+	a.reconcile(cats, plan)
 	for _, w := range plan.Warnings {
 		fmt.Fprintf(a.ErrOut, "warning: %s\n", w)
 	}
@@ -110,6 +113,9 @@ func (a *App) runClean(f cleanFlags) error {
 	if !interactive && !a.Flags.Yes {
 		return &ExitError{Code: ExitUsage, Err: fmt.Errorf("refusing to execute without confirmation; pass --yes or --dry-run")}
 	}
+	// Reconcile again after an interactive selection: a category may need to
+	// drop items the user selected that a superset item now covers.
+	a.reconcile(cats, plan)
 
 	jw, jerr := journal.NewWriter(env.Paths.Journal)
 	if jerr != nil {
@@ -126,6 +132,17 @@ func (a *App) runClean(f cleanFlags) error {
 	}
 	tui.RenderSummary(a.Out, sum, color)
 	return cleanExit(sum)
+}
+
+// reconcile lets categories drop redundant items (for example a superset prune
+// superseding its parts) after discovery and again after an interactive
+// selection. It is idempotent.
+func (a *App) reconcile(cats []engine.Category, plan *engine.Plan) {
+	for _, c := range cats {
+		if rec, ok := c.(catalog.Reconciler); ok {
+			rec.Reconcile(plan)
+		}
+	}
 }
 
 // runWhitelist loads the whitelist manager and either runs the interactive

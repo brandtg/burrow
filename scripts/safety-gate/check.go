@@ -11,12 +11,20 @@
 // is checked even inside the packages that are allowed general destructive
 // sinks.
 //
+// Finally, it flags delete-capable external commands in owner argv tables
+// (rm, find -delete, truncate, shred, dd, xargs rm, shell -c). The AST gate
+// cannot see inside an external command, so without this rule a catalog could
+// shell out a permanent delete and bypass internal/safe's validation and
+// identity checks entirely. This rule applies in every package, including
+// internal/owner.
+//
 // Limitations: the gate is purely syntactic. It also flags method calls named
 // Truncate (e.g. (*os.File).Truncate) regardless of receiver, which can
 // false-positive on bytes.Buffer.Truncate. It handles package aliases and
 // dot-imports, but a sink assigned to a variable first (remove := os.Remove)
 // is not detected; keep sinks behind internal/safe, internal/trash, and
-// internal/owner.
+// internal/owner. Owner argv tables are only inspected when the Argv field is a
+// fully literal []string; an argv assembled from a variable is not seen.
 package main
 
 import (
@@ -27,6 +35,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -124,6 +133,14 @@ func Check(root string) ([]Violation, error) {
 			}
 			violations = append(violations, rtViolations...)
 		}
+		// Owner argv tables are checked in every package, including the
+		// allowed sink packages: a shelled delete bypasses internal/safe even
+		// when the calling package is permitted raw os sinks.
+		argvViolations, err := checkArgvTables(path, rel)
+		if err != nil {
+			return err
+		}
+		violations = append(violations, argvViolations...)
 		if isAllowed(rel) {
 			return nil
 		}
@@ -275,6 +292,114 @@ func violationAt(rel string, fset *token.FileSet, call *ast.CallExpr, name strin
 		Sink:   name,
 		Reason: "destructive sink outside safe/trash/owner",
 	}
+}
+
+// forbiddenArgvCommands are commands that can delete or truncate files. They
+// must never be the command in an owner argv table: the AST sink gate cannot
+// see inside an external command, so a shelled delete would bypass internal/
+// safe's path validation and identity checks entirely.
+var forbiddenArgvCommands = map[string]bool{
+	"rm": true, "shred": true, "dd": true, "truncate": true,
+	"unlink": true, "wipefs": true, "mkfs": true, "srm": true,
+}
+
+// shellCommands are interpreters; `sh -c ...` in an owner argv defeats the
+// exact-argv discipline (invariant I4) and can hide any command.
+var shellCommands = map[string]bool{"sh": true, "bash": true, "dash": true, "zsh": true, "ksh": true}
+
+// dangerousFindFlags turn a read-only find into a delete.
+var dangerousFindFlags = map[string]bool{"-delete": true, "-exec": true, "-execdir": true}
+
+// checkArgvTables flags delete-capable external commands in owner argv tables.
+// An argv is a composite-literal field named Argv whose value is a fully
+// literal []string. Only literal elements are inspected; an argv assembled from
+// a variable is not seen (the same limitation as the rest of the gate).
+func checkArgvTables(path, rel string) ([]Violation, error) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, path, nil, 0)
+	if err != nil {
+		return nil, err
+	}
+	var out []Violation
+	ast.Inspect(f, func(n ast.Node) bool {
+		lit, ok := n.(*ast.CompositeLit)
+		if !ok {
+			return true
+		}
+		for _, elt := range lit.Elts {
+			kv, ok := elt.(*ast.KeyValueExpr)
+			if !ok {
+				continue
+			}
+			key, ok := kv.Key.(*ast.Ident)
+			if !ok || key.Name != "Argv" {
+				continue
+			}
+			slice, ok := kv.Value.(*ast.CompositeLit)
+			if !ok {
+				continue
+			}
+			argv, complete := literalStrings(slice)
+			if !complete {
+				continue
+			}
+			if reason := argvDeleteReason(argv); reason != "" {
+				out = append(out, Violation{
+					File:   rel,
+					Line:   fset.Position(kv.Pos()).Line,
+					Sink:   "owner argv",
+					Reason: reason,
+				})
+			}
+		}
+		return true
+	})
+	return out, nil
+}
+
+// literalStrings returns the string elements of a composite literal, or
+// complete=false if any element is not a plain string literal.
+func literalStrings(lit *ast.CompositeLit) ([]string, bool) {
+	out := make([]string, 0, len(lit.Elts))
+	for _, elt := range lit.Elts {
+		bl, ok := elt.(*ast.BasicLit)
+		if !ok || bl.Kind != token.STRING {
+			return nil, false
+		}
+		s, err := strconv.Unquote(bl.Value)
+		if err != nil {
+			return nil, false
+		}
+		out = append(out, s)
+	}
+	return out, true
+}
+
+// argvDeleteReason reports why an owner argv is delete-capable, or "".
+func argvDeleteReason(argv []string) string {
+	if len(argv) == 0 {
+		return ""
+	}
+	cmd := filepath.Base(argv[0])
+	if forbiddenArgvCommands[cmd] {
+		return "delete-capable command in owner argv: " + cmd
+	}
+	if shellCommands[cmd] {
+		for _, a := range argv[1:] {
+			if a == "-c" {
+				return "shell invocation in owner argv: " + cmd + " -c"
+			}
+		}
+	}
+	for _, a := range argv[1:] {
+		switch {
+		case cmd == "find" && dangerousFindFlags[a]:
+			return "delete-capable find in owner argv: " + a
+		case cmd == "xargs" && forbiddenArgvCommands[filepath.Base(a)]:
+			return "delete-capable xargs in owner argv: " + a
+		}
+	}
+	return ""
 }
 
 func containsString(xs []string, s string) bool {

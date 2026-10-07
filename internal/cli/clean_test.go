@@ -177,3 +177,45 @@ func readMaybe(path string) string {
 	}
 	return string(data)
 }
+
+func TestCleanContainersDryRunJSON(t *testing.T) {
+	logPath := useTestbin(t)
+	te := newTestApp(t, cleanTestEnv(t))
+	te.app.Adapter = aptAdapter()
+	if code := te.run("clean", "--only", "containers", "--dry-run", "--json"); code != ExitOK {
+		t.Fatalf("exit = %d: %s", code, te.errOut.String())
+	}
+	out := te.out.String()
+	for _, want := range []string{
+		`"dry_run": true`,
+		`"command": "clean"`,
+		`"containers.docker-build-cache"`,
+		`"containers.docker-all"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("json missing %q:\n%s", want, out)
+		}
+	}
+	if log := readMaybe(logPath); strings.Contains(log, "prune") {
+		t.Fatalf("dry-run mutated: %s", log)
+	}
+}
+
+func TestCleanDesktopPkgsDryRunJSON(t *testing.T) {
+	useTestbin(t)
+	te := newTestApp(t, cleanTestEnv(t))
+	te.app.Adapter = aptAdapter()
+	if code := te.run("clean", "--only", "desktop-pkgs", "--dry-run", "--json"); code != ExitOK {
+		t.Fatalf("exit = %d: %s", code, te.errOut.String())
+	}
+	out := te.out.String()
+	for _, want := range []string{
+		`"flatpak.unused"`,
+		`"snap.old-revisions.core20_2015"`,
+		`"2015"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("json missing %q:\n%s", want, out)
+		}
+	}
+}
