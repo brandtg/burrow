@@ -93,6 +93,7 @@ type AnalyzeModel struct {
 	dir     *scan.Node
 	parents map[*scan.Node]*scan.Node
 	entries []*scan.Node
+	unknown int
 
 	cursor int
 	offset int
@@ -165,6 +166,7 @@ func NewAnalyzeModel(cfg AnalyzeConfig) *AnalyzeModel {
 	if cfg.Root != nil {
 		m.indexParents(cfg.Root)
 		m.rebuildEntries()
+		m.unknown = scan.UnknownCount(cfg.Root)
 	}
 	return m
 }
@@ -278,6 +280,7 @@ func (m *AnalyzeModel) finishLoad(msg loadDoneMsg) (tea.Model, tea.Cmd) {
 	m.dir = msg.root
 	m.indexParents(m.root)
 	m.rebuildEntries()
+	m.unknown = scan.UnknownCount(m.root)
 	return m, nil
 }
 
@@ -418,12 +421,19 @@ func (m *AnalyzeModel) toggleSelect() {
 	}
 	n := m.entries[m.cursor]
 	if m.selected[n.Path] {
-		delete(m.selected, n.Path)
-		delete(m.selectedNodes, n.Path)
+		m.deselect(n.Path)
 	} else {
 		m.selected[n.Path] = true
 		m.selectedNodes[n.Path] = n
 	}
+}
+
+// deselect drops path from both selection maps. It is called when a selected
+// node is skipped or fails, so a stale selection cannot shadow the cursor on a
+// later delete.
+func (m *AnalyzeModel) deselect(path string) {
+	delete(m.selected, path)
+	delete(m.selectedNodes, path)
 }
 
 func (m *AnalyzeModel) selectAll() {
@@ -456,6 +466,7 @@ func (m *AnalyzeModel) beginDelete(cursorOnly bool) {
 			if err := m.cfg.Validator.Validate(n.Path); err != nil {
 				skipped++
 				m.status = fmt.Sprintf("skip %s: %v", n.Name, err)
+				m.deselect(n.Path)
 				continue
 			}
 		}
@@ -463,6 +474,7 @@ func (m *AnalyzeModel) beginDelete(cursorOnly bool) {
 		if err != nil {
 			skipped++
 			m.status = fmt.Sprintf("skip %s: %v", n.Name, err)
+			m.deselect(n.Path)
 			continue
 		}
 		targets = append(targets, deleteTarget{node: n, snap: snap, size: n.Size})
@@ -484,13 +496,13 @@ func (m *AnalyzeModel) executeDelete() {
 	for _, t := range m.pending {
 		if err := m.exec.MoveToTrash(t.snap, t.size, t.node.Path); err != nil {
 			m.status = fmt.Sprintf("skip %s: %v", t.node.Name, err)
+			m.deselect(t.node.Path)
 			continue
 		}
 		m.freed += t.size
 		trashed++
 		m.removeNode(t.node)
-		delete(m.selected, t.node.Path)
-		delete(m.selectedNodes, t.node.Path)
+		m.deselect(t.node.Path)
 	}
 	m.pending = nil
 	if trashed > 0 {
@@ -506,6 +518,7 @@ func (m *AnalyzeModel) removeNode(n *scan.Node) {
 	if !ok {
 		return
 	}
+	m.unknown -= scan.UnknownCount(n)
 	for i, c := range parent.Children {
 		if c == n {
 			parent.Children = append(parent.Children[:i], parent.Children[i+1:]...)
@@ -581,7 +594,11 @@ func (m *AnalyzeModel) ensureVisible() {
 }
 
 func (m *AnalyzeModel) listHeight() int {
-	h := m.height - 5
+	overhead := 5
+	if m.unknown > 0 {
+		overhead++
+	}
+	h := m.height - overhead
 	if h < 1 {
 		h = 1
 	}
@@ -647,6 +664,11 @@ func (m *AnalyzeModel) header() string {
 	line1 := m.styles.header.Render(m.dir.Path)
 	line2 := m.styles.subtle.Render(fmt.Sprintf("%s · %d item(s) · sort %s%s",
 		free, len(m.entries), m.sort, cursorInfo))
+	if m.unknown > 0 {
+		warn := m.styles.warn.Render(fmt.Sprintf(
+			"partial scan: %d item(s) could not be read (size shown as unknown)", m.unknown))
+		return line1 + "\n" + warn + "\n" + line2
+	}
 	return line1 + "\n" + line2
 }
 

@@ -332,6 +332,24 @@ func hasUnknown(n *Node) bool {
 	return false
 }
 
+// UnknownCount returns the number of nodes the scanner could not size. It is
+// non-zero exactly when Status reports StatusPartial (or StatusUnavailable for
+// an unreadable root). The analyze UI uses it to warn that part of the tree was
+// skipped rather than silently presenting an incomplete total.
+func UnknownCount(n *Node) int {
+	if n == nil {
+		return 0
+	}
+	count := 0
+	if !n.SizeKnown {
+		count++
+	}
+	for _, c := range n.Children {
+		count += UnknownCount(c)
+	}
+	return count
+}
+
 // FileCount returns the number of non-directory nodes in the tree.
 func FileCount(n *Node) int64 {
 	if n == nil {

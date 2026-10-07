@@ -73,6 +73,23 @@ func TestPartialUnreadableSubtree(t *testing.T) {
 	if got := scan.Status(n); got != scan.StatusPartial {
 		t.Fatalf("status = %q, want %q", got, scan.StatusPartial)
 	}
+	if got := scan.UnknownCount(n); got != 1 {
+		t.Fatalf("UnknownCount = %d, want 1", got)
+	}
+}
+
+func TestUnknownCountZeroWhenComplete(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "f"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	n, err := scan.Analyze(context.Background(), root, scan.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := scan.UnknownCount(n); got != 0 {
+		t.Fatalf("UnknownCount = %d, want 0", got)
+	}
 }
 
 func TestSingleFileScan(t *testing.T) {

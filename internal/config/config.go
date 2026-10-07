@@ -84,7 +84,7 @@ func Default() *Config {
 			MaxAge:       "7d",
 		},
 		Analyze: Analyze{
-			OneFileSystem: true,
+			OneFileSystem: false,
 			Ignore:        []string{"/proc", "/dev", "/sys", "/run"},
 		},
 		Downloads: Downloads{

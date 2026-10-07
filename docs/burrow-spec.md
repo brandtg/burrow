@@ -503,7 +503,7 @@ artifact_dirs = ["node_modules","target",".venv","venv","__pycache__",".next/cac
 max_age = "7d"
 
 [analyze]
-one_file_system = true
+one_file_system = false
 ignore = ["/proc","/dev","/sys","/run"]
 
 [downloads]

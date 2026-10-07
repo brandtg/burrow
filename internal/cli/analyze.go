@@ -52,6 +52,11 @@ When stdout is not a terminal (or --json is set), analyze behaves like
 			if err != nil {
 				return err
 			}
+			// An explicit -x/--one-file-system wins over config; otherwise the
+			// config value applies (spec §13 precedence).
+			if !cmd.Flags().Changed("one-file-system") {
+				opts.oneFS = env.Cfg.Analyze.OneFileSystem
+			}
 			return a.runAnalyze(env, args, opts)
 		},
 	}
@@ -82,7 +87,7 @@ func (a *App) runAnalyze(env *engine.Env, args []string, opts analyzeOptions) er
 
 	scanOpts := scan.Options{
 		Ignore:        env.Cfg.Analyze.Ignore,
-		OneFileSystem: env.Cfg.Analyze.OneFileSystem || opts.oneFS,
+		OneFileSystem: opts.oneFS,
 		NoHidden:      opts.noHidden,
 		Apparent:      opts.apparent,
 		Depth:         opts.depth,
