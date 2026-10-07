@@ -71,7 +71,7 @@ Machine-readable form (one edge per line, `A -> B` means B depends on A):
 | 04 | `04-dev-user-cache-downloads.md` | M3 | 03 | 07 | 05, 06 | in review |
 | 05 | `05-containers-desktop-pkgs.md` | M4 | 03 | 07 | 04, 06 | in review |
 | 06 | `06-purge.md` | M5 | 01, 02 | 07 | 04, 05 | done |
-| 07 | `07-polish-distro-packaging.md` | M6 | 02, 03, 04, 05, 06 | — | — | not started |
+| 07 | `07-polish-distro-packaging.md` | M6 | 02, 03, 04, 05, 06 | — | — | in review |
 
 ---
 

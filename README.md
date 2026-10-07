@@ -12,12 +12,12 @@ things:
 
 It is an **orchestrator with a safety contract**, not a path-deleter.
 
-> Status: in progress. Plan 01 (foundation + safety core), Plan 02 (analyze
-> TUI + scan adapter), Plan 03 (clean engine, owner/distro layer, preview UI,
-> `system`/apt catalog), and Plan 04 (`dev`, `user-cache`, `downloads`
-> categories + whitelist manager) have landed; the product spec and the
-> remaining work are broken into dependency-ordered plans under `docs/plans/`.
-> See [Development](#development) to build and test.
+> Status: v0.1 complete. Plans 01–07 have landed: the safety core and engine,
+> analyze, clean (`system`/`dev`/`user-cache`/`downloads`/`containers`/
+> `desktop-pkgs`), purge, the thin `status` snapshot, the Fedora (dnf) adapter,
+> `--json` everywhere, shell completion, generated man pages, and
+> checksum-verified release packaging. See [Development](#development) to build
+> and test, and [Packaging and release](#packaging-and-release) to cut a release.
 
 ## Why this exists
 
@@ -62,7 +62,8 @@ burrow purge                  # rebuildable project artifacts (node_modules, tar
 burrow status                 # one-shot system snapshot (thin)
 burrow history                # read the operation journal; --restore <run_id>
 burrow config                 # print effective config + resolved paths
-burrow completion <shell>     # shell completion
+burrow completion <shell>     # shell completion (bash/zsh/fish)
+burrow docs                   # generate man pages into docs/man
 burrow version
 ```
 
@@ -109,8 +110,44 @@ rows are always shown but never auto-selected.
 | `system.core-dumps` | trash user-owned core files | trash | no | — | low | off |
 | `system.crash` | `systemd-tmpfiles --clean` | owner | yes | — | low | off |
 
-Other distros are detected behind the `internal/distro` adapter interface; their
-package rows are detection stubs until their plans land (Plan 07).
+Other distros are detected behind the `internal/distro` adapter interface. The
+Fedora/RHEL family (dnf/rpm) is implemented (Plan 07); pacman/zypper/apk remain
+detection stubs. The dnf package rows are:
+
+| Item | Owner command | Recovery | Root | Guard | Risk | Default |
+|---|---|---|---|---|---|---|
+| `system.pkg-cache` (dnf) | `dnf clean all` | owner | yes | dnf idle | low | on |
+| `system.orphans` (dnf) | `dnf autoremove -y` | owner | yes | dnf idle | high | off |
+| `system.old-kernels` (dnf) | `package-cleanup --oldkernels --count=2` | owner | yes | dnf idle | high | off |
+
+dnf has no residual-config concept, so `system.residual-config` is apt-only. The
+journal, log, temp, and core-dump rows are shared across families.
+
+### `containers` — docker and podman
+
+Container pruning is an owner command. Volumes can hold data, not just cache, so
+the volume and system-wide prunes are high risk and default OFF.
+
+| Item | Owner command | Recovery | Root | Guard | Risk | Default |
+|---|---|---|---|---|---|---|
+| `containers.docker-build-cache` | `docker builder prune -f` | owner | maybe | daemon up | low | on |
+| `containers.docker-dangling` | `docker image prune -f` | owner | maybe | daemon up | low | on |
+| `containers.docker-unused` | `docker image prune -a -f` | owner | maybe | daemon up | med | off |
+| `containers.docker-volumes` | `docker volume prune -f` | owner | maybe | daemon up | high | off |
+| `containers.docker-all` | `docker system prune -a --volumes -f` | owner | maybe | daemon up | high | off |
+| `containers.podman` | `podman system prune -f` | owner | maybe | podman up | med | off |
+
+`containers.k8s-evicted` is report-only in v0.1 and has no action.
+
+### `desktop-pkgs` — flatpak and snap
+
+| Item | Action | Recovery | Root | Guard | Risk | Default |
+|---|---|---|---|---|---|---|
+| `flatpak.unused` | `flatpak uninstall --unused -y` | owner | per-user | — | low | on |
+| `flatpak.repair` | `flatpak repair` | owner | maybe | — | low | off |
+| `flatpak.userdata` | trash `~/.var/app/<id>` | trash | no | app not installed | med | off |
+| `snap.old-revisions` | `snap remove --purge <name> --revision <rev>` | owner | yes | — | med | on |
+| `snap.userdata` | trash `~/snap/<name>` | trash | no | not installed | med | off |
 
 ### `dev` — language/toolchain caches
 
@@ -118,32 +155,33 @@ Each item prefers its owner command and falls back to trashing a documented
 cache root only when the owner command is unavailable. Owner caches are
 per-user: they are resolved by asking the owner (`npm config get cache`,
 `go env GOMODCACHE`, ...) immediately before acting and are never elevated.
+Every dev item is low risk and default ON.
 
-| Item | Action | Recovery | Guard | Default |
-|---|---|---|---|---|
-| `dev.npm` | `npm cache clean --force` | owner | npm idle | on |
-| `dev.pnpm` | `pnpm store prune` | owner | pnpm idle | on |
-| `dev.yarn` | trash `~/.yarn/cache`, `$XDG_CACHE_HOME/yarn` | trash | — | on |
-| `dev.bun` | `bun pm cache rm` | owner | — | on |
-| `dev.go-mod` | `go clean -modcache` | owner | go/gopls idle | on |
-| `dev.go-build` | `go clean -cache` | owner | — | on |
-| `dev.rust-registry-cache` | trash `$CARGO_HOME/registry/cache` (keep `registry/src`, `registry/index`, `git`, `bin`, `toolchains`) | trash | cargo/rustc idle | on |
-| `dev.rustup-downloads` | trash `$RUSTUP_HOME/downloads` | trash | — | on |
-| `dev.pip` | `pip3 cache purge` | owner | — | on |
-| `dev.uv` | `uv cache prune` | owner | — | on |
-| `dev.poetry.*` | trash `$XDG_CACHE_HOME/pypoetry/{artifacts,cache}` (keep `virtualenvs`) | trash | — | on |
-| `dev.conda` | `conda clean --yes --index-cache --tarballs --logfiles` | owner | — | on |
-| `dev.gem*` | trash `~/.gem/ruby/*/cache`, `~/.bundle/cache` | trash | — | on |
-| `dev.rbenv` | trash `~/.rbenv/cache` | trash | — | on |
-| `dev.cpan-build` | trash `~/.cpan/build` (keep `~/.cpan/sources`) | trash | — | on |
-| `dev.nix` | `nix-collect-garbage --delete-older-than 30d` | owner | — | on |
-| `dev.corepack` | `corepack cache clean` | owner | — | on |
-| `dev.mise` | `mise cache clear` | owner | — | on |
-| `dev.frontend-caches.*` | trash `$XDG_CACHE_HOME/{typescript,electron,node-gyp,vite,webpack,eslint,prettier,parcel-cache}` | trash | — | on |
-| `dev.pycache.*` | trash `__pycache__` under the purge roots | trash | git-tracked check | on |
-| `dev.docker-buildx` | trash `~/.docker/buildx/cache` | trash | — | on |
-| `dev.cloud-cli.*` | trash `~/.kube/cache`, `~/.aws/cli/cache`, gcloud/Azure logs | trash | — | on |
-| `dev.gh-cli` | `gh config clear-cache` | owner | — | on |
+| Item | Action | Recovery | Guard | Risk | Default |
+|---|---|---|---|---|---|
+| `dev.npm` | `npm cache clean --force` | owner | npm idle | low | on |
+| `dev.pnpm` | `pnpm store prune` | owner | pnpm idle | low | on |
+| `dev.yarn` | trash `~/.yarn/cache`, `$XDG_CACHE_HOME/yarn` | trash | — | low | on |
+| `dev.bun` | `bun pm cache rm` | owner | — | low | on |
+| `dev.go-mod` | `go clean -modcache` | owner | go/gopls idle | low | on |
+| `dev.go-build` | `go clean -cache` | owner | — | low | on |
+| `dev.rust-registry-cache` | trash `$CARGO_HOME/registry/cache` (keep `registry/src`, `registry/index`, `git`, `bin`, `toolchains`) | trash | cargo/rustc idle | low | on |
+| `dev.rustup-downloads` | trash `$RUSTUP_HOME/downloads` | trash | — | low | on |
+| `dev.pip` | `pip3 cache purge` | owner | — | low | on |
+| `dev.uv` | `uv cache prune` | owner | — | low | on |
+| `dev.poetry.*` | trash `$XDG_CACHE_HOME/pypoetry/{artifacts,cache}` (keep `virtualenvs`) | trash | — | low | on |
+| `dev.conda` | `conda clean --yes --index-cache --tarballs --logfiles` | owner | — | low | on |
+| `dev.gem*` | trash `~/.gem/ruby/*/cache`, `~/.bundle/cache` | trash | — | low | on |
+| `dev.rbenv` | trash `~/.rbenv/cache` | trash | — | low | on |
+| `dev.cpan-build` | trash `~/.cpan/build` (keep `~/.cpan/sources`) | trash | — | low | on |
+| `dev.nix` | `nix-collect-garbage --delete-older-than 30d` | owner | — | low | on |
+| `dev.corepack` | `corepack cache clean` | owner | — | low | on |
+| `dev.mise` | `mise cache clear` | owner | — | low | on |
+| `dev.frontend-caches.*` | trash `$XDG_CACHE_HOME/{typescript,electron,node-gyp,vite,webpack,eslint,prettier,parcel-cache}` | trash | — | low | on |
+| `dev.pycache.*` | trash `__pycache__` under the purge roots | trash | git-tracked check | low | on |
+| `dev.docker-buildx` | trash `~/.docker/buildx/cache` | trash | — | low | on |
+| `dev.cloud-cli.*` | trash `~/.kube/cache`, `~/.aws/cli/cache`, gcloud/Azure logs | trash | — | low | on |
+| `dev.gh-cli` | `gh config clear-cache` | owner | — | low | on |
 
 The Rust registry cache and rustup downloads are trashed (there is no cargo
 owner command for them), so they carry the `trash` recovery contract rather than
@@ -152,11 +190,11 @@ Poetry `virtualenvs`, CPAN `sources`) are asserted by tests.
 
 ### `user-cache` — XDG cache sweep
 
-| Item | Action | Recovery | Default |
-|---|---|---|---|
-| `user-cache.app-caches.*` | trash each top-level `$XDG_CACHE_HOME` entry not owned by a dev item | trash | on |
-| `user-cache.thumbnails` | trash `$XDG_CACHE_HOME/thumbnails` | trash | on |
-| `user-cache.trash` | empty `$XDG_DATA_HOME/Trash` (irreversible) | owner | off |
+| Item | Action | Recovery | Risk | Default |
+|---|---|---|---|---|
+| `user-cache.app-caches.*` | trash each top-level `$XDG_CACHE_HOME` entry not owned by a dev item | trash | low | on |
+| `user-cache.thumbnails` | trash `$XDG_CACHE_HOME/thumbnails` | trash | low | on |
+| `user-cache.trash` | empty `$XDG_DATA_HOME/Trash` (irreversible) | owner | high | off |
 
 A whitelisted path protects itself and its parent from the sweep, and a small
 protected set (`thumbnails`, `burrow`, `dconf`, `keyrings`, `gvfs`, `pulse`,
@@ -165,10 +203,28 @@ regenerable data.
 
 ### `downloads` — installer/content sweep
 
-| Item | Action | Recovery | Default |
-|---|---|---|---|
-| `downloads.installers.*` | trash `~/` and `~/Downloads` installers older than `[downloads] installer_min_age` (default 30d) | trash | on |
-| `downloads.old.*` | trash `~/Downloads` entries older than `old_min_age` (90d) and larger than `old_min_size` (100M) | trash | off |
+| Item | Action | Recovery | Risk | Default |
+|---|---|---|---|---|
+| `downloads.installers.*` | trash `~/` and `~/Downloads` installers older than `[downloads] installer_min_age` (default 30d) | trash | low | on |
+| `downloads.old.*` | trash `~/Downloads` entries older than `old_min_age` (90d) and larger than `old_min_size` (100M) | trash | med | off |
+
+### `purge` — rebuildable project artifacts (separate command)
+
+`purge` is a distinct command, not a `clean` category. It permanently deletes
+rebuildable build artifacts under the configured project roots, with git-tracked
+protection:
+
+| Artifact | Detection | Recovery | Guard | Default |
+|---|---|---|---|---|
+| `node_modules` | under a `[purge] paths` root | permanent (rebuildable) | git-tracked/nested-repo check, age filter | off |
+| `target` | same | permanent (rebuildable) | git-tracked check, age filter | off |
+| `.venv`, `venv` | same | permanent (rebuildable) | git-tracked check, age filter | off |
+| `__pycache__` | same | permanent (rebuildable) | git-tracked check, age filter | off |
+| `.next/cache`, `build`, `dist`, `.gradle`, `_cacache` | same | permanent (rebuildable) | git-tracked check, age filter | off |
+
+The artifact list is pinned and extensible via `[purge] artifact_dirs`. A
+candidate inside a git repo that is tracked (or whose git state is unknown) is
+kept. See `docs/user-guide.md` and `burrow purge --paths`.
 
 ### Whitelist manager
 
@@ -185,7 +241,7 @@ internal/engine/    run pipeline: discover -> plan -> preview -> execute -> jour
 internal/catalog/   cleanup catalog: category/item registries (data + small logic)
 internal/action/    Action interface + TrashAction, OwnerCommandAction
 internal/owner/     owner-command runners, timeouts, per-distro command tables
-internal/distro/    distro detection + adapter interface (apt first)
+internal/distro/    distro detection + adapter interface (apt + dnf)
 internal/trash/     native freedesktop Trash Spec writer (put/list/restore/empty)
 internal/safe/      path validation, identity snapshot, guards, fail-closed helpers
 internal/journal/   append-only JSONL operation journal + history reader
@@ -208,11 +264,16 @@ preview.
   (MIT), wrapped behind `internal/scan`. See `AGENTS.md` for the integration
   caveats.
 - **TUI:** Bubble Tea + Lipgloss + Bubbles.
-- **CLI:** spf13/cobra.
+- **CLI:** spf13/cobra (shell completion + `cobra/doc` man-page generation).
+- **Status metrics:** [`github.com/shirou/gopsutil/v4`](https://github.com/shirou/gopsutil),
+  wrapped behind `internal/metrics` (thin, read-only).
 - **Config:** TOML; whitelist is a separate newline-delimited file.
 - **Trash:** native freedesktop Trash Spec implementation, no runtime dependency.
-- **v0.1 target:** Debian/Ubuntu + systemd, with a distro-adapter interface
-  designed in from day one for dnf/pacman/zypper/apk.
+- **Packaging:** goreleaser (`CGO_ENABLED=0`, linux amd64/arm64, checksums, native
+  packages) plus a checksum-verified `install.sh`.
+- **v0.1 target:** Debian/Ubuntu + Fedora/RHEL + systemd, with a distro-adapter
+  interface (`internal/distro`) designed so pacman/zypper/apk are data-only
+  additions.
 
 ## Non-goals
 
@@ -309,15 +370,66 @@ cross-device trash test. It never touches a real host path.
 sudo make integration
 ```
 
+### Container matrix
+
+Runs the binary in `ubuntu:24.04`, `debian:12`, and `fedora:41` with the
+`testbin/` stubs first on PATH, asserting the planned/executed owner argv,
+dry-run purity, guard trips, whitelist exclusion, and exit codes. Requires
+docker or podman; it never touches a real host path.
+
+```sh
+make matrix                      # requires a container runtime
+BURROW_MATRIX=1 make gate        # gate form: skips with a reason if no runtime
+```
+
+CI (`.github/workflows/ci.yml`) runs `make gate-strict` and `make matrix`.
+
 ### Repository layout
 
 See [Architecture](#architecture) for the package map. Package ownership and the
 dependency graph are in `docs/plans/README.md`; agent working notes and the
 non-negotiable safety rules are in `AGENTS.md`.
 
+### Man pages and completion
+
+```sh
+make docs                        # regenerate docs/man (review the diff)
+make run ARGS="completion bash"  # bash/zsh/fish completion scripts
+```
+
+Man pages are generated from the cobra command tree; never hand-edit them. The
+gate regenerates them into a temp dir and fails if the committed pages are stale.
+
+## Packaging and release
+
+Releases are built by [goreleaser](https://goreleaser.com) from
+`.goreleaser.yaml`: static linux amd64/arm64 binaries (`CGO_ENABLED=0`), tar.gz
+archives, `.deb`/`.rpm`/`.apk`/`.pkg.tar.zst` packages, and a `checksums.txt`.
+The version is stamped through `internal/journal.Version` via
+`-ldflags -X`. goreleaser provisions the Go toolchain pinned in `go.mod`.
+
+```sh
+goreleaser release --clean       # build archives, packages, and checksums
+make verify-static               # assert the binary has no dynamic loader deps
+```
+
+`install.sh` is checksum-verified and fail-closed: it downloads the archive and
+`checksums.txt`, verifies SHA-256, and installs only on a match. A missing
+checksum entry, a download failure, or a mismatch aborts without installing.
+
+```sh
+BURROW_VERSION=0.1.0 ./install.sh            # pin a version
+BURROW_BINDIR=~/.local/bin ./install.sh      # install somewhere writable
+```
+
+See `docs/user-guide.md` for the day-to-day workflow (dry-run, whitelist,
+preview/review, journal/undo, config).
+
 ## Reference documents
 
 - `docs/burrow-spec.md` — the full product spec and locked decisions (ADRs).
+- `docs/user-guide.md` — the user guide.
+- `docs/man/` — generated man pages.
 - `docs/mole-linux-portability.md` — why Mole cannot be ported and what a Linux
   build should reuse.
 - `AGENTS.md` — working notes for coding agents.

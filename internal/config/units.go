@@ -16,7 +16,7 @@ func ParseBytes(s string) (int64, error) {
 		return 0, nil
 	}
 	upper := strings.ToUpper(s)
-	mult := int64(1)
+	var mult int64
 	switch {
 	case strings.HasSuffix(upper, "K"), strings.HasSuffix(upper, "KIB"):
 		mult = 1 << 10

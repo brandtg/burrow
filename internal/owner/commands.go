@@ -79,6 +79,51 @@ func AptResidualConfig(pkgs []string) (OwnerCommand, error) {
 	}, nil
 }
 
+// --- Fedora/RHEL (dnf/rpm) owner commands (spec §8.1, §21.1). ---
+
+// DnfPackageCache empties the dnf package cache.
+func DnfPackageCache() OwnerCommand {
+	return OwnerCommand{
+		ID:        "system.pkg-cache",
+		Argv:      []string{"dnf", "clean", "all"},
+		NeedsRoot: true,
+		Timeout:   TimeoutOwnerClean,
+	}
+}
+
+// DnfOrphans removes packages no longer required by anything.
+func DnfOrphans() OwnerCommand {
+	return OwnerCommand{
+		ID:        "system.orphans",
+		Argv:      []string{"dnf", "autoremove", "-y"},
+		NeedsRoot: true,
+		Timeout:   TimeoutOwnerClean,
+	}
+}
+
+// DnfOldKernels removes old kernels, keeping the running one plus one. dnf owns
+// the selection; package-cleanup is the documented helper.
+func DnfOldKernels() OwnerCommand {
+	return OwnerCommand{
+		ID:        "system.old-kernels",
+		Argv:      []string{"package-cleanup", "--oldkernels", "--count=2"},
+		NeedsRoot: true,
+		Timeout:   TimeoutOwnerClean,
+	}
+}
+
+// DnfOrphansProbe lists packages dnf considers unneeded (read-only). The
+// format string carries a literal newline escape so dnf emits one name per
+// line; without it dnf concatenates every name into a single token.
+func DnfOrphansProbe() OwnerCommand {
+	return OwnerCommand{ID: "probe.dnf.unneeded", Argv: []string{"dnf", "repoquery", "--unneeded", "--qf", "%{name}\\n"}, ReadOnly: true, Timeout: TimeoutSizeProbe}
+}
+
+// RpmKernelProbe lists installed kernel packages (read-only).
+func RpmKernelProbe() OwnerCommand {
+	return OwnerCommand{ID: "probe.rpm.kernels", Argv: []string{"rpm", "-q", "kernel"}, ReadOnly: true, Timeout: TimeoutSizeProbe}
+}
+
 // --- systemd owner commands. ---
 
 // JournaldVacuumSize bounds the journal by size.

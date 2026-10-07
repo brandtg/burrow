@@ -72,6 +72,23 @@ vuln: ## Run govulncheck (skips if not installed).
 safety-gate: ## Run the static destructive-sink gate.
 	$(GO) run ./scripts/safety-gate .
 
+.PHONY: docs
+docs: ## Generate the man pages into docs/man (review the diff).
+	$(GO) run ./cmd/burrow docs --dir docs/man
+
+.PHONY: verify-static
+verify-static: build ## Verify the built binary has no dynamic loader deps.
+	@if command -v ldd >/dev/null 2>&1; then \
+	  out="$$(ldd $(BIN) 2>&1 || true)"; \
+	  if printf '%s\n' "$$out" | grep -qE 'not a dynamic executable|statically linked'; then \
+	    echo "ok: $(BIN) is static"; \
+	  else \
+	    echo "FAIL: $(BIN) is dynamically linked:"; printf '%s\n' "$$out"; exit 1; \
+	  fi; \
+	else \
+	  echo "ldd not available; skipping static check"; \
+	fi
+
 .PHONY: gate
 gate: ## Run the canonical gate (scripts/check.sh).
 	./scripts/check.sh
@@ -86,6 +103,10 @@ gate-strict: ## Gate that fails if lint/vuln tools are missing.
 .PHONY: integration
 integration: ## Run the loopback cross-device trash test (requires root).
 	BURROW_INTEGRATION=1 ./scripts/check.sh
+
+.PHONY: matrix
+matrix: ## Run the container integration matrix (requires docker/podman).
+	scripts/matrix.sh
 
 .PHONY: clean
 clean: ## Remove build artifacts.

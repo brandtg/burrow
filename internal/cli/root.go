@@ -3,6 +3,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"github.com/brandtg/burrow/internal/engine"
 	"github.com/brandtg/burrow/internal/i18n"
 	"github.com/brandtg/burrow/internal/journal"
+	"github.com/brandtg/burrow/internal/metrics"
 	"github.com/spf13/cobra"
 )
 
@@ -46,6 +48,10 @@ type App struct {
 	// matrix.
 	Distro  *distro.Info
 	Adapter distro.Adapter
+
+	// CollectMetrics overrides the status snapshot source for tests and the
+	// command-level golden. It defaults to metrics.Collect.
+	CollectMetrics func(context.Context, string) (metrics.Snapshot, error)
 
 	env    *engine.Env
 	envErr error
@@ -109,7 +115,8 @@ func (a *App) Root() *cobra.Command {
 		a.newAnalyzeCmd(),
 		a.newCleanCmd(),
 		a.newPurgeCmd(),
-		a.newStubCmd("status", "one-shot system snapshot"),
+		a.newStatusCmd(),
+		a.newDocsCmd(root),
 	)
 	return root
 }

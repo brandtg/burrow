@@ -57,7 +57,7 @@ func TestLockHeldViaProcLocks(t *testing.T) {
 	if !ok {
 		t.Fatal("no stat_t")
 	}
-	held, err := lockHeld(uint64(st.Dev), st.Ino)
+	held, err := lockHeld(st.Dev, st.Ino)
 	if err != nil {
 		t.Skipf("/proc/locks unavailable: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestLockHeldViaProcLocks(t *testing.T) {
 		t.Fatal(err)
 	}
 	ost := ofi.Sys().(*syscall.Stat_t)
-	free, err := lockHeld(uint64(ost.Dev), ost.Ino)
+	free, err := lockHeld(ost.Dev, ost.Ino)
 	if err != nil {
 		t.Fatal(err)
 	}

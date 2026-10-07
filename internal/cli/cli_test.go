@@ -124,14 +124,31 @@ func TestHistoryJSON(t *testing.T) {
 	}
 }
 
-func TestStubCommandsExitUsage(t *testing.T) {
-	for _, name := range []string{"status"} {
-		te := newTestApp(t, nil)
-		if code := te.run(name); code != ExitUsage {
-			t.Fatalf("%s: exit code = %d, want %d", name, code, ExitUsage)
+func TestStatusJSON(t *testing.T) {
+	te := newTestApp(t, nil)
+	if code := te.run("status", "--json"); code != ExitOK {
+		t.Fatalf("exit code = %d: %s", code, te.errOut.String())
+	}
+	out := te.out.String()
+	for _, want := range []string{
+		`"cpu_percent"`, `"mem_total"`, `"disk_total"`, `"net_rx_bytes"`,
+		`"process_count"`, `"top_processes"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("status json missing %q:\n%s", want, out)
 		}
-		if !strings.Contains(te.errOut.String(), "not implemented") {
-			t.Fatalf("%s: stderr = %q", name, te.errOut.String())
+	}
+}
+
+func TestStatusHuman(t *testing.T) {
+	te := newTestApp(t, nil)
+	if code := te.run("status"); code != ExitOK {
+		t.Fatalf("exit code = %d: %s", code, te.errOut.String())
+	}
+	out := te.out.String()
+	for _, want := range []string{"cpu", "memory", "disk", "network", "processes"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("status output missing %q:\n%s", want, out)
 		}
 	}
 }

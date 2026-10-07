@@ -63,7 +63,9 @@ func TestRemoveTreeChangedIdentityFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.RemoveAll(dir); err != nil {
+	// Rename the original away rather than deleting it so its inode stays
+	// allocated and the replacement cannot reuse it; ext4 reuses freed inodes.
+	if err := os.Rename(dir, dir+".moved"); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {

@@ -1,0 +1,1 @@
+{"ts":"2026-10-05T12:00:00Z","run_id":"01JTEST","command":"clean","item":"dev.npm","action":"owner","argv":["npm","cache","clean","--force"],"status":"ok","bytes":1024,"host":"h","burrow_version":"0.1.0"}

@@ -1,6 +1,6 @@
 # Plan 07 — Polish, `status`, dnf adapter, packaging
 
-**Status:** not started
+**Status:** in review
 **Milestone:** M6
 **Depends on:** 02, 03, 04, 05, 06
 **Blocks:** none
@@ -92,3 +92,27 @@ docs/                        generated man pages + user guide
 
 Installer discipline mirrors Mole's checksum-verified, fail-closed install
 behavior, reimplemented clean-room. No Mole source copied.
+
+## Landing notes
+
+- **Adapter interface change (cross-plan).** Plan 07 added `System() SystemSpec`
+  to `internal/distro.Adapter` and rewrote `internal/catalog/system/system.go` to
+  consume `SystemSpec`, making the `system` catalog distro-agnostic. Both files
+  are Plan 03-owned; the change is recorded in
+  `docs/plans/03-clean-engine-system-apt.md` (task 3). Plan 05 does not describe
+  the adapter, so it is unaffected.
+- **Fedora matrix.** `scripts/matrix.sh` (+ `scripts/matrix-case.sh`) runs the
+  binary in `ubuntu:24.04`, `debian:12`, and `fedora:41` with `testbin/` first on
+  PATH, asserting the planned/executed argv, dry-run purity, guard trips,
+  whitelist exclusion, and exit codes. It is wired as `make matrix` and behind
+  `BURROW_MATRIX=1` in `scripts/check.sh`; with `--allow-skip` it records a
+  reason and passes when no container runtime is available. A non-container dnf
+  discovery/execute test covers the dnf path in the default gate.
+- **CI.** The repo previously had no CI config. `.github/workflows/ci.yml` now
+  runs `make gate-strict` (which verifies the generated man pages are current and
+  fails if golangci-lint/govulncheck/goreleaser are missing) and `make matrix`.
+- **dnf probe.** `dnf repoquery --unneeded --qf '%{name}\n'` is the orphan probe
+  (validated against fedora:41 in the matrix); the format carries a literal
+  newline so names are emitted one per line.
+- **dnf old-kernels.** `package-cleanup` ships in dnf-utils, not base dnf, so the
+  old-kernels item is hidden when the binary is absent.

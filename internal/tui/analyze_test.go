@@ -23,7 +23,9 @@ func TestTrashExecIdentitySwapGuardStop(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Swap the path for a different inode between selection and execution.
-	if err := os.Remove(victim); err != nil {
+	// Rename the original away rather than deleting it so its inode stays
+	// allocated and the replacement cannot reuse it; ext4 reuses freed inodes.
+	if err := os.Rename(victim, victim+".moved"); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(victim, []byte("replacement"), 0o644); err != nil {

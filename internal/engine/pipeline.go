@@ -41,9 +41,9 @@ type Plan struct {
 
 // Totals summarizes a set of items.
 type Totals struct {
-	Count   int
-	Bytes   int64
-	Unknown int
+	Count   int   `json:"count"`
+	Bytes   int64 `json:"bytes"`
+	Unknown int   `json:"unknown"`
 }
 
 // CategoryGroup is a category's items for the preview.

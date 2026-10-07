@@ -1,0 +1,32 @@
+{
+  "run_id": "<RUN_ID>",
+  "command": "clean",
+  "dry_run": true,
+  "items": [
+    {
+      "id": "system.pkg-cache",
+      "category": "system",
+      "display": "package cache",
+      "path": "/var/cache/apt/archives",
+      "size": 0,
+      "size_known": false,
+      "recovery": "owner",
+      "needs_root": true,
+      "risk": "low",
+      "default_on": true,
+      "selected": true,
+      "status": "pending",
+      "argv": [
+        "sudo",
+        "--",
+        "apt-get",
+        "clean"
+      ]
+    }
+  ],
+  "totals": {
+    "count": 1,
+    "bytes": 0,
+    "unknown": 1
+  }
+}

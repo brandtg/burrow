@@ -1,0 +1,62 @@
+# .goreleaser.yaml — reproducible release artifacts for burrow.
+#
+# Static linux binaries (CGO_ENABLED=0), checksums, and native packages.
+# goreleaser runs with the toolchain pinned in go.mod; the release pipeline
+# must provision Go 1.26.8 (GOTOOLCHAIN=auto will also download it).
+version: 2
+
+project_name: burrow
+
+builds:
+  - id: burrow
+    main: ./cmd/burrow
+    binary: burrow
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X github.com/brandtg/burrow/internal/journal.Version={{.Version}}
+
+archives:
+  - id: burrow
+    formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+nfpms:
+  - id: burrow
+    package_name: burrow
+    vendor: burrow
+    homepage: https://github.com/brandtg/burrow
+    maintainer: burrow maintainers
+    description: |-
+      burrow is a Linux-native, terminal-first disk analyzer and prescriptive
+      cleaner that drives the owner of each kind of junk with a safety contract.
+    license: Apache-2.0
+    formats:
+      - deb
+      - rpm
+      - apk
+      - archlinux
+    contents:
+      - src: docs/man/*.1
+        dst: /usr/share/man/man1/
+        file_info:
+          mode: 0644
+
+changelog:
+  disable: true
+
+release:
+  draft: true
+  prerelease: auto

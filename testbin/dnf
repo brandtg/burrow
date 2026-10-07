@@ -1,0 +1,20 @@
+#!/bin/sh
+# Test stub for dnf. Records argv and emits canned output.
+log="${BURROW_TESTBIN_LOG:-/dev/null}"
+{ printf 'argv: dnf'; for a in "$@"; do printf ' %s' "$a"; done; printf '\n'; } >>"$log"
+case "$1" in
+  repoquery)
+    echo "old-pkg"
+    echo "another-old-pkg"
+    ;;
+  clean)
+    echo "Cleaning repos: base updates"
+    echo "0 files removed"
+    ;;
+  autoremove)
+    echo "Removing: old-pkg"
+    ;;
+  *)
+    echo "Done"
+    ;;
+esac

@@ -49,11 +49,53 @@ else
   warn "govulncheck not installed; skipping (set BURROW_REQUIRE_TOOLS=1 to enforce)"
 fi
 
+step "goreleaser config"
+if command -v goreleaser >/dev/null 2>&1; then
+  if goreleaser check; then ok "goreleaser config"; else fail "goreleaser config"; fi
+elif [[ "${BURROW_REQUIRE_TOOLS:-0}" == "1" ]]; then
+  fail "goreleaser not installed"
+else
+  warn "goreleaser not installed; skipping config lint (set BURROW_REQUIRE_TOOLS=1 to enforce)"
+fi
+
 step "go test"
 if go test ./...; then ok "go test"; else fail "go test"; fi
 
 step "static safety gate"
 if go run ./scripts/safety-gate "$ROOT"; then ok "safety gate"; else fail "safety gate"; fi
+
+step "man pages"
+MAN_TMP="$(mktemp -d)"
+if go run ./cmd/burrow docs --dir "$MAN_TMP" >/dev/null 2>&1; then
+  if diff -r docs/man "$MAN_TMP" >/dev/null 2>&1; then
+    ok "man pages up to date"
+  else
+    fail "man pages are stale; run 'make docs' and review the diff"
+    diff -r docs/man "$MAN_TMP" || true
+  fi
+else
+  fail "man page generation failed"
+fi
+rm -rf "$MAN_TMP"
+
+step "static binary"
+STATIC_TMP="$(mktemp -d)"
+if CGO_ENABLED=0 go build -o "$STATIC_TMP/burrow" ./cmd/burrow; then
+  if command -v ldd >/dev/null 2>&1; then
+    LDD_OUT="$(ldd "$STATIC_TMP/burrow" 2>&1 || true)"
+    if grep -qE 'not a dynamic executable|statically linked' <<<"$LDD_OUT"; then
+      ok "static binary"
+    else
+      fail "binary is dynamically linked"
+      printf '%s\n' "$LDD_OUT"
+    fi
+  else
+    warn "ldd not available; skipping static check"
+  fi
+else
+  fail "static build failed"
+fi
+rm -rf "$STATIC_TMP"
 
 if [[ "${BURROW_INTEGRATION:-0}" == "1" ]]; then
   step "integration matrix"
@@ -61,6 +103,17 @@ if [[ "${BURROW_INTEGRATION:-0}" == "1" ]]; then
     if scripts/integration.sh; then ok "integration"; else fail "integration"; fi
   else
     warn "scripts/integration.sh not present; skipping"
+  fi
+fi
+
+if [[ "${BURROW_MATRIX:-0}" == "1" ]]; then
+  step "container matrix"
+  if [[ -x scripts/matrix.sh ]]; then
+    # --allow-skip records a reason and passes when no container runtime is
+    # available; run `make matrix` directly to require it.
+    if scripts/matrix.sh --allow-skip; then ok "container matrix"; else fail "container matrix"; fi
+  else
+    warn "scripts/matrix.sh not present; skipping"
   fi
 fi
 
