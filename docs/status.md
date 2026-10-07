@@ -110,6 +110,16 @@ same-path trash entry from another run). Covered by
   on a background goroutine, rendering a spinner, live item/size totals, and the
   current directory (`scan.Options` gained a `Progress` callback;
   `tui.AnalyzeConfig` gained `Load`).
+- **`analyze /` silently omitted same-filesystem subvolumes.** `one_file_system`
+  defaulted to `true` and the CLI merged it with `||`, so `-x` could only turn
+  the behavior on. On btrfs, `/` and `/home` share a filesystem but have distinct
+  `st_dev`, so `/home` was skipped with no indication. The default is now `false`
+  and an explicit `-x` overrides config (spec §13 precedence); `-x` still skips
+  `/home` on such a host.
+- **Partial scans were invisible in the TUI.** Permission-denied subtrees only
+  set `scan_status=partial` in `--json`; the interactive header now shows
+  `partial scan: N item(s) could not be read` (`scan.UnknownCount`), alongside
+  the per-row `unknown` size.
 
 ## Known gaps (by design or deferred)
 
@@ -136,8 +146,6 @@ same-path trash entry from another run). Covered by
 ## Test-coverage gaps
 
 - No benchmark asserts the M1 "10 GB warm scan `<2s`" criterion (Plan 02).
-- `analyze --json` `scan_status=partial` is tested at the scan layer only, not
-  through the CLI.
 - The analyze TUI `d`/`D` path and `history --restore` of an analyze run are not
   tested end-to-end (only `TrashExec` and `trash.Restore` separately).
 - `purge --age`, `BURROW_PURGE_MAX_AGE`, and `purge --json` shape are untested

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -58,5 +59,31 @@ func TestAnalyzeMissingPathErrors(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "does-not-exist")
 	if code := te.run("analyze", "--json", missing); code == ExitOK {
 		t.Fatalf("expected a non-zero exit for a missing path, stderr=%q", te.errOut.String())
+	}
+}
+
+func TestAnalyzeJSONReportsPartialScan(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can read an unreadable directory")
+	}
+	te := newTestApp(t, xdgTestEnv(t))
+	root := t.TempDir()
+	locked := filepath.Join(root, "locked")
+	if err := os.Mkdir(locked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(locked, "x"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+
+	if code := te.run("analyze", "--json", root); code != ExitOK {
+		t.Fatalf("exit code = %d: %s", code, te.errOut.String())
+	}
+	if !strings.Contains(te.out.String(), `"scan_status": "partial"`) {
+		t.Fatalf("partial scan not reported: %s", te.out.String())
 	}
 }

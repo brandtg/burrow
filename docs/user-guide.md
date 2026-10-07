@@ -115,6 +115,12 @@ a terminal, or with `--json`, it emits a stable document:
 Flags: `-a/--apparent`, `-x/--one-file-system`, `-H/--no-hidden`,
 `--depth <n>`, `-t/--top <n>`, `--no-delete`. `--json` accepts a single path.
 
+When a directory cannot be read (for example due to permissions), the scan is
+partial: the interactive UI shows a `partial scan` warning, unreadable entries
+render as `unknown`, and `--json` reports `"scan_status": "partial"`. By default
+analyze descends across mount points; pass `-x`/`--one-file-system` (or set
+`one_file_system = true`) to stay on the starting filesystem.
+
 ## Purge
 
 `burrow purge` removes rebuildable project artifacts (`node_modules`, `target`,
@@ -163,7 +169,7 @@ paths = ["~/Projects","~/src","~/dev"]
 max_age = "7d"
 
 [analyze]
-one_file_system = true
+one_file_system = false
 ignore = ["/proc","/dev","/sys","/run"]
 
 [downloads]

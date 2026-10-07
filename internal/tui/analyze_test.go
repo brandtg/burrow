@@ -231,6 +231,84 @@ func TestAnalyzeBackgroundLoadError(t *testing.T) {
 	}
 }
 
+func TestAnalyzeHeaderWarnsOnPartialScan(t *testing.T) {
+	root := &scan.Node{
+		Name: "root", Path: "/root", IsDir: true, SizeKnown: true,
+		Children: []*scan.Node{
+			{Name: "locked", Path: "/root/locked", IsDir: true, SizeKnown: false},
+		},
+	}
+	m := NewAnalyzeModel(AnalyzeConfig{Root: root, Color: false, UID: os.Getuid()})
+	if m.unknown != 1 {
+		t.Fatalf("unknown = %d, want 1", m.unknown)
+	}
+	if got := m.header(); !strings.Contains(got, "partial scan") {
+		t.Fatalf("header missing partial-scan banner: %q", got)
+	}
+	m.removeNode(root.Children[0])
+	if m.unknown != 0 {
+		t.Fatalf("unknown after removing the unreadable node = %d, want 0", m.unknown)
+	}
+
+	complete := &scan.Node{
+		Name: "root", Path: "/root", IsDir: true, SizeKnown: true,
+		Children: []*scan.Node{{Name: "a", Path: "/root/a", Size: 1, SizeKnown: true}},
+	}
+	mc := NewAnalyzeModel(AnalyzeConfig{Root: complete, Color: false, UID: os.Getuid()})
+	if got := mc.header(); strings.Contains(got, "partial scan") {
+		t.Fatalf("complete scan should not warn: %q", got)
+	}
+}
+
+func TestSkippedSelectionDoesNotShadowCursor(t *testing.T) {
+	base := t.TempDir()
+	real := filepath.Join(base, "real")
+	if err := os.WriteFile(real, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+
+	linkNode := &scan.Node{Name: "link", Path: link, Size: 1, SizeKnown: true}
+	realNode := &scan.Node{Name: "real", Path: real, Size: 1, SizeKnown: true}
+	root := &scan.Node{
+		Name: "root", Path: base, IsDir: true, SizeKnown: true,
+		Children: []*scan.Node{linkNode, realNode},
+	}
+	m := NewAnalyzeModel(AnalyzeConfig{
+		Root: root, Color: false, UID: os.Getuid(),
+		Validator: safe.NewValidator(os.Getuid()),
+	})
+
+	// Selecting the symlink and deleting it must fail closed (symlinks are
+	// rejected) and clear the selection so it cannot shadow the cursor later.
+	m.selectedNodes[link] = linkNode
+	m.selected[link] = true
+	m.beginDelete(false)
+	if m.confirm {
+		t.Fatal("a symlink selection should not be trashed")
+	}
+	if len(m.selectedNodes) != 0 || len(m.selected) != 0 {
+		t.Fatalf("skipped selection should be cleared, got %v", m.selected)
+	}
+
+	// The next delete must act on the cursor row, not the stale selection.
+	for i, e := range m.entries {
+		if e.Path == real {
+			m.cursor = i
+		}
+	}
+	m.beginDelete(false)
+	if !m.confirm {
+		t.Fatalf("cursor item was shadowed by a stale selection: status=%q", m.status)
+	}
+	if len(m.pending) != 1 || m.pending[0].node.Path != real {
+		t.Fatalf("pending targets = %+v, want the cursor item %s", m.pending, real)
+	}
+}
+
 func TestAnalyzeModelNavigationAndSelection(t *testing.T) {
 	root := &scan.Node{
 		Name: "root", Path: "/root", IsDir: true, SizeKnown: true,
