@@ -19,6 +19,29 @@ It is an **orchestrator with a safety contract**, not a path-deleter.
 > checksum-verified release packaging. See [Development](#development) to build
 > and test, and [Packaging and release](#packaging-and-release) to cut a release.
 
+## Quickstart
+
+```sh
+# Build from source (or see Packaging and release for prebuilt binaries)
+make build
+
+# See what is reclaimable, without touching anything
+./bin/burrow clean --dry-run
+
+# Explore where your space went
+./bin/burrow analyze ~
+
+# Clean interactively: preview -> confirm -> execute
+./bin/burrow clean
+
+# Reclaim rebuildable project artifacts
+./bin/burrow purge --paths ~/Projects
+```
+
+`clean` and `purge` never mutate anything before the preview step, and every
+mutation declares a recovery contract (see [Safety invariants](#safety-invariants)).
+Undo a recoverable clean with `burrow history --restore <run_id>`.
+
 ## Why this exists
 
 Linux users who want "understand my disk + clean it up safely" must assemble
