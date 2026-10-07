@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"os/user"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -111,5 +112,96 @@ func TestUserDirsIgnoresRootXDGWhenElevated(t *testing.T) {
 	}
 	if !strings.HasSuffix(dirs.Cache, ".cache") {
 		t.Fatalf("cache dir = %q", dirs.Cache)
+	}
+}
+
+// TestPerUserCommandDropsRootCredential proves the spec §7.6 fix: when the
+// process is elevated, a per-user command is given the invoking user's
+// credential, while an elevated command is not.
+func TestPerUserCommandDropsRootCredential(t *testing.T) {
+	r := New(false)
+	r.Geteuid = func() int { return 0 }
+	r.UserCredential = &syscall.Credential{Uid: 1000, Gid: 1000}
+
+	attr := r.userSysProcAttr(false)
+	if attr == nil || attr.Credential == nil {
+		t.Fatal("per-user command must drop to the invoking user when elevated")
+	}
+	if attr.Credential.Uid != 1000 || attr.Credential.Gid != 1000 {
+		t.Fatalf("credential = %+v", attr.Credential)
+	}
+	if r.userSysProcAttr(true) != nil {
+		t.Fatal("elevated command must keep root credentials")
+	}
+}
+
+func TestPerUserCommandCredentialSkippedWhenNotElevated(t *testing.T) {
+	r := New(false)
+	r.Geteuid = func() int { return 1000 }
+	r.UserCredential = &syscall.Credential{Uid: 1000, Gid: 1000}
+	if r.userSysProcAttr(false) != nil {
+		t.Fatal("must not set credentials when not elevated")
+	}
+}
+
+func TestPerUserCommandEnvOverlay(t *testing.T) {
+	r := New(false)
+	r.Env = []string{"PATH=/usr/bin", "HOME=/root", "TERM=xterm"}
+	r.UserEnv = []string{"HOME=/home/alice", "XDG_CACHE_HOME=/home/alice/.cache"}
+
+	env := r.childEnv(false)
+	got := map[string]string{}
+	for _, kv := range env {
+		k, v, _ := strings.Cut(kv, "=")
+		got[k] = v
+	}
+	if got["HOME"] != "/home/alice" || got["XDG_CACHE_HOME"] != "/home/alice/.cache" {
+		t.Fatalf("per-user env not overlaid: %v", env)
+	}
+	if got["PATH"] != "/usr/bin" || got["TERM"] != "xterm" {
+		t.Fatalf("inherited env lost: %v", env)
+	}
+	if elev := r.childEnv(true); len(elev) != 3 || elev[1] != "HOME=/root" {
+		t.Fatalf("elevated command must keep the inherited env: %v", elev)
+	}
+}
+
+// TestPerUserCommandEnvAppliedAtExecution proves the overlay reaches a real
+// child process, so owner commands see the invoking user's HOME, not root's.
+func TestPerUserCommandEnvAppliedAtExecution(t *testing.T) {
+	envBin, err := exec.LookPath("env")
+	if err != nil {
+		t.Skip("env not available")
+	}
+	r := New(false)
+	r.Env = []string{"PATH=/usr/bin:/bin", "HOME=/root"}
+	r.UserEnv = []string{"HOME=/home/alice"}
+	res, err := r.Run(context.Background(), []string{envBin}, 5*time.Second, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Stdout, "HOME=/home/alice") {
+		t.Fatalf("per-user command did not see the invoking user's HOME:\n%s", res.Stdout)
+	}
+	if strings.Contains(res.Stdout, "HOME=/root") {
+		t.Fatalf("per-user command saw root's HOME:\n%s", res.Stdout)
+	}
+}
+
+func TestCredentialAndEnvironmentHelpers(t *testing.T) {
+	u := &user.User{Uid: "1000", Gid: "1000", Username: "alice", HomeDir: "/home/alice"}
+	cred := Credential(u)
+	if cred == nil || cred.Uid != 1000 || cred.Gid != 1000 {
+		t.Fatalf("credential = %+v", cred)
+	}
+	if Credential(&user.User{Uid: "not-a-uid"}) != nil {
+		t.Fatal("non-numeric uid must yield no credential")
+	}
+	dirs := Dirs{Home: "/home/alice", Cache: "/home/alice/.cache", Config: "/home/alice/.config", Data: "/home/alice/.local/share", State: "/home/alice/.local/state", Runtime: "/run/user/1000"}
+	env := strings.Join(Environment(dirs), "\n")
+	for _, want := range []string{"HOME=/home/alice", "XDG_CACHE_HOME=/home/alice/.cache", "XDG_RUNTIME_DIR=/run/user/1000"} {
+		if !strings.Contains(env, want) {
+			t.Fatalf("Environment missing %q:\n%s", want, env)
+		}
 	}
 }

@@ -32,6 +32,7 @@ type GlobalFlags struct {
 
 // App holds process-wide dependencies so commands are testable.
 type App struct {
+	In      io.Reader
 	Out     io.Writer
 	ErrOut  io.Writer
 	Version string
@@ -52,7 +53,7 @@ type App struct {
 
 // New returns an App writing to out/errOut.
 func New(out, errOut io.Writer) *App {
-	return &App{Out: out, ErrOut: errOut, Version: journal.Version}
+	return &App{In: os.Stdin, Out: out, ErrOut: errOut, Version: journal.Version}
 }
 
 // Env resolves and caches the engine environment. Commands that touch the

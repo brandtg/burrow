@@ -253,3 +253,12 @@ func isTerminal(w io.Writer) bool {
 	}
 	return term.IsTerminal(int(f.Fd()))
 }
+
+// readerIsTerminal reports whether r is an interactive terminal.
+func readerIsTerminal(r io.Reader) bool {
+	f, ok := r.(*os.File)
+	if !ok {
+		return false
+	}
+	return term.IsTerminal(int(f.Fd()))
+}

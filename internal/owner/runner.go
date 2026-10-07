@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -39,10 +40,75 @@ type Runner struct {
 	Dir string
 	// Log, if set, receives a line per executed command.
 	Log func(string)
+	// UserCredential, when set, makes a per-user command (elevate=false) run
+	// with the invoking user's credentials when the process is elevated
+	// (euid 0). This is how spec §7.6 is enforced: user state must never run
+	// with inherited root credentials. It is ignored for elevated commands.
+	UserCredential *syscall.Credential
+	// UserEnv is the invoking user's HOME/XDG environment. It is overlaid on
+	// the child environment for per-user commands so they operate on the same
+	// trees burrow resolved, never root's.
+	UserEnv []string
+	// Geteuid is injectable for tests; it defaults to os.Geteuid.
+	Geteuid func() int
 }
 
 // New returns a Runner.
 func New(dryRun bool) *Runner { return &Runner{DryRun: dryRun} }
+
+func (r *Runner) euid() int {
+	if r.Geteuid != nil {
+		return r.Geteuid()
+	}
+	return os.Geteuid()
+}
+
+// userSysProcAttr returns the process attributes for a per-user command. It is
+// nil unless the command must drop from root to the invoking user.
+func (r *Runner) userSysProcAttr(elevate bool) *syscall.SysProcAttr {
+	if elevate || r.UserCredential == nil || r.euid() != 0 {
+		return nil
+	}
+	return &syscall.SysProcAttr{Credential: r.UserCredential}
+}
+
+// childEnv returns the environment for a command. Per-user commands get the
+// invoking user's HOME/XDG overlaid so they never read root's.
+func (r *Runner) childEnv(elevate bool) []string {
+	if elevate || len(r.UserEnv) == 0 {
+		return r.Env
+	}
+	base := r.Env
+	if base == nil {
+		base = os.Environ()
+	}
+	return overlayEnv(base, r.UserEnv)
+}
+
+// overlayEnv returns base with each KEY=VALUE in overlay replacing the existing
+// entry for KEY (or appended when absent).
+func overlayEnv(base, overlay []string) []string {
+	index := make(map[string]int, len(base))
+	out := append([]string(nil), base...)
+	for i, kv := range out {
+		if k, _, ok := strings.Cut(kv, "="); ok {
+			index[k] = i
+		}
+	}
+	for _, kv := range overlay {
+		k, _, ok := strings.Cut(kv, "=")
+		if !ok {
+			continue
+		}
+		if i, exists := index[k]; exists {
+			out[i] = kv
+		} else {
+			out = append(out, kv)
+			index[k] = len(out) - 1
+		}
+	}
+	return out
+}
 
 // Plan returns the exact argv that Run would execute, including the sudo prefix
 // when elevate is set. It is side-effect free and used to render previews.
@@ -77,9 +143,10 @@ func (r *Runner) Run(ctx context.Context, argv []string, timeout time.Duration, 
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// Resolve the binary to an absolute path as the invoking user before
-	// elevating, so sudo runs a known binary rather than resolving through its
-	// own secure_path (spec §7.6).
+	// Resolve the binary to an absolute path before elevating, so sudo runs a
+	// known binary rather than resolving through its own secure_path
+	// (spec §7.6). Per-user commands additionally drop to the invoking user
+	// via SysProcAttr.Credential below.
 	execArgv := append([]string(nil), argv...)
 	resolved, err := resolveExecutable(execArgv[0], r.Env)
 	if err != nil {
@@ -92,8 +159,9 @@ func (r *Runner) Run(ctx context.Context, argv []string, timeout time.Duration, 
 	res.Argv = execArgv
 
 	cmd := exec.CommandContext(runCtx, execArgv[0], execArgv[1:]...)
-	cmd.Env = r.Env
+	cmd.Env = r.childEnv(elevate)
 	cmd.Dir = r.Dir
+	cmd.SysProcAttr = r.userSysProcAttr(elevate)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

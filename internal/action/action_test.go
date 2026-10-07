@@ -119,3 +119,31 @@ func TestOwnerCommandActionFailure(t *testing.T) {
 		t.Fatalf("status = %q", res.Status)
 	}
 }
+
+func TestEmptyTrashAction(t *testing.T) {
+	dir := t.TempDir()
+	tr := trash.New(filepath.Join(dir, "Trash"), os.Getuid())
+	src := filepath.Join(dir, "junk")
+	if err := os.WriteFile(src, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tr.Put(src); err != nil {
+		t.Fatal(err)
+	}
+	a := &action.EmptyTrashAction{Trash: tr, Path: tr.Home()}
+	if a.Recovery() != engine.RecoveryOwner {
+		t.Fatalf("recovery = %v", a.Recovery())
+	}
+	if _, err := a.Run(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
+	if entries, _ := tr.List(); len(entries) != 1 {
+		t.Fatal("dry-run must not empty the trash")
+	}
+	if _, err := a.Run(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	if entries, _ := tr.List(); len(entries) != 0 {
+		t.Fatal("trash was not emptied")
+	}
+}

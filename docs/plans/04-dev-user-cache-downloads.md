@@ -1,6 +1,6 @@
 # Plan 04 — `dev`, `user-cache`, `downloads` catalogs + whitelist manager
 
-**Status:** not started
+**Status:** in review
 **Milestone:** M3
 **Depends on:** 03
 **Blocks:** 07
@@ -125,3 +125,79 @@ confirm the resolved path is inside an allowed parent (spec §7.3).
 Behavioral port of Mole's `lib/clean/dev.sh` keep/discard reasoning (Cargo
 `registry/src`, Poetry `virtualenvs`, CPAN `sources`, HF/torch/W&B roots),
 reimplemented clean-room with cited reasoning in comments. No Mole source copied.
+
+## Implementation notes (Plan 04)
+
+Recorded after landing the plan. Acceptance criteria pass and `scripts/check.sh`
+is green (golangci-lint and govulncheck warn as not installed on the authoring
+host, matching Plans 01/02).
+
+### Owner command vs trash fallback
+
+- Each item prefers its owner command. The fallback to trashing a documented
+  cache root is used only when the owner binary is absent (`owner.Available`)
+  and the root exists and passes `internal/safe` validation.
+- Path-resolved items (npm, pnpm, bun, go, pip, uv, mise) go through
+  `dev.resolvedOwner`: it probes the owner (`npm config get cache`,
+  `go env GOMODCACHE`, ...), rejects a path outside `catalog.AllowedRoots`, and
+  builds an `action.OwnerPathAction`. That action re-resolves the path at
+  execution time and refuses when it changed or escaped the allowed parent
+  (spec §7.3). Untrusted owner output is never used to build an argv.
+- Trash targets are built by `catalog.NewTrashTarget`, which runs
+  `safe.ValidateForDeletion` and takes an identity snapshot, so the fallback
+  path is protected by the same I2/I3/TOCTOU machinery as every other trash
+  item.
+
+### Recovery-contract deviations
+
+- `dev.rust-registry-cache` and `dev.rustup-downloads` carry the `trash`
+  contract, not `owner` as spec §8.4 lists, because cargo/rustup have no
+  cache-clean owner command for those subtrees. The plan's own action text
+  ("Trash this subtree only") and the engine's action/target recovery
+  consistency requirement make `trash` the only self-consistent reading. This is
+  also recorded in the README.
+- `dev.gh-cli` keeps the plain `gh config clear-cache` argv rather than the
+  spec's `env XDG_CACHE_HOME=<parent> gh config clear-cache`. The runner now
+  sets the invoking user's `XDG_CACHE_HOME` for every per-user command (see
+  below), so gh clears the same directory discovery resolved without a dynamic
+  argv (I4).
+
+### Per-user commands under sudo (cross-plan fix)
+
+- The review found that per-user owner commands ran with inherited root
+  credentials under `sudo burrow`, violating spec §7.6. `owner.Runner` now
+  carries `UserCredential` and `UserEnv`; when euid is 0 it sets
+  `SysProcAttr.Credential` to the invoking user's uid/gid and overlays the
+  invoking user's HOME/XDG on the child environment for `NeedsRoot == false`
+  commands. `engine.Resolve` populates both from the resolved user. This is a
+  fix in the Plan 03-owned `internal/owner`/`internal/engine` packages, taken
+  here because Plan 04 is the first per-user-command consumer; the behavior
+  change is additive and backward compatible. Covered by owner and engine tests.
+
+### Keep rules
+
+- Cargo: only `registry/cache` is targeted; `registry/src`, `registry/index`,
+  `git`, `bin`, and `toolchains` are untouched by construction.
+- Poetry: only `pypoetry/{artifacts,cache}`; `virtualenvs` is untouched.
+- CPAN: only `~/.cpan/build`; `~/.cpan/sources` is untouched.
+- These are asserted by `TestCargoKeepSubtrees`, `TestPoetryKeepsVirtualenvs`,
+  `TestCPANKeepsSources`, and the `testdata/dev` fixture test.
+
+### Overlap handling
+
+- `dev.CacheRoots` lists the top-level XDG cache directories the dev category
+  manages. `user-cache.app-caches` consults it and skips those entries, so dev
+  items win and no path is double-counted or trashed twice.
+
+### Known gaps
+
+- `user-cache.app-caches` skips dev-owned cache names even when the dev tool is
+  absent, so e.g. `~/.cache/pip` is not offered by the generic sweep when pip3
+  is not installed. This is deliberate (dev owns the name) but means those
+  directories are only swept once their tool appears.
+- Under `sudo burrow`, discovery still resolves owner binaries through the
+  process PATH (root's under sudo), so a per-user tool that is not on root's
+  PATH falls back to trash or does not appear. The command itself now runs as
+  the invoking user.
+- `dev.npm`'s fallback prefers `~/.npm/_cacache` and only falls back to the
+  whole `~/.npm` on older layouts.

@@ -61,6 +61,9 @@ type Analyze struct {
 type Downloads struct {
 	InstallerExtensions []string `toml:"installer_extensions"`
 	InstallerMinAge     string   `toml:"installer_min_age"`
+	// OldMinAge and OldMinSize bound the `downloads.old` sweep (default OFF).
+	OldMinAge  string `toml:"old_min_age"`
+	OldMinSize string `toml:"old_min_size"`
 }
 
 // Default returns the built-in defaults.
@@ -85,8 +88,10 @@ func Default() *Config {
 			Ignore:        []string{"/proc", "/dev", "/sys", "/run"},
 		},
 		Downloads: Downloads{
-			InstallerExtensions: []string{".deb", ".rpm", ".AppImage", ".iso", ".pkg.tar.zst", ".snap"},
+			InstallerExtensions: []string{".deb", ".rpm", ".AppImage", ".iso", ".pkg.tar.zst", ".snap", ".flatpakref"},
 			InstallerMinAge:     "30d",
+			OldMinAge:           "90d",
+			OldMinSize:          "100M",
 		},
 	}
 }

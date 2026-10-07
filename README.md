@@ -13,10 +13,11 @@ things:
 It is an **orchestrator with a safety contract**, not a path-deleter.
 
 > Status: in progress. Plan 01 (foundation + safety core), Plan 02 (analyze
-> TUI + scan adapter), and Plan 03 (clean engine, owner/distro layer, preview UI,
-> `system`/apt catalog) have landed; the product spec and the remaining work are
-> broken into dependency-ordered plans under `docs/plans/`. See
-> [Development](#development) to build and test.
+> TUI + scan adapter), Plan 03 (clean engine, owner/distro layer, preview UI,
+> `system`/apt catalog), and Plan 04 (`dev`, `user-cache`, `downloads`
+> categories + whitelist manager) have landed; the product spec and the
+> remaining work are broken into dependency-ordered plans under `docs/plans/`.
+> See [Development](#development) to build and test.
 
 ## Why this exists
 
@@ -110,6 +111,70 @@ rows are always shown but never auto-selected.
 
 Other distros are detected behind the `internal/distro` adapter interface; their
 package rows are detection stubs until their plans land (Plan 07).
+
+### `dev` — language/toolchain caches
+
+Each item prefers its owner command and falls back to trashing a documented
+cache root only when the owner command is unavailable. Owner caches are
+per-user: they are resolved by asking the owner (`npm config get cache`,
+`go env GOMODCACHE`, ...) immediately before acting and are never elevated.
+
+| Item | Action | Recovery | Guard | Default |
+|---|---|---|---|---|
+| `dev.npm` | `npm cache clean --force` | owner | npm idle | on |
+| `dev.pnpm` | `pnpm store prune` | owner | pnpm idle | on |
+| `dev.yarn` | trash `~/.yarn/cache`, `$XDG_CACHE_HOME/yarn` | trash | — | on |
+| `dev.bun` | `bun pm cache rm` | owner | — | on |
+| `dev.go-mod` | `go clean -modcache` | owner | go/gopls idle | on |
+| `dev.go-build` | `go clean -cache` | owner | — | on |
+| `dev.rust-registry-cache` | trash `$CARGO_HOME/registry/cache` (keep `registry/src`, `registry/index`, `git`, `bin`, `toolchains`) | trash | cargo/rustc idle | on |
+| `dev.rustup-downloads` | trash `$RUSTUP_HOME/downloads` | trash | — | on |
+| `dev.pip` | `pip3 cache purge` | owner | — | on |
+| `dev.uv` | `uv cache prune` | owner | — | on |
+| `dev.poetry.*` | trash `$XDG_CACHE_HOME/pypoetry/{artifacts,cache}` (keep `virtualenvs`) | trash | — | on |
+| `dev.conda` | `conda clean --yes --index-cache --tarballs --logfiles` | owner | — | on |
+| `dev.gem*` | trash `~/.gem/ruby/*/cache`, `~/.bundle/cache` | trash | — | on |
+| `dev.rbenv` | trash `~/.rbenv/cache` | trash | — | on |
+| `dev.cpan-build` | trash `~/.cpan/build` (keep `~/.cpan/sources`) | trash | — | on |
+| `dev.nix` | `nix-collect-garbage --delete-older-than 30d` | owner | — | on |
+| `dev.corepack` | `corepack cache clean` | owner | — | on |
+| `dev.mise` | `mise cache clear` | owner | — | on |
+| `dev.frontend-caches.*` | trash `$XDG_CACHE_HOME/{typescript,electron,node-gyp,vite,webpack,eslint,prettier,parcel-cache}` | trash | — | on |
+| `dev.pycache.*` | trash `__pycache__` under the purge roots | trash | git-tracked check | on |
+| `dev.docker-buildx` | trash `~/.docker/buildx/cache` | trash | — | on |
+| `dev.cloud-cli.*` | trash `~/.kube/cache`, `~/.aws/cli/cache`, gcloud/Azure logs | trash | — | on |
+| `dev.gh-cli` | `gh config clear-cache` | owner | — | on |
+
+The Rust registry cache and rustup downloads are trashed (there is no cargo
+owner command for them), so they carry the `trash` recovery contract rather than
+the `owner` contract shown in spec §8.4. Keep rules (Cargo `registry/src`,
+Poetry `virtualenvs`, CPAN `sources`) are asserted by tests.
+
+### `user-cache` — XDG cache sweep
+
+| Item | Action | Recovery | Default |
+|---|---|---|---|
+| `user-cache.app-caches.*` | trash each top-level `$XDG_CACHE_HOME` entry not owned by a dev item | trash | on |
+| `user-cache.thumbnails` | trash `$XDG_CACHE_HOME/thumbnails` | trash | on |
+| `user-cache.trash` | empty `$XDG_DATA_HOME/Trash` (irreversible) | owner | off |
+
+A whitelisted path protects itself and its parent from the sweep, and a small
+protected set (`thumbnails`, `burrow`, `dconf`, `keyrings`, `gvfs`, `pulse`,
+`systemd`) is never swept because it holds settings or runtime state rather than
+regenerable data.
+
+### `downloads` — installer/content sweep
+
+| Item | Action | Recovery | Default |
+|---|---|---|---|
+| `downloads.installers.*` | trash `~/` and `~/Downloads` installers older than `[downloads] installer_min_age` (default 30d) | trash | on |
+| `downloads.old.*` | trash `~/Downloads` entries older than `old_min_age` (90d) and larger than `old_min_size` (100M) | trash | off |
+
+### Whitelist manager
+
+`burrow clean --whitelist` runs an interactive add/remove loop against
+`$XDG_CONFIG_HOME/burrow/whitelist`; comments and blank lines are preserved.
+Non-interactively it prints the current entries.
 
 ## Architecture
 

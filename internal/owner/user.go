@@ -5,6 +5,8 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"strconv"
+	"syscall"
 
 	"github.com/brandtg/burrow/internal/i18n"
 )
@@ -59,6 +61,37 @@ type Dirs struct {
 	Data    string
 	State   string
 	Runtime string
+}
+
+// Credential returns the process credential that runs a per-user command as u.
+// It returns nil when u has no numeric uid/gid, so the caller fails closed
+// rather than dropping to an unknown user.
+func Credential(u *user.User) *syscall.Credential {
+	if u == nil {
+		return nil
+	}
+	uid, err := strconv.Atoi(u.Uid)
+	if err != nil {
+		return nil
+	}
+	gid, err := strconv.Atoi(u.Gid)
+	if err != nil {
+		return nil
+	}
+	return &syscall.Credential{Uid: uint32(uid), Gid: uint32(gid)}
+}
+
+// Environment returns the HOME and XDG variables for d, so a per-user command
+// sees the same trees burrow resolved rather than root's environment.
+func Environment(d Dirs) []string {
+	return []string{
+		"HOME=" + d.Home,
+		"XDG_CACHE_HOME=" + d.Cache,
+		"XDG_CONFIG_HOME=" + d.Config,
+		"XDG_DATA_HOME=" + d.Data,
+		"XDG_STATE_HOME=" + d.State,
+		"XDG_RUNTIME_DIR=" + d.Runtime,
+	}
 }
 
 // UserDirs computes the invoking user's HOME and XDG directories.

@@ -1,0 +1,20 @@
+#!/bin/sh
+# Test stub for pgrep. Matches `-x <name>` against the space-separated list in
+# BURROW_TESTBIN_PGREP: a match exits 0 and prints the name; no match exits 1
+# (the real pgrep's "no process matched" status).
+log="${BURROW_TESTBIN_LOG:-/dev/null}"
+{ printf 'argv: pgrep'; for a in "$@"; do printf ' %s' "$a"; done; printf '\n'; } >>"$log"
+name=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -x) name="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+for n in ${BURROW_TESTBIN_PGREP:-}; do
+  if [ "$n" = "$name" ]; then
+    echo "$name"
+    exit 0
+  fi
+done
+exit 1

@@ -1,0 +1,9 @@
+#!/bin/sh
+# Test stub for mise. Records argv and answers `cache path` with a path under
+# BURROW_TEST_HOME.
+log="${BURROW_TESTBIN_LOG:-/dev/null}"
+{ printf 'argv: mise'; for a in "$@"; do printf ' %s' "$a"; done; printf '\n'; } >>"$log"
+case "$1 $2" in
+  "cache path") echo "${BURROW_TEST_HOME}/.cache/mise" ;;
+  *) echo "" ;;
+esac

@@ -1,19 +1,25 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/brandtg/burrow/internal/catalog"
+	"github.com/brandtg/burrow/internal/catalog/dev"
+	"github.com/brandtg/burrow/internal/catalog/downloads"
 	"github.com/brandtg/burrow/internal/catalog/system"
+	"github.com/brandtg/burrow/internal/catalog/usercache"
 	"github.com/brandtg/burrow/internal/config"
 	"github.com/brandtg/burrow/internal/engine"
 	"github.com/brandtg/burrow/internal/journal"
 	"github.com/brandtg/burrow/internal/tui"
+	"github.com/brandtg/burrow/internal/whitelist"
 	"github.com/spf13/cobra"
 )
 
@@ -47,7 +53,7 @@ func (a *App) runClean(f cleanFlags) error {
 		return err
 	}
 	if f.whitelist {
-		return a.printWhitelist(env)
+		return a.runWhitelist(env)
 	}
 
 	minSize, err := a.resolveMinSize(env)
@@ -55,7 +61,7 @@ func (a *App) runClean(f cleanFlags) error {
 		return &ExitError{Code: ExitUsage, Err: err}
 	}
 
-	reg := catalog.NewRegistry(system.New())
+	reg := catalog.NewRegistry(system.New(), dev.New(), usercache.New(), downloads.New())
 	cats := a.selectCategories(env, reg, f.all)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -122,8 +128,73 @@ func (a *App) runClean(f cleanFlags) error {
 	return cleanExit(sum)
 }
 
-func (a *App) printWhitelist(env *engine.Env) error {
-	entries := env.Whitelist.Entries()
+// runWhitelist loads the whitelist manager and either runs the interactive
+// add/remove loop (on a terminal) or prints the current entries.
+func (a *App) runWhitelist(env *engine.Env) error {
+	mgr := whitelist.NewManager(env.Paths.Whitelist)
+	if err := mgr.Load(); err != nil {
+		return err
+	}
+	if !isTerminal(a.Out) || !readerIsTerminal(a.In) {
+		return a.printWhitelistEntries(mgr.Entries())
+	}
+	return a.interactiveWhitelist(mgr)
+}
+
+func (a *App) interactiveWhitelist(mgr *whitelist.Manager) error {
+	fmt.Fprintf(a.Out, "whitelist: %s\n", mgr.Path())
+	in := a.In
+	if in == nil {
+		in = os.Stdin
+	}
+	sc := bufio.NewScanner(in)
+	for {
+		a.printWhitelistEntries(mgr.Entries())
+		fmt.Fprint(a.Out, "add <path> | remove <path> | list | quit\n> ")
+		if !sc.Scan() {
+			return sc.Err()
+		}
+		fields := strings.Fields(sc.Text())
+		if len(fields) == 0 {
+			continue
+		}
+		switch fields[0] {
+		case "q", "quit", "exit":
+			return nil
+		case "list", "ls":
+			continue
+		case "add", "remove", "rm":
+			if len(fields) < 2 {
+				fmt.Fprintf(a.ErrOut, "usage: %s <absolute path>\n", fields[0])
+				continue
+			}
+			target := strings.Join(fields[1:], " ")
+			var changed bool
+			var err error
+			if fields[0] == "add" {
+				changed, err = mgr.Add(target)
+			} else {
+				changed, err = mgr.Remove(target)
+			}
+			if err != nil {
+				fmt.Fprintf(a.ErrOut, "%v\n", err)
+				continue
+			}
+			if !changed {
+				fmt.Fprintln(a.Out, "no change")
+				continue
+			}
+			if err := mgr.Save(); err != nil {
+				return err
+			}
+			fmt.Fprintln(a.Out, "saved")
+		default:
+			fmt.Fprintf(a.Out, "unknown command %q\n", fields[0])
+		}
+	}
+}
+
+func (a *App) printWhitelistEntries(entries []string) error {
 	if a.Flags.JSON {
 		enc := json.NewEncoder(a.Out)
 		enc.SetIndent("", "  ")

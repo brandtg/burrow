@@ -1,0 +1,9 @@
+#!/bin/sh
+# Test stub for bun. Records argv and answers `pm cache` with a path under
+# BURROW_TEST_HOME.
+log="${BURROW_TESTBIN_LOG:-/dev/null}"
+{ printf 'argv: bun'; for a in "$@"; do printf ' %s' "$a"; done; printf '\n'; } >>"$log"
+case "$1 $2" in
+  "pm cache") echo "${BURROW_TEST_HOME}/.bun/install/cache" ;;
+  *) echo "" ;;
+esac
