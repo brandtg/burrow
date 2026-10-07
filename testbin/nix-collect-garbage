@@ -1,0 +1,5 @@
+#!/bin/sh
+# Test stub for nix-collect-garbage. Records argv and emits canned output.
+log="${BURROW_TESTBIN_LOG:-/dev/null}"
+{ printf 'argv: nix-collect-garbage'; for a in "$@"; do printf ' %s' "$a"; done; printf '\n'; } >>"$log"
+echo "removing old generations"

@@ -124,6 +124,30 @@ func TestCleanWhitelistFlag(t *testing.T) {
 	}
 }
 
+func TestCleanWhitelistPrintsEntries(t *testing.T) {
+	cfg := t.TempDir()
+	wlPath := filepath.Join(cfg, "burrow", "whitelist")
+	if err := os.MkdirAll(filepath.Dir(wlPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(wlPath, []byte("# keep\n/home/u/.cache/keep\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	te := newTestApp(t, map[string]string{
+		"XDG_CONFIG_HOME": cfg,
+		"XDG_DATA_HOME":   t.TempDir(),
+		"XDG_STATE_HOME":  t.TempDir(),
+		"XDG_CACHE_HOME":  t.TempDir(),
+	})
+	te.app.Adapter = aptAdapter()
+	if code := te.run("clean", "--whitelist"); code != ExitOK {
+		t.Fatalf("exit = %d: %s", code, te.errOut.String())
+	}
+	if !strings.Contains(te.out.String(), "/home/u/.cache/keep") {
+		t.Fatalf("output = %q", te.out.String())
+	}
+}
+
 func TestCleanExitCodes(t *testing.T) {
 	cases := []struct {
 		name string

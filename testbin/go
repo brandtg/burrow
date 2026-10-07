@@ -1,0 +1,10 @@
+#!/bin/sh
+# Test stub for go. Records argv and answers `env GOMODCACHE`/`env GOCACHE` with
+# paths under BURROW_TEST_HOME.
+log="${BURROW_TESTBIN_LOG:-/dev/null}"
+{ printf 'argv: go'; for a in "$@"; do printf ' %s' "$a"; done; printf '\n'; } >>"$log"
+case "$1 $2" in
+  "env GOMODCACHE") echo "${BURROW_TEST_HOME}/go/pkg/mod" ;;
+  "env GOCACHE") echo "${BURROW_TEST_HOME}/.cache/go-build" ;;
+  *) echo "" ;;
+esac

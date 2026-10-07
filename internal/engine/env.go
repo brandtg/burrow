@@ -88,6 +88,14 @@ func Resolve(opts ResolveOptions) (*Env, error) {
 		adapter = distro.For(info)
 	}
 
+	run := owner.New(opts.DryRun)
+	run.UserEnv = owner.Environment(dirs)
+	if elevated {
+		// Spec §7.6: per-user commands must run as the invoking user, never
+		// with inherited root credentials.
+		run.UserCredential = owner.Credential(u)
+	}
+
 	env := &Env{
 		User:       u,
 		Home:       dirs.Home,
@@ -96,7 +104,7 @@ func Resolve(opts ResolveOptions) (*Env, error) {
 		XDGData:    dirs.Data,
 		XDGState:   dirs.State,
 		XDGRuntime: dirs.Runtime,
-		Run:        owner.New(opts.DryRun),
+		Run:        run,
 		Whitelist:  wl,
 		Cfg:        cfg,
 		Distro:     info,

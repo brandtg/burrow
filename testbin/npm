@@ -3,6 +3,6 @@
 log="${BURROW_TESTBIN_LOG:-/dev/null}"
 { printf 'argv: npm'; for a in "$@"; do printf ' %s' "$a"; done; printf '\n'; } >>"$log"
 case "$1 $2 $3" in
-  "config get cache") echo "/home/testuser/.npm" ;;
+  "config get cache") echo "${BURROW_TEST_HOME:-/home/testuser}/.npm" ;;
   *) echo "" ;;
 esac
