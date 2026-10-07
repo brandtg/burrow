@@ -68,6 +68,14 @@ vuln: ## Run govulncheck (skips if not installed).
 	@command -v govulncheck >/dev/null 2>&1 || { echo "govulncheck not installed; skipping"; exit 0; }
 	govulncheck $(PKG)
 
+.PHONY: doctor
+doctor: ## Check that the external gate tools are installed.
+	scripts/dev-tools.sh
+
+.PHONY: setup-tools
+setup-tools: ## Install the external gate tools at the CI-pinned versions.
+	scripts/dev-tools.sh --install
+
 .PHONY: safety-gate
 safety-gate: ## Run the static destructive-sink gate.
 	$(GO) run ./scripts/safety-gate .
