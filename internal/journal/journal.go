@@ -28,12 +28,14 @@ const (
 	StatusEnd     = "end"
 )
 
-// Action values. run_start/run_end frame a run; trash/owner/purge describe a
-// mutation. purge is a permanent delete of a rebuildable artifact.
+// Action values. run_start/run_end frame a run; trash/owner/purge/delete
+// describe a mutation. purge and delete are permanent; delete is a trash-contract
+// item removed via --permanent.
 const (
 	ActionTrash    = "trash"
 	ActionOwner    = "owner"
 	ActionPurge    = "purge"
+	ActionDelete   = "delete"
 	ActionRunStart = "run_start"
 	ActionRunEnd   = "run_end"
 )
@@ -42,8 +44,9 @@ const (
 // that applied to each mutation (invariant I2). They are strings here to keep
 // the journal schema self-describing and free of engine imports.
 const (
-	RecoveryTrash = "trash"
-	RecoveryOwner = "owner"
+	RecoveryTrash  = "trash"
+	RecoveryOwner  = "owner"
+	RecoveryDelete = "delete"
 )
 
 // Version is stamped at build time with -ldflags.

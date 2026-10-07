@@ -28,6 +28,11 @@ type PlannedItem struct {
 	Argv          []string
 	GuardStop     bool
 	TimedOut      bool
+	// Permanent is true when --permanent switched this trash-contract item to an
+	// irreversible delete. It is surfaced in the preview, the --json output, and
+	// the journal so a permanent delete is never presented as recoverable (I2,
+	// spec §7.2).
+	Permanent bool
 }
 
 // Plan is the read-only result of pipeline steps 2-5 (discover, measure,
@@ -186,9 +191,11 @@ func Build(ctx context.Context, env *Env, opts Options) (*Plan, error) {
 				plan.Warnings = append(plan.Warnings, fmt.Sprintf("%s: %v", t.ID, err))
 				continue
 			}
+			permanent := false
 			if opts.Permanent {
 				if ps, ok := t.Action.(permanentSetter); ok {
 					ps.SetPermanent(true)
+					permanent = true
 				}
 			}
 			selected := t.DefaultOn && t.Risk != RiskHigh
@@ -201,6 +208,7 @@ func Build(ctx context.Context, env *Env, opts Options) (*Plan, error) {
 				CategoryNote:  cat.PreviewNote(),
 				Selected:      selected,
 				Status:        StatusPending,
+				Permanent:     permanent,
 			}
 			if ap, ok := t.Action.(ArgvPlanner); ok {
 				item.Argv = ap.PlannedArgv()
@@ -405,8 +413,17 @@ func appendRecord(jw *journal.Writer, plan *Plan, it *PlannedItem) {
 		return
 	}
 	action := journal.ActionOwner
-	if it.Target.Recovery == RecoveryTrash {
+	recovery := journal.RecoveryOwner
+	switch {
+	case it.Target.Recovery == RecoveryTrash && it.Permanent:
+		// A --permanent trash item is an irreversible delete, not a trash move.
+		// Recording it as "delete" keeps it out of `history --restore`, which
+		// only offers ActionTrash records (spec §7.4, §12).
+		action = journal.ActionDelete
+		recovery = journal.RecoveryDelete
+	case it.Target.Recovery == RecoveryTrash:
 		action = journal.ActionTrash
+		recovery = journal.RecoveryTrash
 	}
 	status := journal.StatusOK
 	switch it.Status {
@@ -418,15 +435,16 @@ func appendRecord(jw *journal.Writer, plan *Plan, it *PlannedItem) {
 		status = journal.StatusDryRun
 	}
 	_ = jw.Append(journal.Record{
-		RunID:   plan.RunID,
-		Command: plan.Command,
-		Item:    it.Target.ID,
-		Action:  action,
-		Argv:    it.Argv,
-		Path:    it.Target.Path,
-		Status:  status,
-		Bytes:   it.Freed,
-		Reason:  it.Reason,
+		RunID:    plan.RunID,
+		Command:  plan.Command,
+		Item:     it.Target.ID,
+		Action:   action,
+		Recovery: recovery,
+		Argv:     it.Argv,
+		Path:     it.Target.Path,
+		Status:   status,
+		Bytes:    it.Freed,
+		Reason:   it.Reason,
 	})
 }
 

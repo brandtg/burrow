@@ -1,6 +1,6 @@
 # Plan 04 — `dev`, `user-cache`, `downloads` catalogs + whitelist manager
 
-**Status:** in review
+**Status:** done
 **Milestone:** M3
 **Depends on:** 03
 **Blocks:** 07

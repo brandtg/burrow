@@ -1,6 +1,6 @@
 # Plan 07 — Polish, `status`, dnf adapter, packaging
 
-**Status:** in review
+**Status:** done
 **Milestone:** M6
 **Depends on:** 02, 03, 04, 05, 06
 **Blocks:** none

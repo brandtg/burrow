@@ -10,34 +10,42 @@ Read all three before writing code.
 2. docs/burrow-spec.md — the authoritative product spec and locked decisions.
 3. docs/plans/README.md — dependency graph, execution waves, per-plan file
    ownership.
-4. The plan you are executing, e.g. docs/plans/03-clean-engine-system-apt.md.
+4. docs/status.md — current implementation status, known gaps, and open findings.
+5. The plan you are executing, e.g. docs/plans/03-clean-engine-system-apt.md.
 
 Do not re-litigate the locked decisions (spec §2) or the spec's stated decisions
 unless you find concrete evidence they are wrong. If you do, say so explicitly
 rather than silently deviating.
 
-## Current state (after Plan 01)
+## Current state (v0.1 complete)
 
-Plan 01 is done. What exists and what to build on:
+All seven plans (01-07) have landed and `make gate` is green. The tool builds
+statically and works end-to-end. Read docs/status.md for the audit, deviations,
+known gaps, and the open findings list (F1-F6) before changing anything.
 
 - Packages: internal/{i18n,safe,trash,journal,config,whitelist,owner,distro,
-  engine,scan,cli} and cmd/burrow. `make gate` is green.
-- internal/engine has the `Env` and the Target/Action/Category/Guard/Recovery/
-  Risk contract (spec §6.2) plus `engine.Resolve`. The run pipeline is NOT
-  implemented; it lands in Plan 03. Plan 03 owns reshaping the pipeline, but
-  keep `Env` and the contract types backward compatible. Note: `engine.Action`
-  also carries `Recovery() Recovery`, an addition beyond the original §6.2
-  signature that lets I2 be enforced at the action boundary; keep it.
+  engine,scan,metrics,action,catalog,purge,tui,cli} and cmd/burrow.
+- internal/engine holds the `Env`, the Target/Action/Category/Guard/Recovery/Risk
+  contract (spec §6.2), `engine.Resolve`, and the full run pipeline
+  (Build = discover/measure/filter/plan, Execute = guard/re-validate/run/journal/
+  summary). `engine.Action` carries `Recovery() Recovery` beyond the §6.2
+  signature so I2 is enforced at the action boundary; keep it.
+- Catalog: `system` (apt + dnf via `distro.SystemSpec`), `dev`, `user-cache`,
+  `downloads`, `containers`, `desktop-pkgs`. `purge` is a separate subsystem, not
+  part of the catalog.
+- CLI: `version`, `config`, `history`, `analyze`, `clean`, `purge`, `status`,
+  `docs`, `completion` all work. `--json` is stable on clean/analyze/history/
+  status; goldens live under testdata/.
 - `internal/safe` built-in protected roots protect the roots themselves;
   config `clean.protected_paths` entries are prefix-protected (merged in by the
   engine). `/home` itself is protected but its subtrees are not.
 - `internal/trash.List` reads only the home trash; per-mount trashes are not
-  enumerated yet (so `history --restore` misses cross-filesystem items).
-- Hardlink-aware sizing is not wired (see gdu note 4).
-- CLI: `version`, `config`, `history` work; `analyze`/`clean`/`purge`/`status`
-  are stubs returning exit code 2.
+  enumerated (so `history --restore` misses cross-filesystem items). Known gap.
+- Hardlink-aware sizing is wired (one shared `fs.HardLinkedItems` map at the root
+  `UpdateStats`; see gdu note 4).
 - Invariant tests live in `internal/safe/safety_test.go`; the static gate has its
-  own tests in `scripts/safety-gate/check_test.go`.
+  own tests in `scripts/safety-gate/check_test.go`. The container matrix lives in
+  `scripts/matrix.sh` + `scripts/matrix-case.sh`.
 
 ## Non-negotiable safety rules
 
@@ -59,11 +67,18 @@ These override convenience. Violating one is a bug even if tests pass.
 - Raw `os.Remove`, `os.RemoveAll`, `os.Truncate`, and `syscall.Unlink` are allowed
   only inside internal/safe, internal/trash, and internal/owner. A static gate
   (scripts/check.sh) enforces this. Purge deletes go through internal/safe.
-- `safe.RemoveTree` is the single permanent-delete primitive and is purge-only:
-  it may be called only from internal/purge (plus its definition in
-  internal/safe). Trash-contract code must never call it, or it would silently
-  downgrade a recoverable delete to a permanent one (I5). The static gate
-  enforces this confinement, including inside internal/trash and internal/owner.
+- There are exactly two permanent-delete primitives, and both are deliberate:
+  - `safe.RemoveTree` is purge-only: it may be called only from internal/purge
+    (plus its definition in internal/safe). Trash-contract code must never call
+    it, or it would silently downgrade a recoverable delete to a permanent one
+    (I5). The static gate enforces this confinement, including inside
+    internal/trash and internal/owner.
+  - `trash.Remove` is the explicit `clean --permanent` escape hatch (spec §5.1,
+    §7.4). It is reachable only when the user passes `--permanent` and the target
+    has already been validated and snapshotted. A permanent item is labeled
+    `[delete]` in the preview and journaled as `action: "delete"` /
+    `recovery: "delete"`, never as trash, so it is never offered by
+    `history --restore`.
 
 If a task seems to require breaking one of these, stop and flag it.
 
@@ -88,8 +103,8 @@ things to know:
 4. `AnalyzeDir` builds the tree but does **not** aggregate sizes. The caller must
    call `item.UpdateStats(fs.HardLinkedItems{})` at the root before reading
    `GetSize`/`GetUsage`. `internal/scan.Analyze` does this. Hardlink
-   de-duplication is not wired yet (empty `HardLinkedItems`); use it when sizing
-   matters (Plan 02).
+   de-duplication is wired: one shared, non-nil `fs.HardLinkedItems` map is passed
+   to the root `UpdateStats`, so a shared inode counts once (spec §8.8, Plan 02).
 
 All gdu usage is confined to internal/scan. Other packages use our own Node/item
 model. This keeps a shell-out fallback to a one-file change. The spike result and
@@ -137,10 +152,15 @@ gate. `golangci-lint` and `govulncheck` run when installed and are skipped with 
 warning otherwise.
 
 - `make gate` — canonical gate (equivalent to `./scripts/check.sh`).
-- `make gate-strict` — same, but fail if golangci-lint/govulncheck are missing
-  (`BURROW_REQUIRE_TOOLS=1`). Use this in CI.
+- `make gate-strict` — same, but fail if golangci-lint/govulncheck/goreleaser are
+  missing (`BURROW_REQUIRE_TOOLS=1`). CI (`.github/workflows/ci.yml`) runs this.
+- `make matrix` — container integration matrix (`scripts/matrix.sh`); requires
+  docker/podman. CI runs it as a separate job. The gate runs it only when
+  `BURROW_MATRIX=1` (skips with a recorded reason if no runtime).
 - `make integration` — root-only loopback cross-device trash test
   (`BURROW_INTEGRATION=1 ./scripts/check.sh`). Not part of the default gate.
+- `make docs` — regenerate man pages into docs/man (the gate fails if stale).
+- `make verify-static` — assert the built binary has no dynamic loader deps.
 - `make test`, `make test-race`, `make fuzz`, `make fmt`, `make fmt-check`,
   `make vet`, `make lint`, `make vuln`, `make safety-gate`, `make build`,
   `make build-all`, `make run ARGS="..."`, `make install`, `make clean`.
@@ -199,6 +219,10 @@ Testing expectations (spec §14):
 - High-risk items ship OFF; nothing auto-runs; no daemon.
 - README documents every catalog item with its owner command, recovery contract,
   and risk.
+
+v0.1 status against this list, with the deviations and remaining gaps, is in
+docs/status.md. The known open items are F3 (I7 helper is vacuous/dead code) and
+F4 (the static gate does not cover `trash.Remove`); F1, F2, F5, and F6 are fixed.
 
 ## Commits
 

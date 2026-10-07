@@ -1,6 +1,6 @@
 # Plan 05 — `containers` + `flatpak`/`snap`
 
-**Status:** in review
+**Status:** done (snap.cache/k8s-evicted omitted; see docs/status.md)
 **Milestone:** M4
 **Depends on:** 03
 **Blocks:** 07
@@ -184,11 +184,12 @@ host, matching Plans 01/02).
   is no explicit `du` under a dedicated timeout beyond the shared size-probe
   path.
 - snap cache sizing and cleanup are not implemented (see above).
-- **Per-user commands do not drop privileges.** Carried from Plan 04: the owner
-  runner executes per-user commands as the current process user, so under
-  `sudo burrow` (SUDO_USER set) `flatpak uninstall --unused` would run as root.
-  This is an `internal/owner/runner.go` concern, not a catalog one, and is
-  tracked for the owner-package fix.
+- **Per-user commands now drop privileges (resolved).** The Plan 04 fix landed:
+  `owner.Runner` carries `UserCredential`/`UserEnv` and, when euid is 0, runs
+  `NeedsRoot == false` commands as the invoking user with their HOME/XDG overlaid
+  (`internal/owner/runner.go`, `internal/engine/env.go`). Under `sudo burrow`,
+  `flatpak uninstall --unused` therefore runs as the invoking user, not root.
+  (The earlier note claiming this was still broken is superseded.)
 
 ### Gate hardening
 

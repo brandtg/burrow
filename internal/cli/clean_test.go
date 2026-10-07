@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -217,5 +218,52 @@ func TestCleanDesktopPkgsDryRunJSON(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Fatalf("json missing %q:\n%s", want, out)
 		}
+	}
+}
+
+// TestCleanJSONPermanentLabelsDelete pins the fix for the --permanent
+// mislabeling: a permanently deleted trash item must not claim recovery
+// "trash".
+func TestCleanJSONPermanentLabelsDelete(t *testing.T) {
+	out := &bytes.Buffer{}
+	app := New(out, &bytes.Buffer{})
+	plan := &engine.Plan{
+		RunID:   "TESTRUN",
+		Command: "clean",
+		Items: []*engine.PlannedItem{{
+			Target: engine.Target{
+				ID: "dev.yarn", Category: "dev", Display: "yarn cache",
+				Path: "/home/u/.yarn/cache", SizeBytes: 10, SizeKnown: true,
+				Recovery: engine.RecoveryTrash, Risk: engine.RiskLow, DefaultOn: true,
+			},
+			Selected:  true,
+			Status:    engine.StatusPending,
+			Permanent: true,
+		}},
+	}
+	if err := app.cleanJSON(plan, nil, true); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, `"recovery": "delete"`) {
+		t.Fatalf("permanent item must report recovery \"delete\":\n%s", got)
+	}
+	if !strings.Contains(got, `"permanent": true`) {
+		t.Fatalf("permanent item must report permanent:true:\n%s", got)
+	}
+	if strings.Contains(got, `"recovery": "trash"`) {
+		t.Fatalf("permanent item must not report recovery \"trash\":\n%s", got)
+	}
+	if !planHasPermanent(plan) {
+		t.Fatal("planHasPermanent must be true for a permanent item")
+	}
+}
+
+func TestPlanHasPermanentFalse(t *testing.T) {
+	plan := &engine.Plan{Items: []*engine.PlannedItem{{
+		Target: engine.Target{Recovery: engine.RecoveryTrash},
+	}}}
+	if planHasPermanent(plan) {
+		t.Fatal("planHasPermanent must be false without a permanent item")
 	}
 }

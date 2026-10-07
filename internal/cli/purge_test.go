@@ -82,6 +82,26 @@ func TestPurgeRequiresYesWhenNotTTY(t *testing.T) {
 	}
 }
 
+// TestPurgeYesPreviewsBeforeDeleting pins the fix for F5: --yes is a permanent
+// delete and must show the candidate listing before executing.
+func TestPurgeYesPreviewsBeforeDeleting(t *testing.T) {
+	root := t.TempDir()
+	art := makeOldArtifact(t, root, "node_modules")
+	te := newTestApp(t, purgeEnv(t, root))
+	if code := te.run("purge", "--yes"); code != ExitOK {
+		t.Fatalf("exit code = %d: %s", code, te.errOut.String())
+	}
+	out := te.out.String()
+	iPath := strings.Index(out, art)
+	iPurged := strings.Index(out, "purged ")
+	if iPath < 0 || iPurged < 0 || iPath > iPurged {
+		t.Fatalf("candidate listing must precede the summary:\n%s", out)
+	}
+	if _, err := os.Lstat(art); !os.IsNotExist(err) {
+		t.Fatalf("artifact should be deleted, stat err = %v", err)
+	}
+}
+
 func TestPurgeYesDeletesAndJournals(t *testing.T) {
 	root := t.TempDir()
 	art := makeOldArtifact(t, root, "node_modules")

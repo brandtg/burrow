@@ -85,6 +85,9 @@ func (a *App) runClean(f cleanFlags) error {
 	for _, w := range plan.Warnings {
 		fmt.Fprintf(a.ErrOut, "warning: %s\n", w)
 	}
+	if planHasPermanent(plan) {
+		fmt.Fprintln(a.ErrOut, "warning: --permanent deletes trash items irreversibly; they cannot be restored from the Trash")
+	}
 
 	platform := a.platformHeader(env)
 	color := a.colorEnabled(env)
@@ -291,6 +294,17 @@ func cleanExit(sum *engine.Summary) error {
 	return nil
 }
 
+// planHasPermanent reports whether any planned item will be permanently
+// deleted, so the caller can print the --permanent warning.
+func planHasPermanent(plan *engine.Plan) bool {
+	for _, it := range plan.Items {
+		if it.Permanent {
+			return true
+		}
+	}
+	return false
+}
+
 type cleanItemJSON struct {
 	ID        string   `json:"id"`
 	Category  string   `json:"category"`
@@ -299,6 +313,7 @@ type cleanItemJSON struct {
 	Size      int64    `json:"size"`
 	SizeKnown bool     `json:"size_known"`
 	Recovery  string   `json:"recovery"`
+	Permanent bool     `json:"permanent,omitempty"`
 	NeedsRoot bool     `json:"needs_root"`
 	Risk      string   `json:"risk"`
 	DefaultOn bool     `json:"default_on"`
@@ -339,6 +354,11 @@ func (a *App) cleanJSON(plan *engine.Plan, sum *engine.Summary, dryRun bool) err
 		Totals:  plan.SelectedTotals(),
 	}
 	for _, it := range plan.Items {
+		recovery := it.Target.Recovery.String()
+		if it.Permanent {
+			// The effective contract is an irreversible delete, not a trash move.
+			recovery = "delete"
+		}
 		doc.Items = append(doc.Items, cleanItemJSON{
 			ID:        it.Target.ID,
 			Category:  it.Target.Category,
@@ -346,7 +366,8 @@ func (a *App) cleanJSON(plan *engine.Plan, sum *engine.Summary, dryRun bool) err
 			Path:      it.Target.Path,
 			Size:      it.Target.SizeBytes,
 			SizeKnown: it.Target.SizeKnown,
-			Recovery:  it.Target.Recovery.String(),
+			Recovery:  recovery,
+			Permanent: it.Permanent,
 			NeedsRoot: it.Target.NeedsRoot,
 			Risk:      it.Target.Risk.String(),
 			DefaultOn: it.Target.DefaultOn,

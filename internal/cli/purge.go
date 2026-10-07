@@ -108,9 +108,17 @@ func (a *App) runPurge(env *engine.Env, opts purgeOptions) error {
 	if !a.Flags.Yes {
 		return &ExitError{Code: ExitUsage, Err: errors.New("refusing to purge without --yes when not a TTY; re-run with --dry-run to preview")}
 	}
+	// Purge is a permanent delete: --yes must still show exactly what will be
+	// removed before doing it (spec §5.1).
+	if !a.Flags.JSON {
+		if err := a.printPurgeTable(artifacts); err != nil {
+			return err
+		}
+		fmt.Fprintln(a.Out)
+	}
 	freed, outcomes := executePurge(exec, artifacts, false)
 	_ = exec.EndRun(freed)
-	return a.printPurge(roots, artifacts, outcomes, false)
+	return a.printPurgeResult(roots, artifacts, outcomes)
 }
 
 func (a *App) runPurgeTUI(env *engine.Env, artifacts []purge.Artifact, exec *purge.Executor) error {
@@ -188,11 +196,33 @@ func (a *App) printPurge(roots []string, artifacts []purge.Artifact, outcomes []
 	return a.printPurgeText(artifacts, outcomes, dryRun)
 }
 
+// printPurgeResult renders the outcome of an execution (JSON report or human
+// summary). The candidate table is printed by the caller before execution.
+func (a *App) printPurgeResult(roots []string, artifacts []purge.Artifact, outcomes []purgeOutcome) error {
+	if a.Flags.JSON {
+		return a.printPurgeJSON(roots, artifacts, outcomes, false)
+	}
+	return a.printPurgeSummary(outcomes)
+}
+
 func (a *App) printPurgeText(artifacts []purge.Artifact, outcomes []purgeOutcome, dryRun bool) error {
 	if len(artifacts) == 0 {
 		fmt.Fprintln(a.Out, "nothing to purge")
 		return nil
 	}
+	if err := a.printPurgeTable(artifacts); err != nil {
+		return err
+	}
+	if dryRun {
+		fmt.Fprintln(a.Out, "\ndry-run: nothing deleted")
+		return nil
+	}
+	return a.printPurgeSummary(outcomes)
+}
+
+// printPurgeTable writes the candidate table (project/artifact/size/age/status/
+// path) without a trailing summary.
+func (a *App) printPurgeTable(artifacts []purge.Artifact) error {
 	tw := tabwriter.NewWriter(a.Out, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "PROJECT\tARTIFACT\tSIZE\tAGE\tSTATUS\tPATH")
 	for _, art := range artifacts {
@@ -203,15 +233,10 @@ func (a *App) printPurgeText(artifacts []purge.Artifact, outcomes []purgeOutcome
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
 			art.Project, art.Type, purgeSizeLabel(art), purgeAgeLabel(art), status, art.Path)
 	}
-	if err := tw.Flush(); err != nil {
-		return err
-	}
+	return tw.Flush()
+}
 
-	if dryRun {
-		fmt.Fprintln(a.Out, "\ndry-run: nothing deleted")
-		return nil
-	}
-
+func (a *App) printPurgeSummary(outcomes []purgeOutcome) error {
 	var freed int64
 	purged, failed := 0, 0
 	for _, o := range outcomes {

@@ -9,7 +9,8 @@ Background / rationale: `docs/mole-linux-portability.md`.
 
 Working name: `burrow` (binary `burrow`, alias `bw`).
 License: Apache-2.0.
-Target v0.1 platform: Debian/Ubuntu + systemd (other distros behind adapters).
+Target v0.1 platform: Debian/Ubuntu + Fedora/RHEL + systemd (pacman/zypper/apk
+behind the same adapters, detection stubs until their plans land).
 
 ---
 
@@ -67,11 +68,15 @@ Machine-readable form (one edge per line, `A -> B` means B depends on A):
 |------|------|-----------|------------|--------|---------------|--------|
 | 01 | `01-foundation-safety-core.md` | M0 | — | all | — | done |
 | 02 | `02-analyze.md` | M1 | 01 | 06, 07 | 03 | done |
-| 03 | `03-clean-engine-system-apt.md` | M2 | 01 | 04, 05, 07 | 02 | in review |
-| 04 | `04-dev-user-cache-downloads.md` | M3 | 03 | 07 | 05, 06 | in review |
-| 05 | `05-containers-desktop-pkgs.md` | M4 | 03 | 07 | 04, 06 | in review |
+| 03 | `03-clean-engine-system-apt.md` | M2 | 01 | 04, 05, 07 | 02 | done |
+| 04 | `04-dev-user-cache-downloads.md` | M3 | 03 | 07 | 05, 06 | done |
+| 05 | `05-containers-desktop-pkgs.md` | M4 | 03 | 07 | 04, 06 | done |
 | 06 | `06-purge.md` | M5 | 01, 02 | 07 | 04, 05 | done |
-| 07 | `07-polish-distro-packaging.md` | M6 | 02, 03, 04, 05, 06 | — | — | in review |
+| 07 | `07-polish-distro-packaging.md` | M6 | 02, 03, 04, 05, 06 | — | — | done |
+
+All seven plans landed and `make gate` is green. The audit, deviations, known
+gaps, and the open findings (F1-F6) are tracked in `docs/status.md`; read it
+before making further changes.
 
 ---
 

@@ -236,6 +236,68 @@ func TestExecuteFailureIsPartial(t *testing.T) {
 	}
 }
 
+func TestExecutePermanentDeletesAndJournals(t *testing.T) {
+	env := testEnv(t, false)
+	jw, err := journal.NewWriter(env.Paths.Journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	victim := filepath.Join(dir, "victim")
+	if err := os.WriteFile(victim, []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := safe.TakeSnapshot(victim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := trash.New(env.Paths.TrashDir, os.Getuid())
+	act := action.NewTrash(victim, tr, snap, nil, false)
+	tgt := engine.Target{
+		ID: "fake.trash", Category: "fake", Display: "victim", Path: victim,
+		Action: act, Recovery: engine.RecoveryTrash, Risk: engine.RiskLow, DefaultOn: true,
+	}
+	cat := fakeCategory{id: "fake", targets: []engine.Target{tgt}}
+	plan, err := engine.Build(context.Background(), env, engine.Options{
+		Categories: []engine.Category{cat},
+		Permanent:  true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !plan.Items[0].Permanent {
+		t.Fatalf("--permanent must mark the item permanent: %+v", plan.Items[0])
+	}
+	sum := engine.Execute(context.Background(), env, plan, jw)
+	if sum.OK != 1 {
+		t.Fatalf("expected the permanent delete to succeed, got %+v", sum)
+	}
+	if _, err := os.Stat(victim); !os.IsNotExist(err) {
+		t.Fatalf("permanent delete must remove the path, stat err = %v", err)
+	}
+
+	records, err := journal.Read(env.Paths.Journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, r := range records {
+		if r.Item != "fake.trash" {
+			continue
+		}
+		found = true
+		if r.Action != journal.ActionDelete {
+			t.Fatalf("permanent delete must journal action=%q, got %q", journal.ActionDelete, r.Action)
+		}
+		if r.Recovery != journal.RecoveryDelete {
+			t.Fatalf("permanent delete must journal recovery=%q, got %q", journal.RecoveryDelete, r.Recovery)
+		}
+	}
+	if !found {
+		t.Fatalf("no journal record for the permanent item: %+v", records)
+	}
+}
+
 func TestSelectorMatchesCategoryAndPrefix(t *testing.T) {
 	env := testEnv(t, true)
 	cat := fakeCategory{id: "system", targets: []engine.Target{

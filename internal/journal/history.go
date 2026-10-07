@@ -95,3 +95,16 @@ func OwnerItems(run Run) []Record {
 	}
 	return out
 }
+
+// DeletedItems returns the ok permanent-delete records in a run (trash-contract
+// items removed via --permanent). They are not restorable and are listed so the
+// UI can say so.
+func DeletedItems(run Run) []Record {
+	var out []Record
+	for _, r := range run.Records {
+		if r.Action == ActionDelete && r.Status == StatusOK {
+			out = append(out, r)
+		}
+	}
+	return out
+}

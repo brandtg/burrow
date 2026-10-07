@@ -43,9 +43,10 @@ burrow clean --yes --only system.pkg-cache
 ## Preview and review
 
 On a terminal, `clean` shows a preview grouped by category with each item's
-size, recovery contract (`[trash]`/`[owner]`), `(root)` marker, and risk. High
-risk rows are never pre-selected. After you choose, a **review** screen lists the
-exact paths and argv that will run. Only then does anything execute.
+size, recovery contract (`[trash]`/`[owner]`, or `[delete]` under `--permanent`),
+`(root)` marker, and risk. High risk rows are never pre-selected. After you
+choose, a **review** screen lists the exact paths and argv that will run. Only
+then does anything execute.
 
 In a non-terminal (or with `--json`), `clean` prints the plan and requires
 `--yes` to execute; `--json` emits a stable document with per-item `status`,
@@ -63,8 +64,10 @@ burrow clean --no-owner                 # trash user caches, skip owner commands
 burrow clean --permanent                # trash-contract items deleted instead (warned)
 ```
 
-`--permanent` is an explicit escape hatch; it never applies to owner commands and
-is recorded in the journal.
+`--permanent` is an explicit escape hatch; it never applies to owner commands. A
+permanent trash-contract item is labeled `[delete]` in the preview and review, a
+warning is printed, and the journal records `action: "delete"` /
+`recovery: "delete"` so it is never offered by `history --restore`.
 
 ## Whitelist
 

@@ -285,7 +285,9 @@ distro-universal v0.1.
 
 Work is broken into dependency-ordered plans in [`docs/plans/`](docs/plans/).
 Start with [`docs/plans/README.md`](docs/plans/README.md) for the dependency graph,
-execution waves, and per-plan ownership map.
+execution waves, and per-plan ownership map. All seven plans have landed; the
+audit, deviations, known gaps, and open findings are in
+[`docs/status.md`](docs/status.md).
 
 ```
 01 foundation + safety core  (blocking)

@@ -90,8 +90,9 @@ type TrashAction struct {
 	Size      int64
 }
 
-// NewTrash builds a trash action. snapshot may be nil when identity cannot be
-// captured; the action still re-validates the path.
+// NewTrash builds a trash action. snapshot may be nil only for an
+// already-absent path; a present path with no snapshot is refused at Run time
+// (fail closed).
 func NewTrash(path string, t *trash.Trash, snapshot *safe.Snapshot, v *safe.Validator, permanent bool) *TrashAction {
 	return &TrashAction{Path: path, Trash: t, Snapshot: snapshot, Validator: v, Permanent: permanent}
 }
@@ -125,12 +126,14 @@ func (a *TrashAction) Run(ctx context.Context, dryRun bool) (engine.Result, erro
 		}
 		return skip(err.Error()), safe.GuardStop("%s", err.Error())
 	}
-	if a.Snapshot != nil {
-		ok, err := a.Snapshot.Matches()
-		if err != nil || !ok {
-			reason := "path identity changed since snapshot"
-			return skip(reason), safe.GuardStop("%s", reason)
-		}
+	if a.Snapshot == nil {
+		// Fail closed: without an identity snapshot the TOCTOU check cannot run,
+		// so a present path must not be mutated (spec §7.3, I5).
+		return skip("no identity snapshot"), safe.GuardStop("%s", "no identity snapshot")
+	}
+	if ok, err := a.Snapshot.Matches(); err != nil || !ok {
+		reason := "path identity changed since snapshot"
+		return skip(reason), safe.GuardStop("%s", reason)
 	}
 	if dryRun {
 		return engine.Result{Status: engine.StatusDryRun, Bytes: a.Size}, nil

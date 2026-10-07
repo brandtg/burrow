@@ -64,7 +64,10 @@ func reviewLine(it *engine.PlannedItem) string {
 	}
 	if it.Target.Path != "" {
 		verb := "trash"
-		if it.Target.Recovery == engine.RecoveryOwner {
+		switch {
+		case it.Permanent:
+			verb = "permanently delete"
+		case it.Target.Recovery == engine.RecoveryOwner:
 			verb = "owner"
 		}
 		return fmt.Sprintf("%s: %s %s", it.Target.ID, verb, it.Target.Path)
@@ -78,7 +81,10 @@ func itemLine(it *engine.PlannedItem, color bool) string {
 		check = "[x]"
 	}
 	rec := "[owner]"
-	if it.Target.Recovery == engine.RecoveryTrash {
+	switch {
+	case it.Permanent:
+		rec = "[delete]"
+	case it.Target.Recovery == engine.RecoveryTrash:
 		rec = "[trash]"
 	}
 	root := ""
