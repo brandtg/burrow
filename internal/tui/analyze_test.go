@@ -1,9 +1,11 @@
 package tui
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/brandtg/burrow/internal/journal"
@@ -182,6 +184,50 @@ func TestNoDeleteDisablesTrashKeys(t *testing.T) {
 	}
 	if m.status == "" {
 		t.Fatal("expected a status message explaining the disabled keys")
+	}
+}
+
+func TestAnalyzeBackgroundLoadShowsProgress(t *testing.T) {
+	root := &scan.Node{
+		Name: "root", Path: "/root", IsDir: true, SizeKnown: true,
+		Children: []*scan.Node{{Name: "a", Path: "/root/a", Size: 10, SizeKnown: true}},
+	}
+	m := NewAnalyzeModel(AnalyzeConfig{
+		Load:  func(context.Context, func(scan.Progress)) (*scan.Node, error) { return root, nil },
+		Color: false, UID: os.Getuid(),
+	})
+	if m.root != nil {
+		t.Fatal("model should start without a tree when Load is set")
+	}
+	if !strings.Contains(m.loadingView(), "scanning") {
+		t.Fatalf("loading view missing scanner: %q", m.loadingView())
+	}
+	m.loading = true
+	m.Update(progressMsg(scan.Progress{ItemCount: 5, TotalUsage: 2048, CurrentDir: "/root/sub"}))
+	if view := m.loadingView(); !strings.Contains(view, "5 items") || !strings.Contains(view, "/root/sub") {
+		t.Fatalf("progress not rendered: %q", view)
+	}
+	m.Update(loadDoneMsg{root: root})
+	if m.loading {
+		t.Fatal("loading should stop once the scan finishes")
+	}
+	if m.root != root || len(m.entries) != 1 {
+		t.Fatalf("tree not installed: root=%v entries=%d", m.root, len(m.entries))
+	}
+}
+
+func TestAnalyzeBackgroundLoadError(t *testing.T) {
+	m := NewAnalyzeModel(AnalyzeConfig{
+		Load:  func(context.Context, func(scan.Progress)) (*scan.Node, error) { return nil, nil },
+		Color: false, UID: os.Getuid(),
+	})
+	m.loading = true
+	m.Update(loadDoneMsg{err: errors.New("boom")})
+	if m.loadErr == nil {
+		t.Fatal("expected the load error to be recorded")
+	}
+	if view := m.loadingView(); !strings.Contains(view, "boom") {
+		t.Fatalf("error not rendered: %q", view)
 	}
 }
 

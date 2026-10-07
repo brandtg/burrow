@@ -2,12 +2,31 @@ package scan_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/brandtg/burrow/internal/scan"
 )
+
+func TestScanProgressCallback(t *testing.T) {
+	root := t.TempDir()
+	for i := range 10 {
+		if err := os.WriteFile(filepath.Join(root, fmt.Sprintf("f%d", i)), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var calls int
+	if _, err := scan.Analyze(context.Background(), root, scan.Options{
+		Progress: func(scan.Progress) { calls++ },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if calls == 0 {
+		t.Fatal("progress callback was never invoked")
+	}
+}
 
 func TestHardlinksNotDoubleCounted(t *testing.T) {
 	root := t.TempDir()
