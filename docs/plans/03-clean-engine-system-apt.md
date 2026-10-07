@@ -68,8 +68,17 @@ testdata/clean/             fixtures + golden plan output
     invoking user, never root;
   - never inherit the caller's `PATH` into a root command when avoidable.
 - Distro detection from `/etc/os-release`; `internal/distro.Adapter` interface:
-  `ID()`, `PackageCacheAction()`, `OrphansAction()`, `ResidualConfigAction()`,
-  `OldKernelsAction()`, `LockGuard()`.
+  `ID()`, `PackageManager()`, `LockFiles()`, `NeedsRoot()`, `PackageCacheAction()`,
+  `OrphansAction()`, `ResidualConfigAction()`, `OldKernelsAction()`, `LockGuard()`,
+  and `System() SystemSpec`.
+  - Cross-plan note (Plan 07): Plan 07 added `System() SystemSpec` to this
+    interface and rewrote `internal/catalog/system/system.go` to consume the
+    `SystemSpec` data instead of calling apt-specific probes directly. This makes
+    the `system` catalog distro-agnostic so dnf is a data-only addition. The
+    file is Plan 03-owned; the change was landed by the Plan 07 integration pass.
+    `SystemSpec` carries the package-cache command/path, the orphan probe and its
+    parser, the residual-config hook, and the kernel probe/parser. The existing
+    adapter methods are unchanged and remain the action boundary.
 
 ### 4. Guards (`internal/distro/apt.go`, `internal/safe`)
 - Package-manager lock guard: probe `/var/lib/dpkg/lock-frontend` and

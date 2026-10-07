@@ -23,6 +23,10 @@ type noLockAdapter struct{ distro.Adapter }
 func (noLockAdapter) LockGuard() distro.LockProbe { return distro.LockProbe{} }
 
 func stubEnv(t *testing.T, dryRun bool) *engine.Env {
+	return stubEnvFor(t, dryRun, distro.For(distro.Info{ID: "ubuntu"}))
+}
+
+func stubEnvFor(t *testing.T, dryRun bool, adapter distro.Adapter) *engine.Env {
 	t.Helper()
 	dir := t.TempDir()
 	return &engine.Env{
@@ -32,7 +36,7 @@ func stubEnv(t *testing.T, dryRun bool) *engine.Env {
 		XDGState:  filepath.Join(dir, "state"),
 		Run:       owner.New(dryRun),
 		Cfg:       config.Default(),
-		Adapter:   noLockAdapter{distro.For(distro.Info{ID: "ubuntu"})},
+		Adapter:   noLockAdapter{adapter},
 		Whitelist: &whitelist.Set{},
 		Paths: config.Paths{
 			Journal:  filepath.Join(dir, "operations.jsonl"),
@@ -62,6 +66,57 @@ func useTestbin(t *testing.T) string {
 	return logPath
 }
 
+func TestDnfOldKernelsHiddenWithoutPackageCleanup(t *testing.T) {
+	// package-cleanup ships in dnf-utils, not base dnf. With a PATH that has
+	// dnf/rpm/uname but no package-cleanup, the old-kernels item must be
+	// skipped rather than offered.
+	bin := t.TempDir()
+	for _, name := range []string{"dnf", "rpm", "uname"} {
+		if err := os.Symlink(filepath.Join(repoTestbin(t), name), filepath.Join(bin, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", bin)
+	t.Setenv("BURROW_TESTBIN_LOG", filepath.Join(t.TempDir(), "argv.log"))
+
+	env := stubEnvFor(t, true, distro.For(distro.Info{ID: "fedora"}))
+	targets, err := system.New().Discover(context.Background(), env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tg := range targets {
+		if tg.ID == "system.old-kernels" {
+			t.Fatal("system.old-kernels must be hidden when package-cleanup is absent")
+		}
+	}
+}
+
+func TestDiscoverFindsDnfItems(t *testing.T) {
+	useTestbin(t)
+	env := stubEnvFor(t, true, distro.For(distro.Info{ID: "fedora"}))
+	targets, err := system.New().Discover(context.Background(), env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]engine.Target{}
+	for _, tg := range targets {
+		byID[tg.ID] = tg
+	}
+	cache, ok := byID["system.pkg-cache"]
+	if !ok {
+		t.Fatalf("missing system.pkg-cache; got %v", keys(byID))
+	}
+	if got := cache.Action.(engine.ArgvPlanner).PlannedArgv(); !strings.HasSuffix(strings.Join(got, " "), "dnf clean all") {
+		t.Fatalf("dnf pkg-cache argv = %v", got)
+	}
+	if _, ok := byID["system.orphans"]; !ok {
+		t.Fatalf("missing system.orphans; got %v", keys(byID))
+	}
+	if _, ok := byID["system.old-kernels"]; !ok {
+		t.Fatalf("missing system.old-kernels; got %v", keys(byID))
+	}
+}
+
 func TestDiscoverFindsAptItems(t *testing.T) {
 	useTestbin(t)
 	env := stubEnv(t, true)
@@ -86,6 +141,29 @@ func TestDiscoverFindsAptItems(t *testing.T) {
 	}
 	if !jd.SizeKnown || jd.SizeBytes != 512*1024*1024 {
 		t.Fatalf("journald size = %d known=%v", jd.SizeBytes, jd.SizeKnown)
+	}
+}
+
+func TestExecuteRunsExactDnfArgv(t *testing.T) {
+	logPath := useTestbin(t)
+	env := stubEnvFor(t, false, distro.For(distro.Info{ID: "fedora"}))
+	plan, err := engine.Build(context.Background(), env, engine.Options{
+		Categories: []engine.Category{system.New()},
+		Only:       []string{"system.pkg-cache"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Items) != 1 || !plan.Items[0].Selected {
+		t.Fatalf("expected one selected pkg-cache item, got %d", len(plan.Items))
+	}
+	sum := engine.Execute(context.Background(), env, plan, nil)
+	if sum.OK != 1 {
+		t.Fatalf("expected one ok item, got %+v", sum)
+	}
+	log := readFile(t, logPath)
+	if !strings.Contains(log, "sudo -- ") || !strings.Contains(log, "dnf clean all") {
+		t.Fatalf("expected elevated dnf clean all, log:\n%s", log)
 	}
 }
 

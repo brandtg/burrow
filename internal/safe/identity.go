@@ -34,7 +34,7 @@ func statIdentity(path string) (dev, ino uint64, size int64, mode os.FileMode, e
 	if !ok {
 		return 0, 0, 0, 0, fmt.Errorf("cannot read stat for %s", path)
 	}
-	return uint64(st.Dev), uint64(st.Ino), fi.Size(), fi.Mode(), nil
+	return st.Dev, st.Ino, fi.Size(), fi.Mode(), nil
 }
 
 // TakeSnapshot captures the target and its parent. It fails closed: if either

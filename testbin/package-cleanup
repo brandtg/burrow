@@ -1,0 +1,5 @@
+#!/bin/sh
+# Test stub for package-cleanup. Records argv and emits canned output.
+log="${BURROW_TESTBIN_LOG:-/dev/null}"
+{ printf 'argv: package-cleanup'; for a in "$@"; do printf ' %s' "$a"; done; printf '\n'; } >>"$log"
+echo "Cleaning up old kernels"

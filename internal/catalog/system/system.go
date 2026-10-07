@@ -58,64 +58,74 @@ func (g lockGuard) Check(ctx context.Context, env *engine.Env) error {
 	return distro.CheckLockProbe(ctx, g.probe).Err()
 }
 
+// commandAvailable reports whether an owner command's binary is on PATH. It
+// keeps discovery from offering an item whose owner is absent (for example
+// `package-cleanup`, which ships in dnf-utils, not base dnf).
+func commandAvailable(cmd owner.OwnerCommand) bool {
+	if !cmd.Valid() {
+		return false
+	}
+	return owner.Available(cmd.Argv[0])
+}
+
 func packageItems(ctx context.Context, env *engine.Env) []engine.Target {
 	if env == nil || env.Adapter == nil {
 		return nil
 	}
+	spec := env.Adapter.System()
 	guard := lockGuard{probe: env.Adapter.LockGuard()}
 	var out []engine.Target
 
-	if cmd := env.Adapter.PackageCacheAction(); cmd.Valid() {
+	if spec.PackageCache.Valid() && commandAvailable(spec.PackageCache) {
+		cmd := spec.PackageCache
 		out = append(out, engine.Target{
 			ID:        cmd.ID,
 			Category:  ID,
 			Display:   "package cache",
-			Path:      "/var/cache/apt/archives",
+			Path:      spec.PackageCachePath,
 			Action:    action.NewOwnerCommand(cmd, env.Run),
 			Recovery:  engine.RecoveryOwner,
 			NeedsRoot: cmd.NeedsRoot,
 			Guard:     guard,
 			Risk:      engine.RiskLow,
 			DefaultOn: true,
-			Evidence:  []string{"apt owns /var/cache/apt/archives"},
+			Evidence:  []string{spec.PackageCacheEvidence},
 		})
 	}
 
-	if env.Run != nil {
-		if probe, err := env.Run.Probe(ctx, owner.AptOrphanProbe().Argv, owner.TimeoutSizeProbe); err == nil {
-			if parseAptRemovals(probe) > 0 {
-				if cmd := env.Adapter.OrphansAction(); cmd.Valid() {
-					size, known := parseAptFreed(probe)
-					out = append(out, engine.Target{
-						ID:        cmd.ID,
-						Category:  ID,
-						Display:   "orphaned packages",
-						SizeBytes: size,
-						SizeKnown: known,
-						Action:    action.NewOwnerCommand(cmd, env.Run),
-						Recovery:  engine.RecoveryOwner,
-						NeedsRoot: cmd.NeedsRoot,
-						Guard:     guard,
-						Risk:      engine.RiskHigh,
-						DefaultOn: false,
-						Evidence:  []string{"apt-get -s autoremove lists removable packages"},
-					})
-				}
+	if env.Run != nil && spec.Orphans.Valid() && spec.OrphansProbe.Valid() && commandAvailable(spec.Orphans) {
+		if probe, err := env.Run.Probe(ctx, spec.OrphansProbe.Argv, owner.TimeoutSizeProbe); err == nil {
+			if count, size, known := spec.ParseOrphans(probe); count > 0 {
+				cmd := spec.Orphans
+				out = append(out, engine.Target{
+					ID:        cmd.ID,
+					Category:  ID,
+					Display:   "orphaned packages",
+					SizeBytes: size,
+					SizeKnown: known,
+					Action:    action.NewOwnerCommand(cmd, env.Run),
+					Recovery:  engine.RecoveryOwner,
+					NeedsRoot: cmd.NeedsRoot,
+					Guard:     guard,
+					Risk:      engine.RiskHigh,
+					DefaultOn: false,
+					Evidence:  []string{"the package manager reports removable packages"},
+				})
 			}
 		}
 	}
 
-	if env.Run != nil {
-		if probe, err := env.Run.Probe(ctx, owner.DpkgListProbe().Argv, owner.TimeoutSizeProbe); err == nil {
-			pkgs := parseResidualConfig(probe)
+	if env.Run != nil && spec.ResidualConfig != nil && spec.ResidualProbe.Valid() {
+		if probe, err := env.Run.Probe(ctx, spec.ResidualProbe.Argv, owner.TimeoutSizeProbe); err == nil {
+			pkgs := spec.ParseResidual(probe)
 			allow := make(map[string]bool, len(pkgs))
 			for _, p := range pkgs {
 				allow[p] = true
 			}
 			// Defense in depth: the purge list must be a subset of the set we
-			// parsed from dpkg output (I4 / plan 03 note).
+			// parsed from the package-manager output (I4 / plan 03 note).
 			if len(pkgs) > 0 && owner.ValidatePackageSubset(pkgs, allow) == nil {
-				if cmd, err := env.Adapter.ResidualConfigAction(pkgs); err == nil {
+				if cmd, err := spec.ResidualConfig(pkgs); err == nil {
 					out = append(out, engine.Target{
 						ID:        cmd.ID,
 						Category:  ID,
@@ -126,51 +136,35 @@ func packageItems(ctx context.Context, env *engine.Env) []engine.Target {
 						Guard:     guard,
 						Risk:      engine.RiskMed,
 						DefaultOn: false,
-						Evidence:  []string{"dpkg -l reports ^rc packages"},
+						Evidence:  []string{"the package manager reports residual config"},
 					})
 				}
 			}
 		}
 	}
 
-	if oldKernelsPresent(ctx, env) {
-		if cmd := env.Adapter.OldKernelsAction(); cmd.Valid() {
-			out = append(out, engine.Target{
-				ID:        cmd.ID,
-				Category:  ID,
-				Display:   "old kernels",
-				Action:    action.NewOwnerCommand(cmd, env.Run),
-				Recovery:  engine.RecoveryOwner,
-				NeedsRoot: cmd.NeedsRoot,
-				Guard:     guard,
-				Risk:      engine.RiskHigh,
-				DefaultOn: false,
-				Evidence:  []string{"installed linux-image packages differ from the running kernel"},
-			})
+	if env.Run != nil && spec.OldKernels.Valid() && spec.KernelsProbe.Valid() && commandAvailable(spec.OldKernels) {
+		if kernels, err := env.Run.Probe(ctx, spec.KernelsProbe.Argv, owner.TimeoutSizeProbe); err == nil {
+			if running, err := env.Run.Probe(ctx, owner.UnameProbe().Argv, owner.TimeoutQuickDetect); err == nil {
+				if spec.HasOldKernels(kernels, running) {
+					cmd := spec.OldKernels
+					out = append(out, engine.Target{
+						ID:        cmd.ID,
+						Category:  ID,
+						Display:   "old kernels",
+						Action:    action.NewOwnerCommand(cmd, env.Run),
+						Recovery:  engine.RecoveryOwner,
+						NeedsRoot: cmd.NeedsRoot,
+						Guard:     guard,
+						Risk:      engine.RiskHigh,
+						DefaultOn: false,
+						Evidence:  []string{"installed kernels differ from the running kernel"},
+					})
+				}
+			}
 		}
 	}
 	return out
-}
-
-func oldKernelsPresent(ctx context.Context, env *engine.Env) bool {
-	if env == nil || env.Run == nil {
-		return false
-	}
-	pkgs, err := env.Run.Probe(ctx, owner.DpkgKernelProbe().Argv, owner.TimeoutSizeProbe)
-	if err != nil {
-		return false
-	}
-	running, err := env.Run.Probe(ctx, owner.UnameProbe().Argv, owner.TimeoutQuickDetect)
-	if err != nil {
-		return false
-	}
-	runningRel := strings.TrimSpace(running)
-	for _, p := range parseKernelPackages(pkgs) {
-		if kernelVersion(p) != runningRel {
-			return true
-		}
-	}
-	return false
 }
 
 func journaldItem(ctx context.Context, env *engine.Env) []engine.Target {

@@ -1,0 +1,13 @@
+#!/bin/sh
+# Test stub for rpm. Records argv and emits canned installed kernels.
+log="${BURROW_TESTBIN_LOG:-/dev/null}"
+{ printf 'argv: rpm'; for a in "$@"; do printf ' %s' "$a"; done; printf '\n'; } >>"$log"
+case "$*" in
+  *kernel*)
+    echo "kernel-6.8.5-301.fc40.x86_64"
+    echo "kernel-6.7.4-200.fc39.x86_64"
+    ;;
+  *)
+    echo ""
+    ;;
+esac

@@ -18,6 +18,8 @@ linters:
       check-type-assertions: false
       check-blank: false
   exclusions:
+    presets:
+      - std-error-handling
     rules:
       - path: _test\.go
         linters:

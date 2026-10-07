@@ -13,7 +13,7 @@ func devOf(fi os.FileInfo) (uint64, bool) {
 	if !ok {
 		return 0, false
 	}
-	return uint64(st.Dev), true
+	return st.Dev, true
 }
 
 // devOfPath stats path and returns its device id.

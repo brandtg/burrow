@@ -166,7 +166,9 @@ func (a *App) interactiveWhitelist(mgr *whitelist.Manager) error {
 	}
 	sc := bufio.NewScanner(in)
 	for {
-		a.printWhitelistEntries(mgr.Entries())
+		if err := a.printWhitelistEntries(mgr.Entries()); err != nil {
+			return err
+		}
 		fmt.Fprint(a.Out, "add <path> | remove <path> | list | quit\n> ")
 		if !sc.Scan() {
 			return sc.Err()

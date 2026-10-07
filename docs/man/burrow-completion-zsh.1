@@ -1,0 +1,106 @@
+.nh
+.TH "BURROW" "1" "Oct 2026" "burrow 0.1.0-dev" "burrow manual"
+
+.SH NAME
+burrow-completion-zsh - Generate the autocompletion script for zsh
+
+
+.SH SYNOPSIS
+\fBburrow completion zsh [flags]\fP
+
+
+.SH DESCRIPTION
+Generate the autocompletion script for the zsh shell.
+
+.PP
+If shell completion is not already enabled in your environment you will need
+to enable it.  You can execute the following once:
+
+.EX
+echo "autoload -U compinit; compinit" >> ~/.zshrc
+.EE
+
+.PP
+To load completions in your current shell session:
+
+.EX
+source <(burrow completion zsh)
+.EE
+
+.PP
+To load completions for every new session, execute once:
+
+.SS Linux:
+.EX
+burrow completion zsh > "${fpath[1]}/_burrow"
+.EE
+
+.SS macOS:
+.EX
+burrow completion zsh > $(brew --prefix)/share/zsh/site-functions/_burrow
+.EE
+
+.PP
+You will need to start a new shell for this setup to take effect.
+
+
+.SH OPTIONS
+\fB-h\fP, \fB--help\fP[=false]
+	help for zsh
+
+.PP
+\fB--no-descriptions\fP[=false]
+	disable completion descriptions
+
+
+.SH OPTIONS INHERITED FROM PARENT COMMANDS
+\fB--color\fP="auto"
+	terminal color policy: auto|always|never
+
+.PP
+\fB--config\fP=""
+	override the config file path
+
+.PP
+\fB--dry-run\fP[=false]
+	never mutate; print the plan and exit
+
+.PP
+\fB--exclude\fP=[]
+	comma list of categories or item ids to exclude
+
+.PP
+\fB--json\fP[=false]
+	machine-readable output
+
+.PP
+\fB--log-level\fP="info"
+	trace|debug|info|warn|error
+
+.PP
+\fB--min-size\fP="0"
+	only act on items >= size (e.g. 10M, 1G)
+
+.PP
+\fB--no-color\fP[=false]
+	disable color (same as --color=never)
+
+.PP
+\fB--only\fP=[]
+	comma list of categories or item ids to include
+
+.PP
+\fB--quiet\fP[=false]
+	only print errors
+
+.PP
+\fB-v\fP, \fB--verbose\fP[=false]
+	shorthand for --log-level debug
+
+.PP
+\fB-y\fP, \fB--yes\fP[=false]
+	skip the interactive confirm
+
+
+.SH SEE ALSO
+\fBburrow-completion(1)\fP

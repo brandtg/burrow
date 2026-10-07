@@ -106,6 +106,9 @@ type Adapter interface {
 	OldKernelsAction() owner.OwnerCommand
 	// LockGuard names the locks and processes that indicate a busy manager.
 	LockGuard() LockProbe
+	// System returns the data behind the generic `system` catalog items so the
+	// catalog stays distro-agnostic (Plan 07). It is read-only data.
+	System() SystemSpec
 }
 
 // For returns the adapter for an os-release.

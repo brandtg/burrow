@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -32,14 +31,8 @@ func TestAnalyzeJSONGolden(t *testing.T) {
 	if code := te.run("analyze", "--json", "--apparent", "-t", "3", root); code != ExitOK {
 		t.Fatalf("exit code = %d: %s", code, te.errOut.String())
 	}
-	got := strings.ReplaceAll(te.out.String(), root, "<ROOT>")
-	golden, err := os.ReadFile(filepath.Join("..", "..", "testdata", "analyze", "golden.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != string(golden) {
-		t.Fatalf("golden mismatch:\n--- got ---\n%s\n--- want ---\n%s", got, golden)
-	}
+	got := []byte(strings.ReplaceAll(te.out.String(), root, "<ROOT>"))
+	goldenCompare(t, filepath.Join("..", "..", "testdata", "analyze", "golden.json"), got)
 }
 
 func TestAnalyzeNonTTYDefaultsToJSON(t *testing.T) {

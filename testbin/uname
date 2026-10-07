@@ -1,0 +1,8 @@
+#!/bin/sh
+# Test stub for uname. Records argv and reports a canned kernel release.
+log="${BURROW_TESTBIN_LOG:-/dev/null}"
+{ printf 'argv: uname'; for a in "$@"; do printf ' %s' "$a"; done; printf '\n'; } >>"$log"
+case "$1" in
+  -r) echo "6.8.5-301.fc40.x86_64" ;;
+  *) echo "Linux" ;;
+esac

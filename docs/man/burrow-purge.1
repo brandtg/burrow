@@ -1,0 +1,88 @@
+.nh
+.TH "BURROW" "1" "Oct 2026" "burrow 0.1.0-dev" "burrow manual"
+
+.SH NAME
+burrow-purge - remove rebuildable project artifacts
+
+
+.SH SYNOPSIS
+\fBburrow purge [flags]\fP
+
+
+.SH DESCRIPTION
+Find rebuildable build artifacts (node_modules, target, virtualenvs,
+\fBpycache\fP, ...) under the configured project roots and delete them
+permanently.
+
+.PP
+Artifacts are kept when they are git-tracked, when git state cannot be
+determined, when they contain a git repository, when their activity age cannot
+be verified, or when they have seen file activity within the age window. Purge
+never uses the Trash: artifacts are rebuildable. The preview lists every exact
+path, and --yes is required when stdout is not a terminal.
+
+
+.SH OPTIONS
+\fB--age\fP=""
+	only artifacts with no activity in this window (default 7d)
+
+.PP
+\fB-h\fP, \fB--help\fP[=false]
+	help for purge
+
+.PP
+\fB--paths\fP[=false]
+	print the configured project roots
+
+
+.SH OPTIONS INHERITED FROM PARENT COMMANDS
+\fB--color\fP="auto"
+	terminal color policy: auto|always|never
+
+.PP
+\fB--config\fP=""
+	override the config file path
+
+.PP
+\fB--dry-run\fP[=false]
+	never mutate; print the plan and exit
+
+.PP
+\fB--exclude\fP=[]
+	comma list of categories or item ids to exclude
+
+.PP
+\fB--json\fP[=false]
+	machine-readable output
+
+.PP
+\fB--log-level\fP="info"
+	trace|debug|info|warn|error
+
+.PP
+\fB--min-size\fP="0"
+	only act on items >= size (e.g. 10M, 1G)
+
+.PP
+\fB--no-color\fP[=false]
+	disable color (same as --color=never)
+
+.PP
+\fB--only\fP=[]
+	comma list of categories or item ids to include
+
+.PP
+\fB--quiet\fP[=false]
+	only print errors
+
+.PP
+\fB-v\fP, \fB--verbose\fP[=false]
+	shorthand for --log-level debug
+
+.PP
+\fB-y\fP, \fB--yes\fP[=false]
+	skip the interactive confirm
+
+
+.SH SEE ALSO
+\fBburrow(1)\fP

@@ -346,5 +346,5 @@ func deviceOf(path string) uint64 {
 	if !ok {
 		return 0
 	}
-	return uint64(st.Dev)
+	return st.Dev
 }
