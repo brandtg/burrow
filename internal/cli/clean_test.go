@@ -267,3 +267,16 @@ func TestPlanHasPermanentFalse(t *testing.T) {
 		t.Fatal("planHasPermanent must be false without a permanent item")
 	}
 }
+
+func TestCleanPlainDryRunPrintsPreview(t *testing.T) {
+	useTestbin(t)
+	te := newTestApp(t, cleanTestEnv(t))
+	te.app.Adapter = aptAdapter()
+	if code := te.run("clean", "--only", "system.pkg-cache", "--dry-run", "--plain"); code != ExitOK {
+		t.Fatalf("exit = %d: %s", code, te.errOut.String())
+	}
+	out := te.out.String()
+	if !strings.Contains(out, "package cache") || !strings.Contains(out, "these exact commands will run") {
+		t.Fatalf("plain dry-run should print preview + review:\n%s", out)
+	}
+}

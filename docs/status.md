@@ -120,6 +120,12 @@ same-path trash entry from another run). Covered by
   set `scan_status=partial` in `--json`; the interactive header now shows
   `partial scan: N item(s) could not be read` (`scan.UnknownCount`), alongside
   the per-row `unknown` size.
+- **`clean` preview was an unbounded plain-text dump.** Plan 08 makes the TUI the
+  default view on a terminal, including `--dry-run` (read-only), adds `--plain`
+  for non-interactive output, collapses large categories/groups, groups
+  `dev.pycache` per project, and aggregates the review screen. This is a
+  deliberate revision of spec §5.1 (previously "`--dry-run` … print the full plan
+  and exit"); the spec and user guide are updated in the same change.
 
 ## Known gaps (by design or deferred)
 
@@ -140,8 +146,10 @@ same-path trash entry from another run). Covered by
 - **`snap list --all` disabled detection** uses a whole-line `Contains("disabled")`
   rather than the Notes column (`internal/catalog/desktoppkgs/desktoppkgs.go:311`),
   a low-likelihood wrong-row path.
-- **`dev.pycache` emits one row per `__pycache__` directory**, which swamps the
-  preview (327 items / 51 GiB on the review host). Consider grouping per project.
+- **`dev.pycache` emitted one row per `__pycache__` directory**, which swamped
+  the preview (327 items / 51 GiB on the review host). Resolved by Plan 08:
+  `__pycache__` targets now carry a presentation group keyed to the top-level
+  project under each purge root, and large categories/groups render collapsed.
 
 ## Test-coverage gaps
 

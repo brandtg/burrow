@@ -17,7 +17,7 @@ burrow docs                   # generate man pages into docs/man
 burrow version
 ```
 
-Global flags: `--dry-run`, `-y/--yes`, `--json`, `--only`, `--exclude`,
+Global flags: `--dry-run`, `-y/--yes`, `--json`, `--plain`, `--only`, `--exclude`,
 `--min-size`, `--color`/`--no-color`, `--config`, `--log-level`, `-v`, `--quiet`.
 Exit codes: `0` success, `1` error, `2` usage, `3` partial failure, `75` a safety
 guard stopped an action, `124` a subprocess timed out, `130` interrupted.
@@ -25,10 +25,12 @@ guard stopped an action, `124` a subprocess timed out, `130` interrupted.
 ## Dry-run first
 
 `--dry-run` runs discovery, measurement, and planning, renders the exact plan,
-and exits without mutating anything. Use it whenever you are unsure:
+and exits without mutating anything. Use it whenever you are unsure. On a
+terminal it opens the same TUI as a real run, in read-only mode:
 
 ```sh
-burrow clean --dry-run
+burrow clean --dry-run              # read-only TUI
+burrow clean --dry-run --plain      # non-interactive plain text
 burrow clean --dry-run --json | jq .
 burrow purge --dry-run
 ```
@@ -42,13 +44,17 @@ burrow clean --yes --only system.pkg-cache
 
 ## Preview and review
 
-On a terminal, `clean` shows a preview grouped by category with each item's
-size, recovery contract (`[trash]`/`[owner]`, or `[delete]` under `--permanent`),
-`(root)` marker, and risk. High risk rows are never pre-selected. After you
-choose, a **review** screen lists the exact paths and argv that will run. Only
-then does anything execute.
+On a terminal, `clean` opens a preview TUI grouped by category (with an optional
+sub-group level) showing each item's size, recovery contract
+(`[trash]`/`[owner]`, or `[delete]` under `--permanent`), `(root)` marker, and
+risk. Categories and groups with many items start collapsed; `→`/`←` expand and
+collapse, `/` filters, and `space` on a category or group toggles every
+non-high-risk member. High risk rows are never pre-selected. After you choose, a
+**review** screen lists the exact owner argv that will run (large trash
+selections are summarized by group). Only then does anything execute.
 
-In a non-terminal (or with `--json`), `clean` prints the plan and requires
+`--plain`, `--json`, `--yes`, or a non-TTY stdout skip the TUI. `--plain` prints
+a bounded preview (each group capped, with a pointer to `--json`) and requires
 `--yes` to execute; `--json` emits a stable document with per-item `status`,
 `argv`, and totals.
 

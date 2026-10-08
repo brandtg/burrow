@@ -25,13 +25,16 @@ It is an **orchestrator with a safety contract**, not a path-deleter.
 # Build from source (or see Packaging and release for prebuilt binaries)
 make build
 
-# See what is reclaimable, without touching anything
+# See what is reclaimable in the read-only TUI, without touching anything
 ./bin/burrow clean --dry-run
+
+# Non-interactive (for scripts/CI): plain text, or --json for machine output
+./bin/burrow clean --dry-run --plain
 
 # Explore where your space went
 ./bin/burrow analyze ~
 
-# Clean interactively: preview -> confirm -> execute
+# Clean interactively: preview -> review -> confirm -> execute
 ./bin/burrow clean
 
 # Reclaim rebuildable project artifacts
@@ -90,9 +93,12 @@ burrow docs                   # generate man pages into docs/man
 burrow version
 ```
 
-Global flags include `--dry-run`, `-y/--yes`, `--json`, `--only`, `--exclude`,
-`--min-size`, `--config`, and `--log-level`. Exit codes are meaningful: `75` means
-a safety guard stopped an action, `124` a subprocess timeout, `130` SIGINT.
+Global flags include `--dry-run`, `-y/--yes`, `--json`, `--plain`, `--only`,
+`--exclude`, `--min-size`, `--config`, and `--log-level`. `clean` is TUI-first on
+a terminal (including `--dry-run`, which is read-only); `--plain`, `--json`,
+`--yes`, or a non-TTY stdout select the non-interactive path. Exit codes are
+meaningful: `75` means a safety guard stopped an action, `124` a subprocess
+timeout, `130` SIGINT.
 
 ## Safety invariants
 
