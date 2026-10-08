@@ -199,3 +199,53 @@ func keys2(plan *engine.Plan) []string {
 	}
 	return out
 }
+
+func TestSweepCuratesUnknownAndExpensive(t *testing.T) {
+	env := testEnv(t)
+	mkdir(t,
+		filepath.Join(env.XDGCache, "huggingface"),
+		filepath.Join(env.XDGCache, "randomcache"),
+		filepath.Join(env.XDGCache, "fontconfig"),
+	)
+	got := ids(t, env)
+
+	hf := got["user-cache.app-caches.huggingface"]
+	if hf.DefaultOn {
+		t.Fatal("huggingface must not be pre-selected")
+	}
+	if hf.Regen != engine.RegenExpensive || hf.Risk != engine.RiskMed {
+		t.Fatalf("huggingface classification wrong: regen=%v risk=%v", hf.Regen, hf.Risk)
+	}
+	if hf.AutoSelectable() {
+		t.Fatal("expensive huggingface must not be auto-selectable")
+	}
+
+	unknown := got["user-cache.app-caches.randomcache"]
+	if unknown.DefaultOn {
+		t.Fatal("unknown cache must not be pre-selected by default")
+	}
+
+	cheap := got["user-cache.app-caches.fontconfig"]
+	if !cheap.DefaultOn || !cheap.AutoSelectable() {
+		t.Fatalf("allowlisted cheap cache should be pre-selected: %+v", cheap)
+	}
+}
+
+func TestSweepUnknownConfigPreSelects(t *testing.T) {
+	env := testEnv(t)
+	env.Cfg.UserCache.SweepUnknown = true
+	mkdir(t, filepath.Join(env.XDGCache, "randomcache"))
+	got := ids(t, env)
+	if !got["user-cache.app-caches.randomcache"].DefaultOn {
+		t.Fatal("sweep_unknown should pre-select an unknown cache")
+	}
+}
+
+func TestExpensiveCacheIdleGate(t *testing.T) {
+	env := testEnv(t)
+	mkdir(t, filepath.Join(env.XDGCache, "huggingface"))
+	got := ids(t, env)
+	if !got["user-cache.app-caches.huggingface"].Gated {
+		t.Fatal("freshly-used expensive cache should be gated")
+	}
+}

@@ -83,6 +83,8 @@ func (a *App) runPurge(env *engine.Env, opts purgeOptions) error {
 		Roots:        roots,
 		ArtifactDirs: env.Cfg.Purge.ArtifactDirs,
 		MaxAge:       maxAge,
+		MaxAgeByType: purgeMaxAgeTypes(env, opts),
+		ActiveWithin: purgeActiveWithin(env),
 		Warn:         func(msg string) { fmt.Fprintf(a.ErrOut, "purge: %s\n", msg) },
 	})
 	if err != nil {
@@ -373,6 +375,35 @@ func purgeMaxAge(env *engine.Env, opts purgeOptions) (time.Duration, error) {
 		return 0, &ExitError{Code: ExitUsage, Err: err}
 	}
 	return d, nil
+}
+
+// purgeMaxAgeTypes converts the per-artifact windows from config. An explicit
+// --age overrides the whole policy, so the per-type map is dropped.
+func purgeMaxAgeTypes(env *engine.Env, opts purgeOptions) map[string]time.Duration {
+	if opts.age != "" || env.Cfg == nil || len(env.Cfg.Purge.MaxAgeByType) == 0 {
+		return nil
+	}
+	out := make(map[string]time.Duration, len(env.Cfg.Purge.MaxAgeByType))
+	for pattern, raw := range env.Cfg.Purge.MaxAgeByType {
+		d, err := config.ParseDuration(raw)
+		if err != nil {
+			continue
+		}
+		out[pattern] = d
+	}
+	return out
+}
+
+// purgeActiveWithin returns the active-project guard window from config.
+func purgeActiveWithin(env *engine.Env) time.Duration {
+	if env.Cfg == nil {
+		return 0
+	}
+	d, err := config.ParseDuration(env.Cfg.Purge.ActiveWithin)
+	if err != nil {
+		return 0
+	}
+	return d
 }
 
 func purgeMinSize(s string) (int64, error) {

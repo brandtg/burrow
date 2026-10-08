@@ -63,6 +63,39 @@ func (r Risk) String() string {
 	}
 }
 
+// Regen classifies how expensive a target is to regenerate. It is independent
+// of Risk, which describes the blast radius of the deletion itself. Only Free
+// and Cheap targets are ever pre-selected or bulk-selected; Expensive and Data
+// targets are shown for the user to choose explicitly. The zero value is Free,
+// so targets that predate this field stay selectable.
+type Regen int
+
+const (
+	// RegenFree is regenerated automatically at no meaningful cost.
+	RegenFree Regen = iota
+	// RegenCheap is regenerated quickly, at most a small download.
+	RegenCheap
+	// RegenExpensive needs a large download, network access, or a long rebuild.
+	RegenExpensive
+	// RegenData is not meaningfully regenerable and should be treated as data.
+	RegenData
+)
+
+func (r Regen) String() string {
+	switch r {
+	case RegenFree:
+		return "free"
+	case RegenCheap:
+		return "cheap"
+	case RegenExpensive:
+		return "expensive"
+	case RegenData:
+		return "data"
+	default:
+		return "unknown"
+	}
+}
+
 // Result is the outcome of executing an Action.
 type Result struct {
 	Status   string
@@ -110,6 +143,10 @@ type Guard interface {
 // many similar targets (for example one per project's __pycache__) collapse into
 // meaningful sub-rows. Execution, guards, and identity snapshots stay per-Target,
 // so grouping never changes what a mutation does (I3/I4).
+//
+// Regen and Gated affect selection only. Regen bounds how expensive the item is
+// to rebuild; Gated marks an item a policy advises keeping (for example a cache
+// touched within the idle window). Neither changes how an item executes.
 type Target struct {
 	ID         string
 	Category   string
@@ -123,9 +160,18 @@ type Target struct {
 	Guard      Guard
 	Evidence   []string
 	Risk       Risk
+	Regen      Regen
+	Gated      bool
 	DefaultOn  bool
 	Group      string
 	GroupTitle string
+}
+
+// AutoSelectable reports whether the target may be pre-selected or selected in
+// bulk. Expensive/data items and policy-gated items are excluded; the user can
+// still toggle them individually.
+func (t Target) AutoSelectable() bool {
+	return !t.Gated && t.Risk != RiskHigh && t.Regen <= RegenCheap
 }
 
 // Validate enforces invariant I2: every mutation declares a valid recovery

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -116,9 +117,11 @@ func TestDiscoverNestedRepoKept(t *testing.T) {
 
 // fakeGit simulates git for tracked/unknown tests.
 type fakeGit struct {
-	root    string
-	tracked []string
-	err     error
+	root      string
+	tracked   []string
+	err       error
+	commit    time.Time
+	commitErr error
 }
 
 func (f fakeGit) TopLevel(context.Context, string) (string, error) {
@@ -133,6 +136,13 @@ func (f fakeGit) LsFiles(context.Context, string) ([]string, error) {
 		return nil, f.err
 	}
 	return f.tracked, nil
+}
+
+func (f fakeGit) LastCommit(context.Context, string) (time.Time, error) {
+	if f.commitErr != nil {
+		return time.Time{}, f.commitErr
+	}
+	return f.commit, nil
 }
 
 func TestDiscoverGitTrackedKept(t *testing.T) {
@@ -229,6 +239,89 @@ func TestDiscoverDepthBound(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Fatalf("depth bound should exclude the deep artifact: %+v", got)
+	}
+}
+
+func TestDiscoverActiveProjectKept(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	makeArtifact(t, root, "node_modules", time.Now().Add(-60*24*time.Hour))
+	git := fakeGit{root: root, commit: time.Now().Add(-24 * time.Hour)}
+	got, err := Discover(context.Background(), Options{
+		Roots:        []string{root},
+		Git:          git,
+		ActiveWithin: 30 * 24 * time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || !got[0].Kept() {
+		t.Fatalf("artifact in a recently-committed repo must be kept: %+v", got)
+	}
+	if !strings.Contains(got[0].KeepReason, "active project") {
+		t.Fatalf("keep reason = %q, want active project", got[0].KeepReason)
+	}
+}
+
+func TestDiscoverPerTypeAge(t *testing.T) {
+	root := t.TempDir()
+	makeArtifact(t, root, "node_modules", time.Now().Add(-20*24*time.Hour))
+	makeArtifact(t, root, "__pycache__", time.Now().Add(-20*24*time.Hour))
+	got, err := Discover(context.Background(), Options{
+		Roots:        []string{root},
+		ArtifactDirs: []string{"node_modules", "__pycache__"},
+		MaxAge:       7 * 24 * time.Hour,
+		MaxAgeByType: map[string]time.Duration{
+			"node_modules": 30 * 24 * time.Hour,
+			"__pycache__":  0,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]Artifact{}
+	for _, a := range got {
+		byName[filepath.Base(a.Path)] = a
+	}
+	if !byName["node_modules"].Kept() {
+		t.Fatalf("node_modules within its 30d window must be kept: %+v", byName["node_modules"])
+	}
+	if byName["__pycache__"].Kept() {
+		t.Fatalf("__pycache__ with a zero window must be purgeable: %+v", byName["__pycache__"])
+	}
+}
+
+func TestDiscoverGenericNameRequiresMarker(t *testing.T) {
+	root := t.TempDir()
+	makeArtifact(t, root, "build", time.Now().Add(-30*24*time.Hour))
+
+	got, err := Discover(context.Background(), Options{
+		Roots:        []string{root},
+		ArtifactDirs: []string{"build"},
+		MaxAge:       7 * 24 * time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || !got[0].Kept() || !strings.Contains(got[0].KeepReason, "project marker") {
+		t.Fatalf("unmarked build dir must be kept: %+v", got)
+	}
+
+	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err = Discover(context.Background(), Options{
+		Roots:        []string{root},
+		ArtifactDirs: []string{"build"},
+		MaxAge:       7 * 24 * time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Kept() {
+		t.Fatalf("build dir with a project marker should be purgeable: %+v", got)
 	}
 }
 

@@ -9,10 +9,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/brandtg/burrow/internal/action"
 	"github.com/brandtg/burrow/internal/catalog"
 	"github.com/brandtg/burrow/internal/catalog/dev"
+	"github.com/brandtg/burrow/internal/config"
 	"github.com/brandtg/burrow/internal/engine"
 	"github.com/brandtg/burrow/internal/safe"
 	"github.com/brandtg/burrow/internal/trash"
@@ -54,6 +56,36 @@ var protectedNames = map[string]bool{
 	"systemd":       true,
 }
 
+// cheapCacheNames is the curated allowlist of top-level cache entries that are
+// cheap and safe to regenerate, so they are pre-selected. Everything else is
+// shown but off unless [user-cache] sweep_unknown is set.
+var cheapCacheNames = map[string]bool{
+	"fontconfig":        true,
+	"mesa_shader_cache": true,
+	"gstreamer-1.0":     true,
+	"tracker3":          true,
+}
+
+// expensiveCacheNames are large or slow to rebuild (model weights, browser
+// downloads, IDE indexes, build graphs). They are never pre-selected: deleting
+// them means a costly re-download or rebuild.
+var expensiveCacheNames = map[string]bool{
+	"huggingface":           true,
+	"torch":                 true,
+	"wandb":                 true,
+	"whisper":               true,
+	"sentence-transformers": true,
+	"ms-playwright":         true,
+	"puppeteer":             true,
+	"chromium":              true,
+	"google-chrome":         true,
+	"cypress":               true,
+	"bazel":                 true,
+	"bazelisk":              true,
+	"JetBrains":             true,
+	"pre-commit":            true,
+}
+
 // Discover enumerates the user-cache targets.
 func (*Category) Discover(_ context.Context, env *engine.Env) ([]engine.Target, error) {
 	if env == nil || env.XDGCache == "" {
@@ -67,7 +99,7 @@ func (*Category) Discover(_ context.Context, env *engine.Env) ([]engine.Target, 
 }
 
 func thumbnailItem(env *engine.Env) []engine.Target {
-	return trashEntry(env, "user-cache.thumbnails", "thumbnails", filepath.Join(env.XDGCache, "thumbnails"), engine.RiskLow, true)
+	return trashEntry(env, "user-cache.thumbnails", "thumbnails", filepath.Join(env.XDGCache, "thumbnails"), engine.RiskLow, engine.RegenFree, true, false)
 }
 
 func appCacheItems(env *engine.Env) []engine.Target {
@@ -76,6 +108,8 @@ func appCacheItems(env *engine.Env) []engine.Target {
 		return nil
 	}
 	devRoots := dev.CacheRoots(env)
+	sweepUnknown := env.Cfg != nil && env.Cfg.UserCache.SweepUnknown
+	within := userCacheMaxAge(env)
 	var out []engine.Target
 	for _, de := range entries {
 		name := de.Name()
@@ -89,18 +123,50 @@ func appCacheItems(env *engine.Env) []engine.Target {
 		if env.Whitelist != nil && env.Whitelist.Protected(path) {
 			continue
 		}
-		out = append(out, trashEntry(env, "user-cache.app-caches."+name, name, path, engine.RiskLow, true)...)
+
+		risk := engine.RiskMed
+		regen := engine.RegenCheap
+		on := sweepUnknown
+		gated := false
+		switch {
+		case cheapCacheNames[name]:
+			risk = engine.RiskLow
+			on = true
+		case expensiveCacheNames[name]:
+			regen = engine.RegenExpensive
+			on = false
+			if recent, known := catalog.IsRecent(path, within); known && recent {
+				gated = true
+			}
+		default:
+			if recent, known := catalog.IsRecent(path, within); known && recent {
+				gated = true
+			}
+		}
+		out = append(out, trashEntry(env, "user-cache.app-caches."+name, name, path, risk, regen, on, gated)...)
 	}
 	return out
 }
 
-func trashEntry(env *engine.Env, id, display, path string, risk engine.Risk, on bool) []engine.Target {
+func userCacheMaxAge(env *engine.Env) time.Duration {
+	if env == nil || env.Cfg == nil {
+		return 0
+	}
+	d, err := config.ParseDuration(env.Cfg.UserCache.MaxAge)
+	if err != nil {
+		return 0
+	}
+	return d
+}
+
+func trashEntry(env *engine.Env, id, display, path string, risk engine.Risk, regen engine.Regen, on, gated bool) []engine.Target {
 	if !catalog.FileExists(path) {
 		return nil
 	}
 	t, err := catalog.NewTrashTarget(env, catalog.TrashTargetOptions{
 		ID: id, Category: ID, Display: display, Path: path,
-		Risk: risk, DefaultOn: on, Evidence: []string{"top-level XDG cache entry"},
+		Risk: risk, Regen: regen, Gated: gated, DefaultOn: on,
+		Evidence: []string{"top-level XDG cache entry"},
 	})
 	if err != nil {
 		return nil

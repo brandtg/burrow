@@ -21,6 +21,8 @@ type Config struct {
 	Purge     Purge     `toml:"purge"`
 	Analyze   Analyze   `toml:"analyze"`
 	Downloads Downloads `toml:"downloads"`
+	Dev       Dev       `toml:"dev"`
+	UserCache UserCache `toml:"user-cache"`
 }
 
 // General holds top-level UI settings.
@@ -48,7 +50,32 @@ type Trash struct {
 type Purge struct {
 	Paths        []string `toml:"paths"`
 	ArtifactDirs []string `toml:"artifact_dirs"`
-	MaxAge       string   `toml:"max_age"`
+	// MaxAge is the fallback inactivity window applied to artifact types not
+	// named in MaxAgeByType. Zero disables the age filter.
+	MaxAge string `toml:"max_age"`
+	// MaxAgeByType overrides MaxAge per artifact pattern. An explicit "0"
+	// disables the age filter for that type (for example __pycache__).
+	MaxAgeByType map[string]string `toml:"max_age_by_type"`
+	// ActiveWithin keeps artifacts belonging to a project whose git repository
+	// saw a commit within this window, regardless of artifact age. Zero disables
+	// the active-project guard.
+	ActiveWithin string `toml:"active_within"`
+}
+
+// Dev holds developer-cache settings.
+type Dev struct {
+	// MaxAge gates pre-selection of a dev cache touched within the window. Zero
+	// disables idle gating.
+	MaxAge string `toml:"max_age"`
+}
+
+// UserCache holds the generic XDG cache sweep settings.
+type UserCache struct {
+	// SweepUnknown pre-selects app caches that are neither in the curated cheap
+	// allowlist nor known-expensive. Off by default (curated).
+	SweepUnknown bool `toml:"sweep_unknown"`
+	// MaxAge gates pre-selection of an app cache touched within the window.
+	MaxAge string `toml:"max_age"`
 }
 
 // Analyze holds scan settings.
@@ -82,6 +109,19 @@ func Default() *Config {
 			Paths:        []string{"~/Projects", "~/src", "~/dev", "~/code", "~/work"},
 			ArtifactDirs: []string{"node_modules", "target", ".venv", "venv", "__pycache__", ".next/cache", "build", "dist", ".gradle", "_cacache"},
 			MaxAge:       "7d",
+			MaxAgeByType: map[string]string{
+				"node_modules": "30d",
+				"target":       "7d",
+				".next/cache":  "7d",
+				"__pycache__":  "0",
+				".venv":        "30d",
+				"venv":         "30d",
+				"build":        "14d",
+				"dist":         "14d",
+				".gradle":      "30d",
+				"_cacache":     "30d",
+			},
+			ActiveWithin: "30d",
 		},
 		Analyze: Analyze{
 			OneFileSystem: false,
@@ -93,6 +133,8 @@ func Default() *Config {
 			OldMinAge:           "90d",
 			OldMinSize:          "100M",
 		},
+		Dev:       Dev{MaxAge: "30d"},
+		UserCache: UserCache{SweepUnknown: false, MaxAge: "30d"},
 	}
 }
 
@@ -140,6 +182,20 @@ func (c *Config) ApplyEnv(getenv func(string) string) {
 	}
 	if v := getenv("BURROW_PURGE_PATHS"); v != "" {
 		c.Purge.Paths = splitList(v)
+	}
+	if v := getenv("BURROW_PURGE_ACTIVE_WITHIN"); v != "" {
+		c.Purge.ActiveWithin = v
+	}
+	if v := getenv("BURROW_DEV_MAX_AGE"); v != "" {
+		c.Dev.MaxAge = v
+	}
+	if v := getenv("BURROW_USER_CACHE_MAX_AGE"); v != "" {
+		c.UserCache.MaxAge = v
+	}
+	if v := getenv("BURROW_USER_CACHE_SWEEP_UNKNOWN"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			c.UserCache.SweepUnknown = b
+		}
 	}
 	if v := getenv("BURROW_ANALYZE_ONE_FILE_SYSTEM"); v != "" {
 		if b, err := strconv.ParseBool(v); err == nil {

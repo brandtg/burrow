@@ -13,6 +13,7 @@
       "recovery": "owner",
       "needs_root": true,
       "risk": "low",
+      "regen": "free",
       "default_on": true,
       "selected": true,
       "status": "pending",

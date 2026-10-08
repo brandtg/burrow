@@ -382,16 +382,30 @@ Prefer the **owner command**; fall back to Trash of the cache root only when the
 | `dev.gh-cli` | `gh` present; `gh` cache dir | `env XDG_CACHE_HOME=<parent> gh config clear-cache` | owner | — | on |
 
 > Port these from Mole's `lib/clean/dev.sh` **behaviourally** (its reasoning about what to keep, e.g. Cargo `registry/src`, Poetry `virtualenvs`, `~/.cpan/sources`, HF/torch/W&B model roots) — but re-implement, and cite the reasoning in code comments.
+>
+> **Plan 09:** the `Def` column is the catalog author's intent; effective
+> pre-selection is `DefaultOn && Regen <= cheap && !Gated`. Items classified
+> `expensive` (`go-mod`, `rust-registry-cache`, `rustup-downloads`, `conda`,
+> `nix`) are therefore shown but off. A cache touched within `[dev] max_age`
+> (default 30d) is `Gated` and also left off. See §8.9.
 
 ### 8.5 `user-cache` — XDG cache sweep
 
+The sweep is curated. Only a small allowlist of cheap caches is pre-selected;
+known-expensive caches and unrecognized entries are shown but off.
+
 | Item | Detect | Action | Rec | Def |
 |---|---|---|---|---|
-| `user-cache.app-caches` | entries under `$XDG_CACHE_HOME` not in the dev table | Trash each top-level entry, **except** a protected set (thumbnails? see below) | trash | on |
+| `user-cache.app-caches` (cheap allowlist: `fontconfig`, `mesa_shader_cache`, `gstreamer-1.0`, `tracker3`) | entries under `$XDG_CACHE_HOME` | Trash the entry | trash | on |
+| `user-cache.app-caches` (known-expensive: `huggingface`, `torch`, `ms-playwright`, `bazel`, `JetBrains`, ...) | entries under `$XDG_CACHE_HOME` | Trash the entry; classified `expensive` | trash | off |
+| `user-cache.app-caches` (unrecognized) | entries under `$XDG_CACHE_HOME` | Trash the entry; classified `cheap` | trash | off |
 | `user-cache.thumbnails` | `$XDG_CACHE_HOME/thumbnails` | Trash (regenerable; low risk) | trash | on |
 | `user-cache.trash` | `$XDG_DATA_HOME/Trash` | **Empty** Trash (`trash-empty`) — irreversible; default OFF, explicit | owner | off |
 
-Each individual cache dir is its own row so the user can keep specific ones; the whitelist also covers this.
+Each individual cache dir is its own row so the user can keep specific ones; the
+whitelist also covers this. `[user-cache] sweep_unknown = true` restores the old
+pre-selection of unrecognized entries; `[user-cache] max_age` idle-gates a
+recently-used entry.
 
 ### 8.6 `downloads` — installer/content sweep
 
@@ -408,6 +422,36 @@ Empty Trash is NOT part of default `clean`; exposed as `user-cache.trash` (above
 - Single files: `os.Stat` (on-disk = `stat.Blocks*512` via `syscall.Stat_t`; apparent = `Size()`).
 - Hardlinks: use `fs.HardLinkedItems` so shared inodes aren't double counted (gdu provides this).
 - Unknown/partial → `SizeKnown=false`, render "unknown", never silently show 0 as empty (Mole's `scan_status` lesson).
+
+### 8.9 Regeneration cost and idle gating (Plan 09)
+
+Safe does not imply worth deleting. Every target carries a **regeneration cost**
+`Regen` in addition to `Risk`:
+
+| Regen | Meaning | Selection |
+|---|---|---|
+| `free` | regenerated automatically (thumbnails, frontend caches, `__pycache__`) | pre-selected |
+| `cheap` | regenerated quickly, at most a small download (npm/pip/uv caches) | pre-selected |
+| `expensive` | large download, network, or long rebuild (model weights, browser downloads, Go module cache, Nix store) | shown, **off** |
+| `data` | not meaningfully regenerable | shown, **off** |
+
+`Risk` still describes the blast radius of the deletion; `Regen` describes the
+cost to rebuild. They are independent. Effective pre-selection is:
+
+```
+selected = DefaultOn && Regen <= cheap && Risk != high && !Gated
+```
+
+`Gated` marks a target a policy advises keeping (currently an idle-age window:
+`[dev] max_age`, `[user-cache] max_age`, default 30d). A gated target is shown
+with an evidence line and can still be selected by hand. `Regen` and `Gated`
+affect selection only; they never change how a target executes, and the
+recovery contract (I2) is untouched.
+
+The generic XDG sweep is a curated allowlist rather than a catch-all, and
+`purge` adds project-activity awareness (§11). A `trash`-contract expensive cache
+still occupies space until the Trash is emptied; that trade-off (recoverability
+over immediate reclamation) is deliberate and noted as a follow-up.
 
 ---
 
@@ -453,7 +497,10 @@ Implement the freedesktop.org Trash Specification (spec: `https://specifications
 - **Artifact patterns (v0.1):** `node_modules`, `target` (Rust), `.venv`/`venv`, `__pycache__`, `.next/cache`, `build`, `dist`, `.gradle`, `_cacache`. Pinned list, extensible via config.
 - **Discovery:** scan configured project roots (default `~/Projects`, `~/src`, `~/dev`, `~/code`, `~/work`; overridable via `purge_paths`). Bound depth (default 6). Prune heavy subtrees during scan.
 - **Git protection (port Mole's rule):** for any candidate inside a git repo, if it is git-tracked (or git state is unknown), **keep it**. Use one `git ls-files -z` per repo per run (bounded), not per-candidate. Directories that are themselves a repo, or contain a nested repo, are kept.
-- **Age filter:** default 7d of no file activity (mtime), overridable with `--age`; can't verify → keep.
+- **Active-project guard (Plan 09):** keep a candidate whose owning repository saw a commit within `[purge] active_within` (default 30d), regardless of artifact age. The guard is advisory: a git error contributes no keep reason (the tracked-set check stays the hard protection).
+- **Per-type age (Plan 09):** `[purge] max_age_by_type` gives each artifact its own inactivity window (`node_modules` 30d, `target`/`.next/cache` 7d, `__pycache__` disabled, ...); `max_age` (default 7d) is the fallback. `--age` overrides the whole policy.
+- **Generic-name markers (Plan 09):** `build`, `dist`, `target`, and `.gradle` are only candidates when the parent holds an ecosystem marker (`package.json`, `Cargo.toml`, `pyproject.toml`, `go.mod`, `pom.xml`, `build.gradle`, `Makefile`, ...). Without one the candidate is kept.
+- **Age filter:** default 7d of no file activity (mtime) for types without an override, overridable with `--age`; can't verify → keep.
 - **Action:** **permanent delete** of the artifact dir (Owner contract-ish; rebuildable). Confirm in preview; `--dry-run` supported. (Artifacts are rebuildable so Trash is optional; default is permanent after explicit selection, matching Mole `purge`.)
 - **UI:** grouped by project, with artifact type + age + size; keys per §10 with `space`/`a` selection, `[`/`]` project jump, `/` search.
 
@@ -501,7 +548,19 @@ external_command = ""           # e.g. "trash-put" if backend=external
 [purge]
 paths = ["~/Projects","~/src","~/dev"]
 artifact_dirs = ["node_modules","target",".venv","venv","__pycache__",".next/cache","build","dist",".gradle","_cacache"]
-max_age = "7d"
+max_age = "7d"                  # fallback inactivity window
+active_within = "30d"           # keep artifacts in a recently-committed repo
+[purge.max_age_by_type]         # per-artifact overrides; "0" disables the filter
+node_modules = "30d"
+target = "7d"
+"__pycache__" = "0"
+
+[dev]
+max_age = "30d"                 # idle gate for dev caches
+
+[user-cache]
+sweep_unknown = false           # true = pre-select unrecognized app caches
+max_age = "30d"
 
 [analyze]
 one_file_system = false

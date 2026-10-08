@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -31,6 +32,10 @@ type Git interface {
 	// LsFiles returns tracked file paths relative to repoRoot, using forward
 	// slashes.
 	LsFiles(ctx context.Context, repoRoot string) ([]string, error)
+	// LastCommit returns the committer time of repoRoot's most recent commit.
+	// An error (including a repository with no commits) means the active-project
+	// guard has no signal; callers must not treat it as a keep.
+	LastCommit(ctx context.Context, repoRoot string) (time.Time, error)
 }
 
 // ExecGit is the default Git implementation, backed by the git binary. Each
@@ -78,6 +83,23 @@ func (g ExecGit) LsFiles(ctx context.Context, repoRoot string) ([]string, error)
 		}
 	}
 	return files, nil
+}
+
+// LastCommit runs `git -C repoRoot log -1 --format=%ct`.
+func (g ExecGit) LastCommit(ctx context.Context, repoRoot string) (time.Time, error) {
+	out, err := runGit(ctx, g.timeout(), repoRoot, "log", "-1", "--format=%ct")
+	if err != nil {
+		return time.Time{}, err
+	}
+	s := strings.TrimSpace(string(out))
+	if s == "" {
+		return time.Time{}, errors.New("purge: git log returned no commit time")
+	}
+	secs, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return time.Unix(secs, 0), nil
 }
 
 // gitError carries stderr so a "not a repository" message can be told apart
@@ -193,6 +215,7 @@ type gitCache struct {
 
 	topLevel map[string]topResult
 	tracked  map[string]trackedResult
+	commit   map[string]commitResult
 }
 
 type topResult struct {
@@ -205,6 +228,11 @@ type trackedResult struct {
 	err error
 }
 
+type commitResult struct {
+	when time.Time
+	err  error
+}
+
 func newGitCache(g Git, timeout time.Duration) *gitCache {
 	if timeout <= 0 {
 		timeout = DefaultGitTimeout
@@ -214,6 +242,7 @@ func newGitCache(g Git, timeout time.Duration) *gitCache {
 		timeout:  timeout,
 		topLevel: map[string]topResult{},
 		tracked:  map[string]trackedResult{},
+		commit:   map[string]commitResult{},
 	}
 }
 
@@ -252,4 +281,16 @@ func (c *gitCache) trackedSet(ctx context.Context, repoRoot string) (trackedSet,
 	set := buildTrackedSet(files)
 	c.tracked[repoRoot] = trackedResult{set: set}
 	return set, nil
+}
+
+// lastCommit returns the cached most-recent commit time for repoRoot.
+func (c *gitCache) lastCommit(ctx context.Context, repoRoot string) (time.Time, error) {
+	if r, cached := c.commit[repoRoot]; cached {
+		return r.when, r.err
+	}
+	cctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	when, err := c.git.LastCommit(cctx, repoRoot)
+	c.commit[repoRoot] = commitResult{when: when, err: err}
+	return when, err
 }

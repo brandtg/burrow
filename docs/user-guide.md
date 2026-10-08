@@ -46,12 +46,23 @@ burrow clean --yes --only system.pkg-cache
 
 On a terminal, `clean` opens a preview TUI grouped by category (with an optional
 sub-group level) showing each item's size, recovery contract
-(`[trash]`/`[owner]`, or `[delete]` under `--permanent`), `(root)` marker, and
-risk. Categories and groups with many items start collapsed; `→`/`←` expand and
-collapse, `/` filters, and `space` on a category or group toggles every
-non-high-risk member. High risk rows are never pre-selected. After you choose, a
-**review** screen lists the exact owner argv that will run (large trash
-selections are summarized by group). Only then does anything execute.
+(`[trash]`/`[owner]`, or `[delete]` under `--permanent`), `(root)` marker,
+regeneration cost (`free`/`cheap`/`expensive`/`data`, plus `,active` when the
+cache was used recently), and risk. Categories and groups with many items start
+collapsed; `→`/`←` expand and collapse, `/` filters, and `space` on a category
+or group toggles every auto-selectable member. High-risk, expensive, and
+recently-active rows are never pre-selected; press `k` on a row to whitelist it
+and keep it. After you choose, a **review** screen lists the exact owner argv
+that will run (large trash selections are summarized by group). Only then does
+anything execute.
+
+The `regen` column reflects how costly an item is to rebuild. `free` and `cheap`
+caches (thumbnails, frontend caches, package HTTP caches) are pre-selected;
+`expensive` caches (model weights, browser downloads, Go module cache, Nix
+store) are shown but off, because deleting them means a large re-download or a
+long rebuild. A cache touched within the idle window (`[dev] max_age` /
+`[user-cache] max_age`, default 30d) is marked `,active` and left off so you do
+not churn something you are using.
 
 `--plain`, `--json`, `--yes`, or a non-TTY stdout skip the TUI. `--plain` prints
 a bounded preview (each group capped, with a pointer to `--json`) and requires
@@ -81,7 +92,9 @@ The whitelist is a newline-delimited file at
 `$XDG_CONFIG_HOME/burrow/whitelist` (default `~/.config/burrow/whitelist`).
 Comments (`#`) and blank lines are preserved. A whitelisted path protects itself
 and its parent from the generic `user-cache` sweep, so you can keep a cache you
-care about.
+care about. In the preview TUI, `k` on an item (or a group/category row) adds
+its path(s) to the whitelist and clears the selection, so the choice persists to
+future runs.
 
 ```sh
 burrow clean --whitelist          # interactive add/remove loop on a terminal
@@ -130,10 +143,16 @@ analyze descends across mount points; pass `-x`/`--one-file-system` (or set
 ## Purge
 
 `burrow purge` removes rebuildable project artifacts (`node_modules`, `target`,
-`.venv`, `__pycache__`, ...) under the configured project roots. A candidate
-inside a git repository that is tracked (or whose git state is unknown) is kept.
-`--age <dur>` (default `7d`) requires no recent file activity; `--paths` prints
-the configured roots.
+`.venv`, `__pycache__`, ...) under the configured project roots. A candidate is
+kept when it is git-tracked, when git state cannot be determined, when it
+contains a git repository, when its activity age cannot be verified, when it has
+seen recent activity, when it belongs to an **active project** (the owning repo
+was committed within `active_within`, default 30d), or when a generic name
+(`build`, `dist`, `target`, `.gradle`) has no ecosystem marker beside it. Each
+artifact type has its own inactivity window via `[purge] max_age_by_type`
+(`node_modules` 30d, `target`/`.next/cache` 7d, `__pycache__` off, ...), with
+`max_age` as the fallback. `--age <dur>` overrides the whole policy; `--paths`
+prints the configured roots.
 
 ```sh
 burrow purge --dry-run
@@ -172,7 +191,19 @@ external_command = ""
 
 [purge]
 paths = ["~/Projects","~/src","~/dev"]
-max_age = "7d"
+max_age = "7d"                  # fallback inactivity window
+active_within = "30d"           # keep artifacts in a recently-committed repo
+[purge.max_age_by_type]         # per-artifact overrides; "0" disables the filter
+node_modules = "30d"
+target = "7d"
+"__pycache__" = "0"
+
+[dev]
+max_age = "30d"                 # recently-used dev caches are not pre-selected
+
+[user-cache]
+sweep_unknown = false           # true pre-selects unknown app caches (old behavior)
+max_age = "30d"
 
 [analyze]
 one_file_system = false

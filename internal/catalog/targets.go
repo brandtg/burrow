@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/brandtg/burrow/internal/action"
 	"github.com/brandtg/burrow/internal/engine"
@@ -28,6 +29,8 @@ type TrashTargetOptions struct {
 	Path       string
 	Roots      []string
 	Risk       engine.Risk
+	Regen      engine.Regen
+	Gated      bool
 	DefaultOn  bool
 	Evidence   []string
 	Group      string
@@ -71,6 +74,8 @@ func NewTrashTarget(env *engine.Env, o TrashTargetOptions) (engine.Target, error
 		Action:     action.NewTrash(o.Path, tr, snap, v, false),
 		Recovery:   engine.RecoveryTrash,
 		Risk:       o.Risk,
+		Regen:      o.Regen,
+		Gated:      o.Gated,
 		DefaultOn:  o.DefaultOn,
 		Evidence:   o.Evidence,
 		Group:      o.Group,
@@ -174,4 +179,19 @@ func FileExists(path string) bool {
 // caches are per-user; a path reported outside home is treated as unsafe.
 func InHome(env *engine.Env, path string) bool {
 	return env != nil && env.Home != "" && safe.WithinRoot(path, env.Home)
+}
+
+// IsRecent reports whether path has been modified within the given window,
+// using the path's own mtime (cheap; no tree walk). within <= 0 disables the
+// check and reports recent=false. known is false when the path cannot be
+// stat'd; callers should then not gate the item (nothing was proven).
+func IsRecent(path string, within time.Duration) (recent, known bool) {
+	if within <= 0 || path == "" {
+		return false, true
+	}
+	fi, err := os.Lstat(path)
+	if err != nil {
+		return false, false
+	}
+	return time.Since(fi.ModTime()) < within, true
 }

@@ -61,6 +61,11 @@ Machine-readable form (one edge per line, `A -> B` means B depends on A):
 03 -> 08
 04 -> 08
 05 -> 08
+03 -> 09
+04 -> 09
+05 -> 09
+06 -> 09
+08 -> 09
 ```
 
 ---
@@ -77,6 +82,7 @@ Machine-readable form (one edge per line, `A -> B` means B depends on A):
 | 06 | `06-purge.md` | M5 | 01, 02 | 07 | 04, 05 | done |
 | 07 | `07-polish-distro-packaging.md` | M6 | 02, 03, 04, 05, 06 | — | — | done |
 | 08 | `08-clean-tui-ux.md` | M7 | 03, 04, 05 | — | — | in progress |
+| 09 | `09-curated-cleanup.md` | M8 | 03, 04, 05, 06, 08 | — | — | done |
 
 Plans 01-07 landed and `make gate` is green. The audit, deviations, known
 gaps, and the open findings (F1-F6) are tracked in `docs/status.md`; read it
