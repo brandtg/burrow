@@ -112,7 +112,8 @@ burrow version
 ### 5.3 `analyze` flags
 ```
 -a, --apparent            Show apparent size vs on-disk (default: on-disk, i.e. blocks*512).
--x, --one-file-system     Don't cross mount points.
+-x, --one-file-system     Don't cross mount points (default; btrfs subvolumes on the same device stay in scope).
+--cross-mounts            Descend into nested mounts on other filesystems.
 -H, --no-hidden           Skip dotfiles.
 --depth <n>               Non-interactive depth (with --json).
 -t, --top <n>             Non-interactive top-N largest.
@@ -421,6 +422,16 @@ Empty Trash is NOT part of default `clean`; exposed as `user-cache.trash` (above
 - Directory trees: gdu's analyzer (`analyze.CreateAnalyzer()`), fall back to `du -skP` under timeout.
 - Single files: `os.Stat` (on-disk = `stat.Blocks*512` via `syscall.Stat_t`; apparent = `Size()`).
 - Hardlinks: use `fs.HardLinkedItems` so shared inodes aren't double counted (gdu provides this).
+- **Shared extents (reflinks).** On reflink-capable filesystems (btrfs, xfs) `du`, `stat`, and
+  gdu all charge every inode the full block count of its extents, so a tree of reflinked copies
+  (for example `cp --reflink`-ed `node_modules`) is reported at N times its real size. Analyze
+  re-attributes on-disk sizes with `FS_IOC_FIEMAP`: each physical extent is counted once across
+  the scanned tree and split evenly among the scanned files that reference it, so a directory
+  total equals the bytes that subtree actually occupies. Files without shared extents are left
+  untouched, so the pass is a no-op on a tree without reflinks and never runs on a filesystem
+  that cannot share blocks. Semantics: the number is the unique physical bytes *referenced by
+  the scanned tree*; an extent shared with a file outside the scanned root is still charged to
+  the in-tree file, so scan a common parent to dedup across it. Apparent sizes are unaffected.
 - Unknown/partial → `SizeKnown=false`, render "unknown", never silently show 0 as empty (Mole's `scan_status` lesson).
 
 ### 8.9 Regeneration cost and idle gating (Plan 09)
@@ -478,7 +489,8 @@ Implement the freedesktop.org Trash Specification (spec: `https://specifications
 
 ## 10. Analyze module
 
-- **Engine:** gdu's `analyze.CreateAnalyzer()` / `CreateTopDirAnalyzer()`; item type `fs.Item`; ignore `/proc,/dev,/sys,/run` by default; honor `-x`, `-H`, `-a`.
+- **Engine:** gdu's `analyze.CreateAnalyzer()` / `CreateTopDirAnalyzer()`; item type `fs.Item`; ignore `/proc,/dev,/sys` by default; honor `-x`, `-H`, `-a`.
+- **Mount boundary (default on).** A scan stays within the backing store of the path it was given, measured from `/proc/self/mountinfo` by mount source so btrfs subvolumes on one device (`/`, `/home`) remain in scope. Nested mounts on a different store are skipped and reported: real filesystems appear in `skipped_mounts` (and a TUI header warning), while virtual mounts (tmpfs, proc, fuse, overlay) are skipped silently. `--cross-mounts` descends into them; `-x` forces the boundary on. An ignore entry that is the scan root or an ancestor of it is dropped, so a configured ignore can never prune the tree the user asked to scan.
 - **UI (Bubble Tea):** a navigable tree list.
   - Keys: `↑/k` `↓/j` move, `→/l/Enter` enter dir, `←/h` parent, `s` sort size, `n` sort name, `t` sort mtime, `c` item count toggle, `/` filter, `d` trash selected, `D` trash highlighted, `space` multi-select, `a` select all in view, `?` help, `q` quit.
   - Header: path breadcrumb, free space (`statfs`), total under cursor, sort mode.
@@ -486,8 +498,9 @@ Implement the freedesktop.org Trash Specification (spec: `https://specifications
   - **`d`/`D` route through `trash.Put`** with identity snapshot + confirm; disabled under `--no-delete`.
 - **Non-interactive:** `burrow analyze --json PATH` emits a stable schema:
   ```json
-  {"path":"...","total_size":N,"total_files":N,"entries":[{"name":"...","path":"...","size":N,"is_dir":true}],"largest":[...],"scan_status":"complete|partial|unavailable"}
+  {"path":"...","total_size":N,"total_files":N,"entries":[{"name":"...","path":"...","size":N,"is_dir":true}],"largest":[...],"scan_status":"complete|partial|unavailable","skipped_mounts":[{"path":"...","source":"...","fstype":"..."}]}
   ```
+  `skipped_mounts` is omitted when the scan crossed no mount boundary.
 - Reuse gdu rather than re-render its TUI, so we can fold in "this dir is a burrow category" hints later.
 
 ---
@@ -563,8 +576,8 @@ sweep_unknown = false           # true = pre-select unrecognized app caches
 max_age = "30d"
 
 [analyze]
-one_file_system = false
-ignore = ["/proc","/dev","/sys","/run"]
+one_file_system = true          # stay on the root's backing store; --cross-mounts overrides
+ignore = ["/proc","/dev","/sys"]
 
 [downloads]
 installer_extensions = [".deb",".rpm",".AppImage",".iso",".pkg.tar.zst",".snap"]

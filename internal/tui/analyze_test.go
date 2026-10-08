@@ -260,6 +260,28 @@ func TestAnalyzeHeaderWarnsOnPartialScan(t *testing.T) {
 	}
 }
 
+func TestAnalyzeHeaderWarnsOnSkippedMounts(t *testing.T) {
+	root := &scan.Node{
+		Name: "root", Path: "/root", IsDir: true, SizeKnown: true,
+		Children: []*scan.Node{{Name: "a", Path: "/root/a", Size: 1, SizeKnown: true}},
+		SkippedMounts: []scan.SkippedMount{{
+			Path: "/root/other", Source: "/dev/sdb1", Fstype: "ext4",
+		}},
+	}
+	m := NewAnalyzeModel(AnalyzeConfig{Root: root, Color: false, UID: os.Getuid()})
+	if got := m.header(); !strings.Contains(got, "skipped 1 mount") || !strings.Contains(got, "/root/other") {
+		t.Fatalf("header missing skipped-mount warning: %q", got)
+	}
+	complete := &scan.Node{
+		Name: "root", Path: "/root", IsDir: true, SizeKnown: true,
+		Children: []*scan.Node{{Name: "a", Path: "/root/a", Size: 1, SizeKnown: true}},
+	}
+	mc := NewAnalyzeModel(AnalyzeConfig{Root: complete, Color: false, UID: os.Getuid()})
+	if got := mc.header(); strings.Contains(got, "skipped") {
+		t.Fatalf("complete scan should not warn about mounts: %q", got)
+	}
+}
+
 func TestSkippedSelectionDoesNotShadowCursor(t *testing.T) {
 	base := t.TempDir()
 	real := filepath.Join(base, "real")

@@ -18,7 +18,7 @@ func TestDefaults(t *testing.T) {
 	if c.Trash.Backend != "native" {
 		t.Fatalf("trash backend = %q", c.Trash.Backend)
 	}
-	if len(c.Analyze.Ignore) == 0 || c.Analyze.OneFileSystem {
+	if len(c.Analyze.Ignore) == 0 || !c.Analyze.OneFileSystem {
 		t.Fatalf("unexpected analyze defaults: %+v", c.Analyze)
 	}
 }
