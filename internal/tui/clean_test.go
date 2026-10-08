@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/brandtg/burrow/internal/engine"
+	"github.com/brandtg/burrow/internal/whitelist"
 )
 
 func samplePlan() *engine.Plan {
@@ -190,5 +191,64 @@ func TestCleanModelViewRenders(t *testing.T) {
 	m.screen = 1
 	if got := m.View(); !strings.Contains(got, "dry run: nothing will run") {
 		t.Fatalf("review view missing dry-run notice:\n%s", got)
+	}
+}
+
+func TestCleanModelKeepWhitelists(t *testing.T) {
+	wlPath := filepath.Join(t.TempDir(), "whitelist")
+	mgr := whitelist.NewManager(wlPath)
+	if err := mgr.Load(); err != nil {
+		t.Fatal(err)
+	}
+	item := &engine.PlannedItem{
+		Target: engine.Target{
+			ID: "user-cache.app-caches.huggingface", Category: "user-cache",
+			Display: "huggingface", Path: "/home/u/.cache/huggingface",
+			SizeBytes: 10, SizeKnown: true, Recovery: engine.RecoveryTrash,
+			Risk: engine.RiskMed, Regen: engine.RegenExpensive,
+		},
+		CategoryTitle: "User cache",
+	}
+	plan := &engine.Plan{RunID: "T", Command: "clean", Items: []*engine.PlannedItem{item}}
+	m := NewCleanModel(CleanConfig{Plan: plan, Whitelist: mgr})
+	for i, r := range m.rows {
+		if r.kind == rowItem {
+			m.cursor = i
+		}
+	}
+	m.keep()
+	if !item.Kept || item.Selected {
+		t.Fatalf("keep must mark kept and deselect: %+v", item)
+	}
+	data, err := os.ReadFile(wlPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "/home/u/.cache/huggingface") {
+		t.Fatalf("whitelist not written: %q", data)
+	}
+}
+
+func TestSelectAllSkipsExpensiveAndGated(t *testing.T) {
+	mk := func(id string, regen engine.Regen, gated bool) *engine.PlannedItem {
+		return &engine.PlannedItem{Target: engine.Target{
+			ID: id, Category: "dev", Display: id, Recovery: engine.RecoveryTrash,
+			Risk: engine.RiskLow, Regen: regen, Gated: gated,
+		}, CategoryTitle: "Dev"}
+	}
+	free := mk("dev.free", engine.RegenFree, false)
+	expensive := mk("dev.expensive", engine.RegenExpensive, false)
+	gated := mk("dev.gated", engine.RegenCheap, true)
+	plan := &engine.Plan{RunID: "T", Command: "clean", Items: []*engine.PlannedItem{free, expensive, gated}}
+	m := NewCleanModel(CleanConfig{Plan: plan})
+	m.selectAll()
+	if !free.Selected {
+		t.Fatal("free item should be selected by select-all")
+	}
+	if expensive.Selected {
+		t.Fatal("expensive item must not be selected by select-all")
+	}
+	if gated.Selected {
+		t.Fatal("gated item must not be selected by select-all")
 	}
 }

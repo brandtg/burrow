@@ -104,10 +104,11 @@ func (a *App) runClean(f cleanFlags) error {
 	interactive := isTerminal(a.Out) && !a.Flags.JSON && !f.plain && !a.Flags.Yes
 	if interactive {
 		confirmed, aborted, err := tui.RunClean(tui.CleanConfig{
-			Plan:     plan,
-			Platform: platform,
-			Color:    color,
-			DryRun:   env.DryRun,
+			Plan:      plan,
+			Platform:  platform,
+			Color:     color,
+			DryRun:    env.DryRun,
+			Whitelist: a.whitelistManager(env),
 		})
 		if err != nil {
 			return err
@@ -160,6 +161,20 @@ func (a *App) reconcile(cats []engine.Category, plan *engine.Plan) {
 			rec.Reconcile(plan)
 		}
 	}
+}
+
+// whitelistManager loads the whitelist for the interactive keep key. A load
+// failure returns nil so the key is disabled rather than risking a clobbering
+// save.
+func (a *App) whitelistManager(env *engine.Env) *whitelist.Manager {
+	if env == nil || env.Paths.Whitelist == "" {
+		return nil
+	}
+	mgr := whitelist.NewManager(env.Paths.Whitelist)
+	if err := mgr.Load(); err != nil {
+		return nil
+	}
+	return mgr
 }
 
 // runWhitelist loads the whitelist manager and either runs the interactive
@@ -330,8 +345,10 @@ type cleanItemJSON struct {
 	Permanent  bool     `json:"permanent,omitempty"`
 	NeedsRoot  bool     `json:"needs_root"`
 	Risk       string   `json:"risk"`
+	Regen      string   `json:"regen"`
 	DefaultOn  bool     `json:"default_on"`
 	Selected   bool     `json:"selected"`
+	Kept       bool     `json:"kept,omitempty"`
 	Status     string   `json:"status"`
 	Reason     string   `json:"reason,omitempty"`
 	Argv       []string `json:"argv,omitempty"`
@@ -386,8 +403,10 @@ func (a *App) cleanJSON(plan *engine.Plan, sum *engine.Summary, dryRun bool) err
 			Permanent:  it.Permanent,
 			NeedsRoot:  it.Target.NeedsRoot,
 			Risk:       it.Target.Risk.String(),
+			Regen:      it.Target.Regen.String(),
 			DefaultOn:  it.Target.DefaultOn,
 			Selected:   it.Selected,
+			Kept:       it.Kept,
 			Status:     it.Status,
 			Reason:     it.Reason,
 			Argv:       it.Argv,

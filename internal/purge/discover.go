@@ -28,6 +28,12 @@ type Options struct {
 	// MaxAge is the inactivity window. Artifacts with activity newer than this
 	// are kept. Zero disables the age filter.
 	MaxAge time.Duration
+	// MaxAgeByType overrides MaxAge per artifact pattern. A present key with a
+	// zero value disables the age filter for that type.
+	MaxAgeByType map[string]time.Duration
+	// ActiveWithin keeps an artifact whose owning repository saw a commit within
+	// this window, regardless of artifact age. Zero disables the guard.
+	ActiveWithin time.Duration
 	// Now is the reference time for the age filter. Zero uses time.Now.
 	Now time.Time
 	// Git is the git query implementation. Nil uses ExecGit.
@@ -140,6 +146,10 @@ func scanRoot(ctx context.Context, root string, opts Options, git *gitCache) ([]
 // uncertainty sets KeepReason (fail closed).
 func classify(ctx context.Context, p, pattern, root string, opts Options, git *gitCache) Artifact {
 	a := Artifact{Path: p, Type: pattern, Project: root}
+	now := opts.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
 
 	if snap, err := safe.TakeSnapshot(p); err == nil {
 		a.Snapshot = snap
@@ -166,18 +176,55 @@ func classify(ctx context.Context, p, pattern, root string, opts Options, git *g
 		a.KeepReason = firstReason(a.KeepReason, "git state unknown: "+err.Error())
 	}
 
-	if opts.MaxAge > 0 {
-		now := opts.Now
-		if now.IsZero() {
-			now = time.Now()
+	// A generic directory name (build, dist, target, .gradle) is only a build
+	// artifact when its parent looks like a project. Without a marker it may
+	// hold hand-written content, so keep it.
+	if requiresMarker(pattern) && !hasMarker(filepath.Dir(p)) {
+		a.KeepReason = firstReason(a.KeepReason, "no project marker for "+pattern)
+	}
+
+	// Active-project guard: a repository committed recently is under active work
+	// even if this artifact has not been touched. The guard is advisory; a git
+	// error contributes no keep reason (tracked-set remains the hard check).
+	if opts.ActiveWithin > 0 && a.RepoRoot != "" {
+		if when, err := git.lastCommit(ctx, a.RepoRoot); err == nil && !when.IsZero() {
+			if age := now.Sub(when); age >= 0 && age < opts.ActiveWithin {
+				a.KeepReason = firstReason(a.KeepReason, "active project (last commit "+humanAge(age)+" ago)")
+			}
 		}
+	}
+
+	if window := effectiveMaxAge(opts, pattern); window > 0 {
 		if !a.AgeKnown {
 			a.KeepReason = firstReason(a.KeepReason, "cannot verify activity age")
-		} else if age, _ := a.Age(now); age < opts.MaxAge {
+		} else if age, _ := a.Age(now); age < window {
 			a.KeepReason = firstReason(a.KeepReason, "recent activity")
 		}
 	}
 	return a
+}
+
+// effectiveMaxAge returns the inactivity window for pattern: the per-type
+// override when present (a zero value disables the filter for that type),
+// otherwise the fallback MaxAge.
+func effectiveMaxAge(opts Options, pattern string) time.Duration {
+	if opts.MaxAgeByType != nil {
+		if d, ok := opts.MaxAgeByType[pattern]; ok {
+			return d
+		}
+	}
+	return opts.MaxAge
+}
+
+// humanAge renders a duration as whole days when a day or more, else hours.
+func humanAge(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	if days := int(d.Hours() / 24); days > 0 {
+		return fmt.Sprintf("%dd", days)
+	}
+	return fmt.Sprintf("%dh", int(d.Hours()))
 }
 
 // protectGit keeps a candidate that is git-tracked, and sets the project

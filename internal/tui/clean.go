@@ -13,6 +13,7 @@ import (
 
 	"github.com/brandtg/burrow/internal/config"
 	"github.com/brandtg/burrow/internal/engine"
+	"github.com/brandtg/burrow/internal/whitelist"
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -200,7 +201,10 @@ func reviewLine(it *engine.PlannedItem) string {
 
 func itemLine(it *engine.PlannedItem, color bool) string {
 	check := "[ ]"
-	if it.Selected {
+	switch {
+	case it.Kept:
+		check = "[kept]"
+	case it.Selected:
 		check = "[x]"
 	}
 	rec := "[owner]"
@@ -218,7 +222,11 @@ func itemLine(it *engine.PlannedItem, color bool) string {
 	if it.Target.SizeKnown {
 		size = config.FormatBytes(it.Target.SizeBytes)
 	}
-	return fmt.Sprintf("%s %-26s %10s  %s%s %s", check, it.Target.Display, size, rec, root, riskLabel(it.Target.Risk, color))
+	regen := it.Target.Regen.String()
+	if it.Target.Gated {
+		regen += ",active"
+	}
+	return fmt.Sprintf("%s %-26s %10s  %s%s %-9s %s", check, it.Target.Display, size, rec, root, regen, riskLabel(it.Target.Risk, color))
 }
 
 func riskLabel(r engine.Risk, color bool) string {
@@ -277,26 +285,29 @@ type cleanRow struct {
 }
 
 // CleanConfig carries the dependencies the clean model needs. Plan is the
-// already-built, read-only plan (invariant I1).
+// already-built, read-only plan (invariant I1). Whitelist, when non-nil, is a
+// loaded manager that backs the interactive keep key.
 type CleanConfig struct {
-	Plan     *engine.Plan
-	Platform string
-	Color    bool
-	DryRun   bool
+	Plan      *engine.Plan
+	Platform  string
+	Color     bool
+	DryRun    bool
+	Whitelist *whitelist.Manager
 }
 
 // CleanModel is the Bubble Tea model for `burrow clean`.
 type CleanModel struct {
-	plan     *engine.Plan
-	cats     []engine.CategoryGroup
-	rows     []cleanRow
-	cursor   int
-	offset   int
-	width    int
-	height   int
-	color    bool
-	dryRun   bool
-	platform string
+	plan      *engine.Plan
+	cats      []engine.CategoryGroup
+	rows      []cleanRow
+	cursor    int
+	offset    int
+	width     int
+	height    int
+	color     bool
+	dryRun    bool
+	platform  string
+	whitelist *whitelist.Manager
 
 	collapsedCat map[string]bool
 	collapsedGrp map[string]bool
@@ -324,6 +335,7 @@ func NewCleanModel(cfg CleanConfig) *CleanModel {
 		platform:     cfg.Platform,
 		color:        cfg.Color,
 		dryRun:       cfg.DryRun,
+		whitelist:    cfg.Whitelist,
 		cats:         cfg.Plan.GroupedTree(),
 		collapsedCat: map[string]bool{},
 		collapsedGrp: map[string]bool{},
@@ -435,6 +447,8 @@ func (m *CleanModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.selectAll()
 	case key.Matches(msg, m.keys.Clear):
 		m.clearAll()
+	case key.Matches(msg, m.keys.Keep):
+		m.keep()
 	case key.Matches(msg, m.keys.Filter):
 		m.filtering = true
 		m.filter.Focus()
@@ -555,7 +569,7 @@ func (m *CleanModel) focusHeader(catID, groupID string) {
 
 func (m *CleanModel) selectAll() {
 	for _, it := range m.plan.Items {
-		if it.Target.Risk != engine.RiskHigh {
+		if it.Target.AutoSelectable() {
 			it.Selected = true
 		}
 	}
@@ -567,10 +581,61 @@ func (m *CleanModel) clearAll() {
 	}
 }
 
+// keep whitelists the paths under the cursor and marks them kept, so a cache a
+// person wants to preserve is protected on this and future runs. Group and
+// category rows keep every member path.
+func (m *CleanModel) keep() {
+	if m.cursor >= len(m.rows) {
+		return
+	}
+	row := m.rows[m.cursor]
+	var items []*engine.PlannedItem
+	switch row.kind {
+	case rowItem:
+		items = []*engine.PlannedItem{row.item}
+	case rowGroup:
+		items = row.group.Items
+	case rowCategory:
+		items = row.cat.Items
+	}
+	var paths []string
+	for _, it := range items {
+		if it.Target.Path != "" {
+			paths = append(paths, it.Target.Path)
+		}
+	}
+	if len(paths) == 0 {
+		m.status = "nothing to keep (item has no path)"
+		return
+	}
+	if m.whitelist == nil {
+		m.status = "whitelist unavailable; cannot keep"
+		return
+	}
+	for _, p := range paths {
+		if _, err := m.whitelist.Add(p); err != nil {
+			m.status = "whitelist error: " + err.Error()
+			return
+		}
+	}
+	if err := m.whitelist.Save(); err != nil {
+		m.status = "whitelist save failed: " + err.Error()
+		return
+	}
+	for _, it := range items {
+		if it.Target.Path == "" {
+			continue
+		}
+		it.Kept = true
+		it.Selected = false
+	}
+	m.status = fmt.Sprintf("kept %d path(s) in the whitelist", len(paths))
+}
+
 func selectable(items []*engine.PlannedItem) []*engine.PlannedItem {
 	var out []*engine.PlannedItem
 	for _, it := range items {
-		if it.Target.Risk != engine.RiskHigh {
+		if it.Target.AutoSelectable() {
 			out = append(out, it)
 		}
 	}
@@ -793,6 +858,7 @@ type cleanKeyMap struct {
 	Collapse  key.Binding
 	SelectAll key.Binding
 	Clear     key.Binding
+	Keep      key.Binding
 	Filter    key.Binding
 	Review    key.Binding
 	Help      key.Binding
@@ -808,6 +874,7 @@ func defaultCleanKeys() cleanKeyMap {
 		Collapse:  key.NewBinding(key.WithKeys("left", "h"), key.WithHelp("\u2190/h", "collapse")),
 		SelectAll: key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "all-safe")),
 		Clear:     key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "none")),
+		Keep:      key.NewBinding(key.WithKeys("k"), key.WithHelp("k", "keep")),
 		Filter:    key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search")),
 		Review:    key.NewBinding(key.WithKeys("enter", "r"), key.WithHelp("enter", "review")),
 		Help:      key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
@@ -816,14 +883,14 @@ func defaultCleanKeys() cleanKeyMap {
 }
 
 func (k cleanKeyMap) shortHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Down, k.Toggle, k.SelectAll, k.Filter, k.Review, k.Help, k.Quit}
+	return []key.Binding{k.Up, k.Down, k.Toggle, k.SelectAll, k.Keep, k.Filter, k.Review, k.Help, k.Quit}
 }
 
 func (k cleanKeyMap) fullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.Expand, k.Collapse},
 		{k.Toggle, k.SelectAll, k.Clear, k.Filter},
-		{k.Review, k.Help, k.Quit},
+		{k.Keep, k.Review, k.Help, k.Quit},
 	}
 }
 

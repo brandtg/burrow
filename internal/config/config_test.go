@@ -145,3 +145,60 @@ func TestResolvePaths(t *testing.T) {
 		t.Fatalf("trash = %q", p.TrashDir)
 	}
 }
+
+func TestCuratedDefaults(t *testing.T) {
+	c := Default()
+	if c.Dev.MaxAge != "30d" {
+		t.Fatalf("dev max_age = %q", c.Dev.MaxAge)
+	}
+	if c.UserCache.SweepUnknown || c.UserCache.MaxAge != "30d" {
+		t.Fatalf("user-cache defaults = %+v", c.UserCache)
+	}
+	if c.Purge.ActiveWithin != "30d" {
+		t.Fatalf("purge active_within = %q", c.Purge.ActiveWithin)
+	}
+	if c.Purge.MaxAgeByType["node_modules"] != "30d" || c.Purge.MaxAgeByType["__pycache__"] != "0" {
+		t.Fatalf("purge max_age_by_type = %v", c.Purge.MaxAgeByType)
+	}
+}
+
+func TestApplyEnvCuratedOverrides(t *testing.T) {
+	c := Default()
+	env := map[string]string{
+		"BURROW_DEV_MAX_AGE":              "14d",
+		"BURROW_USER_CACHE_SWEEP_UNKNOWN": "true",
+		"BURROW_USER_CACHE_MAX_AGE":       "7d",
+		"BURROW_PURGE_ACTIVE_WITHIN":      "0",
+	}
+	c.ApplyEnv(func(k string) string { return env[k] })
+	if c.Dev.MaxAge != "14d" || !c.UserCache.SweepUnknown || c.UserCache.MaxAge != "7d" {
+		t.Fatalf("curated env overrides failed: %+v %+v", c.Dev, c.UserCache)
+	}
+	if c.Purge.ActiveWithin != "0" {
+		t.Fatalf("active_within = %q", c.Purge.ActiveWithin)
+	}
+}
+
+func TestLoadPurgeMaxAgeByType(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	content := `
+[purge]
+active_within = "10d"
+[purge.max_age_by_type]
+node_modules = "60d"
+target = "3d"
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Purge.ActiveWithin != "10d" {
+		t.Fatalf("active_within = %q", c.Purge.ActiveWithin)
+	}
+	if c.Purge.MaxAgeByType["node_modules"] != "60d" || c.Purge.MaxAgeByType["target"] != "3d" {
+		t.Fatalf("max_age_by_type = %v", c.Purge.MaxAgeByType)
+	}
+}

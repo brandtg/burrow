@@ -33,6 +33,9 @@ type PlannedItem struct {
 	// the journal so a permanent delete is never presented as recoverable (I2,
 	// spec §7.2).
 	Permanent bool
+	// Kept is true when the user pressed keep in the interactive preview. The
+	// item stays in the plan for transparency but is never executed.
+	Kept bool
 }
 
 // Plan is the read-only result of pipeline steps 2-5 (discover, measure,
@@ -95,7 +98,7 @@ type permanentSetter interface{ SetPermanent(bool) }
 func (p *Plan) Selected() []*PlannedItem {
 	var out []*PlannedItem
 	for _, it := range p.Items {
-		if it.Selected {
+		if it.Selected && !it.Kept {
 			out = append(out, it)
 		}
 	}
@@ -239,7 +242,7 @@ func Build(ctx context.Context, env *Env, opts Options) (*Plan, error) {
 					permanent = true
 				}
 			}
-			selected := t.DefaultOn && t.Risk != RiskHigh
+			selected := t.DefaultOn && t.AutoSelectable()
 			if opts.NoOwner && t.Recovery == RecoveryOwner {
 				selected = false
 			}
@@ -354,7 +357,7 @@ func Execute(ctx context.Context, env *Env, plan *Plan, jw *journal.Writer) *Sum
 	sum.DFBefore = FreeBytes("/")
 
 	for _, it := range plan.Items {
-		if !it.Selected {
+		if !it.Selected || it.Kept {
 			continue
 		}
 		if ctx.Err() != nil {

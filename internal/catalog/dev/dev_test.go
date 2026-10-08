@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/brandtg/burrow/internal/catalog/dev"
 	"github.com/brandtg/burrow/internal/config"
@@ -90,6 +91,11 @@ func runOnly(t *testing.T, env *engine.Env, id string) *engine.Summary {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	// The test exercises execution and guards; force-select regardless of the
+	// selection policy (idle gating, regeneration cost).
+	for _, it := range plan.Items {
+		it.Selected = true
 	}
 	return engine.Execute(context.Background(), env, plan, nil)
 }
@@ -518,5 +524,55 @@ func TestPycacheGroupsByProject(t *testing.T) {
 		if !strings.HasSuffix(g, string(filepath.Separator)+"alpha") && !strings.HasSuffix(g, string(filepath.Separator)+"beta") {
 			t.Fatalf("%s grouped under %q, want alpha or beta", id, g)
 		}
+	}
+}
+
+func TestDevIdleGateAndRegen(t *testing.T) {
+	env := testEnv(t, true)
+	// No owner tools: discovery uses the documented cache roots.
+	t.Setenv("PATH", t.TempDir())
+	fresh := filepath.Join(env.Home, ".npm", "_cacache")
+	old := filepath.Join(env.XDGCache, "pip")
+	mkdirs(t, fresh, old)
+	oldTime := time.Now().Add(-90 * 24 * time.Hour)
+	if err := os.Chtimes(old, oldTime, oldTime); err != nil {
+		t.Fatal(err)
+	}
+	byID := discover(t, env)
+
+	npm := byID["dev.npm"]
+	if !npm.Gated {
+		t.Fatalf("fresh npm cache should be gated: %+v", npm)
+	}
+	if npm.AutoSelectable() {
+		t.Fatal("gated npm cache must not be auto-selectable")
+	}
+	if npm.Regen != engine.RegenCheap {
+		t.Fatalf("npm regen = %v, want cheap", npm.Regen)
+	}
+
+	pip := byID["dev.pip"]
+	if pip.Gated {
+		t.Fatalf("old pip cache should not be gated: %+v", pip)
+	}
+	if !pip.AutoSelectable() {
+		t.Fatal("old pip cache should be auto-selectable")
+	}
+}
+
+func TestDevExpensiveNotAutoSelectable(t *testing.T) {
+	env := testEnv(t, true)
+	t.Setenv("PATH", t.TempDir())
+	mkdirs(t, filepath.Join(env.Home, "go", "pkg", "mod"))
+	byID := discover(t, env)
+	tg, ok := byID["dev.go-mod"]
+	if !ok {
+		t.Fatalf("missing dev.go-mod: %v", keys(byID))
+	}
+	if tg.Regen != engine.RegenExpensive {
+		t.Fatalf("go-mod regen = %v, want expensive", tg.Regen)
+	}
+	if tg.AutoSelectable() {
+		t.Fatal("expensive go-mod cache must not be auto-selectable")
 	}
 }

@@ -79,6 +79,29 @@ If a required condition cannot be proven (identity changed, owner is busy, Trash
 unavailable, command timed out), `burrow` **skips that item and records why**. It
 never silently downgrades to a permanent delete.
 
+## Curated by default
+
+Safe is not the same as smart. A 10 KB thumbnail cache and a 100 GB
+HuggingFace model cache are both safe to delete in the sense that the tool can
+recover or re-fetch them, but only one is worth deleting by default. Every item
+therefore carries a **regeneration cost** (`free`/`cheap`/`expensive`/`data`)
+next to its risk, and only `free`/`cheap` items are ever pre-selected:
+
+- **Expensive caches** (model weights, browser downloads, IDE indexes, Go module
+  cache, Nix store, conda) are shown but off. Deleting them means a large
+  re-download or a long rebuild.
+- **Recently-used caches** are idle-gated (`[dev]`/`[user-cache] max_age`,
+  default 30d) and left off, so a toolchain you are actively using is not
+  churned.
+- The generic XDG sweep is a **curated allowlist**, not a catch-all: unknown
+  entries are off unless you opt in with `[user-cache] sweep_unknown`.
+- `purge` knows about **active projects**: an artifact in a repo committed
+  within `active_within` (default 30d) is kept, `node_modules` gets a longer
+  window than `target`, and a generic `build/` with no project marker is left
+  alone.
+
+Press `k` in the preview to whitelist a path and keep it for good.
+
 ## Command surface
 
 ```
@@ -184,7 +207,10 @@ Each item prefers its owner command and falls back to trashing a documented
 cache root only when the owner command is unavailable. Owner caches are
 per-user: they are resolved by asking the owner (`npm config get cache`,
 `go env GOMODCACHE`, ...) immediately before acting and are never elevated.
-Every dev item is low risk and default ON.
+Items are classified by regeneration cost: `free`/`cheap` caches are
+pre-selected, while `expensive` caches (Go module cache, Cargo registry, conda,
+Nix store, rustup downloads) are shown but off. A cache touched within
+`[dev] max_age` (default 30d) is marked `,active` and not pre-selected.
 
 | Item | Action | Recovery | Guard | Risk | Default |
 |---|---|---|---|---|---|
@@ -219,16 +245,24 @@ Poetry `virtualenvs`, CPAN `sources`) are asserted by tests.
 
 ### `user-cache` — XDG cache sweep
 
-| Item | Action | Recovery | Risk | Default |
-|---|---|---|---|---|
-| `user-cache.app-caches.*` | trash each top-level `$XDG_CACHE_HOME` entry not owned by a dev item | trash | low | on |
-| `user-cache.thumbnails` | trash `$XDG_CACHE_HOME/thumbnails` | trash | low | on |
-| `user-cache.trash` | empty `$XDG_DATA_HOME/Trash` (irreversible) | owner | high | off |
+The sweep is **curated, not exhaustive**. Only a small allowlist of cheap caches
+is pre-selected; expensive caches and unrecognized entries are shown but off, so
+the preview never proposes deleting something costly to rebuild.
 
-A whitelisted path protects itself and its parent from the sweep, and a small
-protected set (`thumbnails`, `burrow`, `dconf`, `keyrings`, `gvfs`, `pulse`,
-`systemd`) is never swept because it holds settings or runtime state rather than
-regenerable data.
+| Item | Action | Recovery | Risk | Regen | Default |
+|---|---|---|---|---|---|
+| `user-cache.app-caches.*` (cheap allowlist: fontconfig, mesa shader cache, gstreamer, tracker3) | trash each top-level `$XDG_CACHE_HOME` entry | trash | low | free/cheap | on |
+| `user-cache.app-caches.*` (known-expensive: huggingface, torch, ms-playwright, bazel, JetBrains, ...) | trash | trash | med | expensive | off |
+| `user-cache.app-caches.*` (unrecognized) | trash | trash | med | cheap | off |
+| `user-cache.thumbnails` | trash `$XDG_CACHE_HOME/thumbnails` | trash | low | free | on |
+| `user-cache.trash` | empty `$XDG_DATA_HOME/Trash` (irreversible) | owner | high | — | off |
+
+`[user-cache] sweep_unknown = true` restores the old behavior of pre-selecting
+unrecognized app caches. `[user-cache] max_age` idle-gates an app cache touched
+recently. A whitelisted path protects itself and its parent from the sweep, and
+a small protected set (`thumbnails`, `burrow`, `dconf`, `keyrings`, `gvfs`,
+`pulse`, `systemd`) is never swept because it holds settings or runtime state
+rather than regenerable data.
 
 ### `downloads` — installer/content sweep
 
@@ -253,7 +287,13 @@ protection:
 
 The artifact list is pinned and extensible via `[purge] artifact_dirs`. A
 candidate inside a git repo that is tracked (or whose git state is unknown) is
-kept. See `docs/user-guide.md` and `burrow purge --paths`.
+kept. A candidate is also kept when it belongs to an active project (the owning
+repo was committed within `[purge] active_within`, default 30d), when a generic
+name (`build`, `dist`, `target`, `.gradle`) has no ecosystem marker beside it,
+or when it is newer than its per-type window. Each artifact type has its own
+window via `[purge] max_age_by_type` (`node_modules` 30d, `target`/`.next/cache`
+7d, `__pycache__` disabled, ...); `max_age` (default 7d) is the fallback. See
+`docs/user-guide.md` and `burrow purge --paths`.
 
 ### Whitelist manager
 

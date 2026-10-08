@@ -1,6 +1,7 @@
 # burrow v0.1 status, deviations, and next steps
 
-Last reviewed: 2026-10-07, at commit `f801ec9` (Plan 07 merged to `main`).
+Last reviewed: 2026-10-07, at commit `f801ec9` (Plan 07 merged to `main`); Plan 09
+(curated cleanup) landed on top of Plan 08.
 
 This is the audit companion to the plan set. It answers three questions: how much
 of the plan landed, where the code deviated and whether the deviation was an
@@ -32,6 +33,40 @@ Rough plan coverage (acceptance criteria met, not lines of code):
 | 05 containers + flatpak/snap | ~90% | `snap.cache` and `k8s-evicted` intentionally omitted |
 | 06 purge | ~95% | test gaps only |
 | 07 polish + dnf + packaging | ~95% | release artifacts not yet built/released |
+| 09 curated cleanup | ~95% | active-project guard is commit-recency only (no dirty-tree check) |
+
+## Plan 09 — curated cleanup (landed)
+
+v0.1 was safe but indiscriminate: a thumbnail cache and a 100 GB model cache
+were both "low risk, default on", the XDG sweep was a catch-all, and purge
+judged staleness from the artifact's own mtime. Plan 09 adds the missing
+knowledge. The safety contract (I1-I7) is untouched.
+
+- **Regeneration cost.** `engine.Target` gained `Regen`
+  (`free`/`cheap`/`expensive`/`data`) and `Gated`, independent of `Risk`.
+  Effective pre-selection is `DefaultOn && Regen <= cheap && Risk != high &&
+  !Gated`; bulk selection uses the same predicate. `Regen`/`Gated` affect
+  selection only and never change execution.
+- **Curated XDG sweep.** `internal/catalog/usercache` keeps a cheap allowlist
+  (pre-selected), classifies known-expensive caches (`huggingface`, `torch`,
+  `ms-playwright`, `bazel`, `JetBrains`, ...) as `expensive` and off, and
+  defaults unrecognized entries to off. `[user-cache] sweep_unknown = true`
+  restores the old behavior.
+- **Idle gating.** `[dev]`/`[user-cache] max_age` (default 30d) marks a
+  recently-used cache `Gated` (shown, not pre-selected) with an evidence line.
+- **Purge project activity.** `Git.LastCommit` plus `[purge] active_within`
+  (default 30d) keep artifacts in a recently-committed repo. Per-type windows
+  (`[purge] max_age_by_type`) give `node_modules` 30d, `target`/`.next/cache`
+  7d, `__pycache__` none. Generic names (`build`, `dist`, `target`, `.gradle`)
+  require an ecosystem marker.
+- **Keep action.** `k` in the clean preview whitelists the row's path(s) and
+  clears the selection; the choice persists to future runs.
+
+Deviations/notes: the active-project guard uses commit recency only (a
+repo-wide dirty-tree check would keep every artifact in a repo with one
+unrelated edit, so it was left out); expensive caches stay on the `trash`
+contract, which does not free space until the Trash is emptied (deliberate
+recoverability trade-off, noted as a follow-up).
 
 ## Deviations that are improvements (keep)
 

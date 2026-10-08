@@ -14,6 +14,7 @@ package dev
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -84,7 +85,58 @@ func (*Category) Discover(ctx context.Context, env *engine.Env) ([]engine.Target
 	out = append(out, dockerBuildxItem(env)...)
 	out = append(out, cloudCLIItems(env)...)
 	out = append(out, ghItem(env)...)
+	out = applyRegen(out)
+	out = applyIdleGate(env, out)
 	return out, nil
+}
+
+// regenFor classifies how expensive a dev cache is to rebuild. It gates
+// pre-selection only; it never changes how an item executes.
+func regenFor(id string) engine.Regen {
+	switch id {
+	case "dev.go-mod", "dev.rust-registry-cache", "dev.rustup-downloads", "dev.conda", "dev.nix":
+		return engine.RegenExpensive
+	case "dev.npm", "dev.pnpm", "dev.bun", "dev.pip", "dev.uv",
+		"dev.poetry.artifacts", "dev.poetry.cache", "dev.mise", "dev.corepack", "dev.gh-cli":
+		return engine.RegenCheap
+	}
+	if strings.HasPrefix(id, "dev.gem") {
+		return engine.RegenCheap
+	}
+	return engine.RegenFree
+}
+
+func applyRegen(targets []engine.Target) []engine.Target {
+	for i := range targets {
+		targets[i].Regen = regenFor(targets[i].ID)
+	}
+	return targets
+}
+
+// applyIdleGate marks a dev cache touched within [dev] max_age as gated: it is
+// shown with an evidence line but not pre-selected, so a toolchain a person is
+// actively using is not churned. A cache whose age cannot be established is
+// left selectable.
+func applyIdleGate(env *engine.Env, targets []engine.Target) []engine.Target {
+	if env == nil || env.Cfg == nil {
+		return targets
+	}
+	within, err := config.ParseDuration(env.Cfg.Dev.MaxAge)
+	if err != nil || within <= 0 {
+		return targets
+	}
+	for i := range targets {
+		t := &targets[i]
+		if t.Path == "" {
+			continue
+		}
+		recent, known := catalog.IsRecent(t.Path, within)
+		if known && recent {
+			t.Gated = true
+			t.Evidence = append(t.Evidence, fmt.Sprintf("active within %s; shown but not pre-selected", within))
+		}
+	}
+	return targets
 }
 
 // CacheRoots returns the top-level XDG cache directories the dev category

@@ -324,6 +324,87 @@ func ids(items []*engine.PlannedItem) []string {
 	return out
 }
 
+func TestRegenString(t *testing.T) {
+	cases := map[engine.Regen]string{
+		engine.RegenFree:      "free",
+		engine.RegenCheap:     "cheap",
+		engine.RegenExpensive: "expensive",
+		engine.RegenData:      "data",
+	}
+	for r, want := range cases {
+		if got := r.String(); got != want {
+			t.Fatalf("Regen(%d).String() = %q, want %q", r, got, want)
+		}
+	}
+}
+
+func TestAutoSelectable(t *testing.T) {
+	cases := []struct {
+		name string
+		tgt  engine.Target
+		want bool
+	}{
+		{"free-low", engine.Target{Risk: engine.RiskLow, Regen: engine.RegenFree}, true},
+		{"cheap-low", engine.Target{Risk: engine.RiskLow, Regen: engine.RegenCheap}, true},
+		{"expensive-low", engine.Target{Risk: engine.RiskLow, Regen: engine.RegenExpensive}, false},
+		{"data-low", engine.Target{Risk: engine.RiskLow, Regen: engine.RegenData}, false},
+		{"high-free", engine.Target{Risk: engine.RiskHigh, Regen: engine.RegenFree}, false},
+		{"gated-cheap", engine.Target{Risk: engine.RiskLow, Regen: engine.RegenCheap, Gated: true}, false},
+	}
+	for _, c := range cases {
+		if got := c.tgt.AutoSelectable(); got != c.want {
+			t.Fatalf("%s: AutoSelectable() = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestBuildNeverPreselectsExpensiveOrGated(t *testing.T) {
+	env := testEnv(t, true)
+	free := target("fake.free", engine.RiskLow, true, "")
+	expensive := target("fake.expensive", engine.RiskLow, true, "")
+	expensive.Regen = engine.RegenExpensive
+	gated := target("fake.gated", engine.RiskLow, true, "")
+	gated.Gated = true
+	cat := fakeCategory{id: "fake", targets: []engine.Target{free, expensive, gated}}
+	plan, err := engine.Build(context.Background(), env, engine.Options{Categories: []engine.Category{cat}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := map[string]bool{}
+	for _, it := range plan.Selected() {
+		sel[it.Target.ID] = true
+	}
+	if !sel["fake.free"] {
+		t.Fatalf("free item must be pre-selected; got %v", ids(plan.Selected()))
+	}
+	if sel["fake.expensive"] {
+		t.Fatal("expensive item must not be pre-selected")
+	}
+	if sel["fake.gated"] {
+		t.Fatal("gated item must not be pre-selected")
+	}
+}
+
+func TestKeptItemNeverExecutes(t *testing.T) {
+	env := testEnv(t, false)
+	tgt := target("fake.kept", engine.RiskLow, true, "")
+	ran := false
+	tgt.Action = fakeAction{recovery: engine.RecoveryOwner, run: func(context.Context, bool) (engine.Result, error) {
+		ran = true
+		return engine.Result{Status: engine.StatusOK}, nil
+	}}
+	cat := fakeCategory{id: "fake", targets: []engine.Target{tgt}}
+	plan, err := engine.Build(context.Background(), env, engine.Options{Categories: []engine.Category{cat}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.Items[0].Kept = true
+	sum := engine.Execute(context.Background(), env, plan, nil)
+	if ran || sum.OK != 0 {
+		t.Fatalf("kept item must not execute: ran=%v sum=%+v", ran, sum)
+	}
+}
+
 func TestGroupedTreeBucketsByGroup(t *testing.T) {
 	plan := &engine.Plan{Items: []*engine.PlannedItem{
 		{Target: engine.Target{ID: "a", Category: "dev", Group: "p1", GroupTitle: "proj1"}, CategoryTitle: "Dev"},
