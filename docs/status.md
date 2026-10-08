@@ -151,6 +151,29 @@ same-path trash entry from another run). Covered by
   `st_dev`, so `/home` was skipped with no indication. The default is now `false`
   and an explicit `-x` overrides config (spec §13 precedence); `-x` still skips
   `/home` on such a host.
+- **`analyze` under `/run/media` reported almost nothing (borg-backup bug).** The
+  default ignore list ended in `/run` and matched by prefix, so scanning a path
+  under `/run/media/<user>/<label>` pruned its entire subtree (a 1.7 TiB borg
+  repo reported 449 MiB). `/run` is a tmpfs that hosts real mounts, so it is no
+  longer ignored; the remaining pseudo-filesystems are `/proc,/dev,/sys`.
+  Additionally, an ignore entry that is the scan root or an ancestor of it is now
+  dropped, so a configured ignore can never prune the tree the user asked to
+  scan.
+- **One-file-system boundary is now mount-source aware and the default.** A scan
+  stays on the backing store of its root, measured from `/proc/self/mountinfo` by
+  mount source, so btrfs subvolumes on one device (`/`, `/home`) remain in scope
+  while nested mounts on other stores are skipped and reported as
+  `skipped_mounts` (JSON) / a header warning (TUI). Real filesystems warn; virtual
+  mounts (tmpfs, proc, fuse, overlay) are skipped silently. `--cross-mounts`
+  descends into them; `-x` forces the boundary on. Config default
+  `analyze.one_file_system` is now `true`.
+- **Reflinked copies are no longer counted per inode.** On btrfs/xfs, analyze
+  re-attributes on-disk sizes with `FS_IOC_FIEMAP`: each physical extent counts
+  once across the scanned tree and is split among the scanned files that
+  reference it (spec §8.8). This fixes `cp --reflink`-ed `node_modules` being
+  reported at N times their real size. Semantics: unique physical bytes
+  referenced by the tree; extents shared with files outside the scanned root are
+  still charged to the in-tree file, so scan a common parent for full dedup.
 - **Partial scans were invisible in the TUI.** Permission-denied subtrees only
   set `scan_status=partial` in `--json`; the interactive header now shows
   `partial scan: N item(s) could not be read` (`scan.UnknownCount`), alongside

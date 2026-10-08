@@ -598,6 +598,9 @@ func (m *AnalyzeModel) listHeight() int {
 	if m.unknown > 0 {
 		overhead++
 	}
+	if m.root != nil && len(m.root.SkippedMounts) > 0 {
+		overhead++
+	}
 	h := m.height - overhead
 	if h < 1 {
 		h = 1
@@ -664,12 +667,31 @@ func (m *AnalyzeModel) header() string {
 	line1 := m.styles.header.Render(m.dir.Path)
 	line2 := m.styles.subtle.Render(fmt.Sprintf("%s · %d item(s) · sort %s%s",
 		free, len(m.entries), m.sort, cursorInfo))
+	var warn string
 	if m.unknown > 0 {
-		warn := m.styles.warn.Render(fmt.Sprintf(
-			"partial scan: %d item(s) could not be read (size shown as unknown)", m.unknown))
-		return line1 + "\n" + warn + "\n" + line2
+		warn += m.styles.warn.Render(fmt.Sprintf(
+			"partial scan: %d item(s) could not be read (size shown as unknown)", m.unknown)) + "\n"
 	}
-	return line1 + "\n" + line2
+	if m.root != nil && len(m.root.SkippedMounts) > 0 {
+		warn += m.styles.warn.Render(fmt.Sprintf(
+			"skipped %d mount(s) on other filesystems: %s", len(m.root.SkippedMounts), skippedMountPaths(m.root.SkippedMounts))) + "\n"
+	}
+	return line1 + "\n" + warn + line2
+}
+
+// skippedMountPaths renders the skipped mount points, bounded so a host with
+// many mounts does not overflow the header.
+func skippedMountPaths(skips []scan.SkippedMount) string {
+	const max = 3
+	paths := make([]string, 0, max)
+	for i, s := range skips {
+		if i == max {
+			paths = append(paths, "…")
+			break
+		}
+		paths = append(paths, s.Path)
+	}
+	return strings.Join(paths, ", ")
 }
 
 func (m *AnalyzeModel) list() string {

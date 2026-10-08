@@ -32,6 +32,10 @@ When stdout is not a terminal (or --json is set), analyze behaves like
 	show apparent size instead of on-disk usage
 
 .PP
+\fB--cross-mounts\fP[=false]
+	descend into nested mounts on other filesystems
+
+.PP
 \fB--depth\fP=0
 	non-interactive depth (with --json); 0 = unlimited
 
@@ -49,7 +53,7 @@ When stdout is not a terminal (or --json is set), analyze behaves like
 
 .PP
 \fB-x\fP, \fB--one-file-system\fP[=false]
-	do not descend across mount points
+	do not descend across mount points (default; btrfs subvolumes on the same device stay in scope)
 
 .PP
 \fB-t\fP, \fB--top\fP=10

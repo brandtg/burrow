@@ -128,17 +128,29 @@ a terminal, or with `--json`, it emits a stable document:
 ```json
 {"path":"...","total_size":N,"total_files":N,
  "entries":[{"name":"...","path":"...","size":N,"is_dir":true}],
- "largest":[...],"scan_status":"complete|partial|unavailable"}
+ "largest":[...],"scan_status":"complete|partial|unavailable",
+ "skipped_mounts":[{"path":"...","source":"...","fstype":"..."}]}
 ```
 
-Flags: `-a/--apparent`, `-x/--one-file-system`, `-H/--no-hidden`,
+Flags: `-a/--apparent`, `-x/--one-file-system`, `--cross-mounts`, `-H/--no-hidden`,
 `--depth <n>`, `-t/--top <n>`, `--no-delete`. `--json` accepts a single path.
 
 When a directory cannot be read (for example due to permissions), the scan is
 partial: the interactive UI shows a `partial scan` warning, unreadable entries
-render as `unknown`, and `--json` reports `"scan_status": "partial"`. By default
-analyze descends across mount points; pass `-x`/`--one-file-system` (or set
-`one_file_system = true`) to stay on the starting filesystem.
+render as `unknown`, and `--json` reports `"scan_status": "partial"`.
+
+By default analyze stays on the backing store of the path you give it (measured
+by mount source, so btrfs subvolumes such as `/` and `/home` on one device stay
+in scope). A nested mount on another filesystem is skipped and listed in
+`skipped_mounts` (the interactive UI shows a `skipped N mount(s)` warning);
+scan that path separately. Pass `--cross-mounts` to descend into them anyway, or
+`-x`/`--one-file-system` to force the boundary on.
+
+On reflink-capable filesystems (btrfs, xfs) on-disk sizes are shared-extent
+aware: reflinked copies (for example `cp --reflink`-ed `node_modules`) count once
+across the scanned tree instead of once per copy. The total is the unique
+physical bytes referenced by the tree, so scan a common parent to dedup copies
+that share a source outside the scanned root.
 
 ## Purge
 
@@ -206,8 +218,8 @@ sweep_unknown = false           # true pre-selects unknown app caches (old behav
 max_age = "30d"
 
 [analyze]
-one_file_system = false
-ignore = ["/proc","/dev","/sys","/run"]
+one_file_system = true          # stay on the root's backing store; --cross-mounts overrides
+ignore = ["/proc","/dev","/sys"]
 
 [downloads]
 installer_min_age = "30d"

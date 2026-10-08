@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,8 +22,11 @@ import (
 )
 
 // DefaultIgnore is the default set of pseudo-filesystems a scan does not
-// descend into (spec §10).
-var DefaultIgnore = []string{"/proc", "/dev", "/sys", "/run"}
+// descend into. /run is deliberately absent: it is a tmpfs that hosts real
+// mounts (notably /run/media for removable media), so a prefix ignore there
+// would hide actual filesystems. When the one-file-system boundary is active
+// the pseudo-filesystems below are pruned as separate mounts anyway.
+var DefaultIgnore = []string{"/proc", "/dev", "/sys"}
 
 // Scan status values reported by Status and the --json schema (spec §10).
 const (
@@ -43,7 +47,10 @@ type Options struct {
 	// When nil, DefaultIgnore is used; an explicit empty non-nil slice disables
 	// the default ignores.
 	Ignore []string
-	// OneFileSystem does not descend across mount points.
+	// OneFileSystem keeps the scan on the backing store of its root. Nested
+	// mounts on a different store are skipped; real filesystems among them are
+	// recorded in Node.SkippedMounts. Mounts are compared by source device, so
+	// btrfs subvolumes on one device (/ and /home) stay in scope.
 	OneFileSystem bool
 	// NoHidden skips dotfiles.
 	NoHidden bool
@@ -84,6 +91,20 @@ type Node struct {
 	ItemCount int64
 	Children  []*Node
 	SizeKnown bool // false when the engine could not size this node
+
+	// SkippedMounts lists nested mounts the scan refused to cross because they
+	// are backed by a different store than the root. It is set only on the
+	// root node. Callers surface it so a subtree on another drive is not
+	// silently missing from the totals.
+	SkippedMounts []SkippedMount
+}
+
+// SkippedMount is a nested mount point that a one-file-system scan did not
+// descend into.
+type SkippedMount struct {
+	Path   string
+	Source string
+	Fstype string
 }
 
 // DisplaySize returns the size a presentation layer should show, honoring the
@@ -132,7 +153,10 @@ func (GDU) Scan(ctx context.Context, root string, opts Options) (*Node, error) {
 		stopProgress := startProgress(scanCtx, analyzer, opts.Progress)
 		defer stopProgress()
 	}
-	ignore := makeIgnore(abs, opts)
+	mounts := loadMounts()
+	rootMount, rootMountOK := mountFor(mounts, abs)
+	skips := newSkipCollector()
+	ignore := makeIgnore(abs, opts, mounts, rootMount, rootMountOK, skips)
 	var fileFilter func(string) bool
 	if opts.NoHidden {
 		// gdu applies the ignore predicate only to directories, so hidden
@@ -160,7 +184,15 @@ func (GDU) Scan(ctx context.Context, root string, opts Options) (*Node, error) {
 	// caller. A shared, non-nil HardLinkedItems map makes shared inodes count
 	// once (spec §8.8).
 	item.UpdateStats(make(fs.HardLinkedItems))
-	return build(scanCtx, item, opts.Depth, opts.Depth <= 0), nil
+	tree := build(scanCtx, item, opts.Depth, opts.Depth <= 0)
+	// On reflink-capable filesystems, re-attribute on-disk sizes so shared
+	// extents count once. Only a complete, unbounded tree can be recomputed
+	// bottom-up; a partial or depth-limited tree keeps gdu's per-node sizes.
+	if opts.Depth <= 0 && UnknownCount(tree) == 0 {
+		applySharedExtents(ctx, tree, abs)
+	}
+	tree.SkippedMounts = skips.list()
+	return tree, nil
 }
 
 // Analyze is the Plan 01 entry point, retained for callers that do not need
@@ -384,33 +416,91 @@ func Flatten(n *Node) []*Node {
 
 // makeIgnore builds gdu's ignore predicate from the options, merging the
 // default pseudo-filesystem list when the caller did not supply one.
-func makeIgnore(root string, opts Options) func(name, path string) bool {
+//
+// Two guards keep the predicate from hiding the user's own choice of root:
+// an ignore that is the root or an ancestor of it is dropped (the user asked
+// to scan inside it), and the one-file-system boundary is measured against the
+// backing store of the root, so btrfs subvolumes on the same device are not
+// mistaken for separate filesystems. gdu calls the predicate from multiple
+// goroutines, so the skipped-mount collector is synchronized.
+func makeIgnore(root string, opts Options, mounts []mountEntry, rootMount mountEntry, rootMountOK bool, skips *skipCollector) func(name, path string) bool {
 	ignoreList := opts.Ignore
 	if ignoreList == nil {
 		ignoreList = DefaultIgnore
 	}
+	rootClean := filepath.Clean(root)
 	ignored := make([]string, 0, len(ignoreList))
 	for _, p := range ignoreList {
-		ignored = append(ignored, filepath.Clean(p))
+		clean := filepath.Clean(p)
+		if withinMount(rootClean, clean) {
+			// The ignore is the root or an ancestor of it; applying it would
+			// prune the very tree the caller asked to scan.
+			continue
+		}
+		ignored = append(ignored, clean)
 	}
 	rootDev := deviceOf(root)
 	return func(name, path string) bool {
 		clean := filepath.Clean(path)
 		for _, p := range ignored {
-			if clean == p || strings.HasPrefix(clean, p+string(filepath.Separator)) {
+			if withinMount(clean, p) {
 				return true
 			}
 		}
 		if opts.NoHidden && strings.HasPrefix(name, ".") {
 			return true
 		}
-		if opts.OneFileSystem && rootDev != 0 {
-			if d := deviceOf(clean); d != 0 && d != rootDev {
-				return true
+		if opts.OneFileSystem {
+			if m, ok := mountFor(mounts, clean); ok {
+				if rootMountOK && !sameBacking(m, rootMount) {
+					if !isPseudoFstype(m.fstype) {
+						skips.add(clean, m)
+					}
+					return true
+				}
+			} else if rootDev != 0 {
+				if d := deviceOf(clean); d != 0 && d != rootDev {
+					return true
+				}
 			}
 		}
 		return false
 	}
+}
+
+// skipCollector accumulates nested mounts skipped by the one-file-system
+// boundary. It is safe for concurrent use because gdu's parallel analyzer calls
+// the ignore predicate from many goroutines.
+type skipCollector struct {
+	mu   sync.Mutex
+	seen map[string]SkippedMount
+}
+
+func newSkipCollector() *skipCollector {
+	return &skipCollector{seen: map[string]SkippedMount{}}
+}
+
+func (c *skipCollector) add(path string, m mountEntry) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.seen[path]; ok {
+		return
+	}
+	c.seen[path] = SkippedMount{Path: path, Source: m.source, Fstype: m.fstype}
+}
+
+func (c *skipCollector) list() []SkippedMount {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.seen) == 0 {
+		return nil
+	}
+	out := make([]SkippedMount, 0, len(c.seen))
+	for _, m := range c.seen {
+		out = append(out, m)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
+	return out
 }
 
 func deviceOf(path string) uint64 {

@@ -56,7 +56,12 @@ testdata/analyze/           fixture tree + golden JSON
 - Translate gdu's `fs.Item` tree into our `Node` model. Use `fs.HardLinkedItems`
   semantics so shared inodes are not double-counted (spec §8.8).
 - Honor `Options`: `OneFileSystem`, `NoHidden`, `Apparent`, `Depth`, `Ignore`
-  (default `/proc,/dev,/sys,/run`).
+  (default `/proc,/dev,/sys`). `OneFileSystem` is on by default and is measured
+  against the root's backing store via `/proc/self/mountinfo`, so btrfs
+  subvolumes on one device stay in scope; nested mounts on other stores are
+  reported as skipped. An ignore that is the root or an ancestor of it is dropped.
+- Shared-extent sizing (added after Plan 02): on btrfs/xfs, `FS_IOC_FIEMAP`
+  re-attributes on-disk sizes so reflinked copies count once (spec §8.8).
 - Fallback sizing: `du -skP` under a 90s timeout when the engine cannot provide a
   subtree; single files via `os.Stat` (`Blocks*512` fills `Size`/on-disk,
   `Size()` fills `Apparent`).

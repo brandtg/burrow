@@ -124,8 +124,8 @@ func Default() *Config {
 			ActiveWithin: "30d",
 		},
 		Analyze: Analyze{
-			OneFileSystem: false,
-			Ignore:        []string{"/proc", "/dev", "/sys", "/run"},
+			OneFileSystem: true,
+			Ignore:        []string{"/proc", "/dev", "/sys"},
 		},
 		Downloads: Downloads{
 			InstallerExtensions: []string{".deb", ".rpm", ".AppImage", ".iso", ".pkg.tar.zst", ".snap", ".flatpakref"},

@@ -21,12 +21,13 @@ import (
 
 // analyzeOptions are the analyze-specific flags (spec §5.3).
 type analyzeOptions struct {
-	apparent bool
-	oneFS    bool
-	noHidden bool
-	depth    int
-	top      int
-	noDelete bool
+	apparent    bool
+	oneFS       bool
+	crossMounts bool
+	noHidden    bool
+	depth       int
+	top         int
+	noDelete    bool
 }
 
 func (a *App) newAnalyzeCmd() *cobra.Command {
@@ -52,9 +53,17 @@ When stdout is not a terminal (or --json is set), analyze behaves like
 			if err != nil {
 				return err
 			}
-			// An explicit -x/--one-file-system wins over config; otherwise the
-			// config value applies (spec §13 precedence).
-			if !cmd.Flags().Changed("one-file-system") {
+			// Precedence (spec §13): an explicit --cross-mounts disables the
+			// boundary, an explicit -x/--one-file-system enables it, otherwise
+			// the config value applies. The boundary is on by default so a
+			// scan of a path on one drive does not silently absorb other
+			// mounted filesystems.
+			switch {
+			case cmd.Flags().Changed("cross-mounts") && opts.crossMounts:
+				opts.oneFS = false
+			case cmd.Flags().Changed("one-file-system"):
+				opts.oneFS = true
+			default:
 				opts.oneFS = env.Cfg.Analyze.OneFileSystem
 			}
 			return a.runAnalyze(env, args, opts)
@@ -62,7 +71,8 @@ When stdout is not a terminal (or --json is set), analyze behaves like
 	}
 	f := cmd.Flags()
 	f.BoolVarP(&opts.apparent, "apparent", "a", false, "show apparent size instead of on-disk usage")
-	f.BoolVarP(&opts.oneFS, "one-file-system", "x", false, "do not descend across mount points")
+	f.BoolVarP(&opts.oneFS, "one-file-system", "x", false, "do not descend across mount points (default; btrfs subvolumes on the same device stay in scope)")
+	f.BoolVar(&opts.crossMounts, "cross-mounts", false, "descend into nested mounts on other filesystems")
 	f.BoolVarP(&opts.noHidden, "no-hidden", "H", false, "skip dotfiles")
 	f.IntVar(&opts.depth, "depth", 0, "non-interactive depth (with --json); 0 = unlimited")
 	f.IntVarP(&opts.top, "top", "t", 10, "non-interactive top-N largest entries (with --json)")
@@ -118,6 +128,7 @@ func (a *App) scanRoots(ctx context.Context, paths []string, opts scan.Options) 
 		synth.Size += n.Size
 		synth.Apparent += n.Apparent
 		synth.ItemCount += n.ItemCount
+		synth.SkippedMounts = append(synth.SkippedMounts, n.SkippedMounts...)
 	}
 	sort.SliceStable(synth.Children, func(i, j int) bool {
 		return synth.Children[i].Size > synth.Children[j].Size
@@ -158,14 +169,24 @@ type jsonEntry struct {
 	IsDir bool   `json:"is_dir"`
 }
 
+// jsonSkippedMount is a nested mount the one-file-system boundary refused to
+// cross. It is reported so a subtree on another drive is visible rather than
+// silently absent from the totals.
+type jsonSkippedMount struct {
+	Path   string `json:"path"`
+	Source string `json:"source,omitempty"`
+	Fstype string `json:"fstype,omitempty"`
+}
+
 // jsonReport is the stable --json schema (spec §10).
 type jsonReport struct {
-	Path       string      `json:"path"`
-	TotalSize  int64       `json:"total_size"`
-	TotalFiles int64       `json:"total_files"`
-	Entries    []jsonEntry `json:"entries"`
-	Largest    []jsonEntry `json:"largest"`
-	ScanStatus string      `json:"scan_status"`
+	Path          string             `json:"path"`
+	TotalSize     int64              `json:"total_size"`
+	TotalFiles    int64              `json:"total_files"`
+	Entries       []jsonEntry        `json:"entries"`
+	Largest       []jsonEntry        `json:"largest"`
+	ScanStatus    string             `json:"scan_status"`
+	SkippedMounts []jsonSkippedMount `json:"skipped_mounts,omitempty"`
 }
 
 func (a *App) printAnalyzeJSON(ctx context.Context, path string, opts scan.Options, aopts analyzeOptions) error {
@@ -174,12 +195,13 @@ func (a *App) printAnalyzeJSON(ctx context.Context, path string, opts scan.Optio
 		return err
 	}
 	report := jsonReport{
-		Path:       root.Path,
-		TotalSize:  root.DisplaySize(aopts.apparent),
-		TotalFiles: scan.FileCount(root),
-		Entries:    collectEntries(root, entryDepth(aopts.depth), aopts.apparent),
-		Largest:    largest(root, aopts.top, aopts.apparent),
-		ScanStatus: scan.Status(root),
+		Path:          root.Path,
+		TotalSize:     root.DisplaySize(aopts.apparent),
+		TotalFiles:    scan.FileCount(root),
+		Entries:       collectEntries(root, entryDepth(aopts.depth), aopts.apparent),
+		Largest:       largest(root, aopts.top, aopts.apparent),
+		ScanStatus:    scan.Status(root),
+		SkippedMounts: jsonSkippedMounts(root.SkippedMounts),
 	}
 	enc := json.NewEncoder(a.Out)
 	enc.SetIndent("", "  ")
@@ -227,6 +249,18 @@ func largest(root *scan.Node, top int, apparent bool) []jsonEntry {
 	out := make([]jsonEntry, 0, top)
 	for _, n := range nodes[:top] {
 		out = append(out, jsonEntry{Name: n.Name, Path: n.Path, Size: n.DisplaySize(apparent), IsDir: n.IsDir})
+	}
+	return out
+}
+
+// jsonSkippedMounts converts scan-level skipped mounts into the JSON schema.
+func jsonSkippedMounts(skips []scan.SkippedMount) []jsonSkippedMount {
+	if len(skips) == 0 {
+		return nil
+	}
+	out := make([]jsonSkippedMount, 0, len(skips))
+	for _, s := range skips {
+		out = append(out, jsonSkippedMount{Path: s.Path, Source: s.Source, Fstype: s.Fstype})
 	}
 	return out
 }
