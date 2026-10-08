@@ -323,3 +323,32 @@ func ids(items []*engine.PlannedItem) []string {
 	}
 	return out
 }
+
+func TestGroupedTreeBucketsByGroup(t *testing.T) {
+	plan := &engine.Plan{Items: []*engine.PlannedItem{
+		{Target: engine.Target{ID: "a", Category: "dev", Group: "p1", GroupTitle: "proj1"}, CategoryTitle: "Dev"},
+		{Target: engine.Target{ID: "b", Category: "dev", Group: "p1", GroupTitle: "proj1"}, CategoryTitle: "Dev"},
+		{Target: engine.Target{ID: "c", Category: "dev", Group: "p2", GroupTitle: "proj2"}, CategoryTitle: "Dev"},
+		{Target: engine.Target{ID: "d", Category: "system"}, CategoryTitle: "System"},
+	}}
+	cats := plan.GroupedTree()
+	if len(cats) != 2 {
+		t.Fatalf("categories = %d, want 2", len(cats))
+	}
+	dev := cats[0]
+	if dev.ID != "dev" || len(dev.Items) != 3 {
+		t.Fatalf("dev category = %+v", dev)
+	}
+	if len(dev.Groups) != 2 {
+		t.Fatalf("dev groups = %d, want 2", len(dev.Groups))
+	}
+	if dev.Groups[0].Title != "proj1" || len(dev.Groups[0].Items) != 2 {
+		t.Fatalf("group 0 = %+v", dev.Groups[0])
+	}
+	if dev.Groups[1].Title != "proj2" || len(dev.Groups[1].Items) != 1 {
+		t.Fatalf("group 1 = %+v", dev.Groups[1])
+	}
+	if got := cats[1].Groups[0].ID; got != "" {
+		t.Fatalf("ungrouped category implicit group id = %q, want empty", got)
+	}
+}

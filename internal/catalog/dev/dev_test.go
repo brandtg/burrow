@@ -493,3 +493,30 @@ func TestFixtureKeepDiscard(t *testing.T) {
 		}
 	}
 }
+
+func TestPycacheGroupsByProject(t *testing.T) {
+	env := testEnv(t, true)
+	mkdirs(t,
+		filepath.Join(env.Home, "Projects", "alpha", "pkg", "__pycache__"),
+		filepath.Join(env.Home, "Projects", "beta", "src", "__pycache__"),
+	)
+	byID := discover(t, env)
+	groups := map[string]string{}
+	for id, tg := range byID {
+		if !strings.HasPrefix(id, "dev.pycache.") {
+			continue
+		}
+		if tg.Group == "" || tg.GroupTitle == "" {
+			t.Fatalf("%s has no presentation group: %+v", id, tg)
+		}
+		groups[id] = tg.Group
+	}
+	if len(groups) != 2 {
+		t.Fatalf("expected 2 pycache targets, got %v", keys(byID))
+	}
+	for id, g := range groups {
+		if !strings.HasSuffix(g, string(filepath.Separator)+"alpha") && !strings.HasSuffix(g, string(filepath.Separator)+"beta") {
+			t.Fatalf("%s grouped under %q, want alpha or beta", id, g)
+		}
+	}
+}

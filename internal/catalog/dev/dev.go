@@ -343,10 +343,13 @@ func pycacheItems(env *engine.Env) []engine.Target {
 				continue
 			}
 			seen[dir] = true
+			groupID, groupTitle := pycacheGroup(root, dir)
 			t, err := catalog.NewTrashTarget(env, catalog.TrashTargetOptions{
 				ID: "dev.pycache." + relID(root, dir), Category: ID, Display: "Python bytecode cache",
 				Path: dir, Roots: allowed, Risk: engine.RiskLow, DefaultOn: true,
-				Evidence: []string{"__pycache__ holds regenerable bytecode"},
+				Evidence:   []string{"__pycache__ holds regenerable bytecode"},
+				Group:      groupID,
+				GroupTitle: groupTitle,
 			})
 			if err != nil {
 				continue
@@ -425,6 +428,22 @@ func findDirs(root, name string, depth int) []string {
 	}
 	walk(root, 0)
 	return out
+}
+
+// pycacheGroup buckets a __pycache__ directory by the top-level project under
+// its purge root, so the preview shows a handful of project rows instead of one
+// row per directory. It is presentation-only; each directory keeps its own
+// target, git guard, and path validation.
+func pycacheGroup(root, dir string) (id, title string) {
+	rel, err := filepath.Rel(root, dir)
+	if err != nil {
+		return root, filepath.Base(root)
+	}
+	parts := strings.Split(rel, string(filepath.Separator))
+	if len(parts) >= 2 && parts[0] != "" && parts[0] != "." && parts[0] != ".." {
+		return filepath.Join(root, parts[0]), parts[0]
+	}
+	return root, filepath.Base(root)
 }
 
 func relID(root, dir string) string {

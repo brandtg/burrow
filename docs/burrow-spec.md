@@ -87,8 +87,9 @@ burrow version
 
 ### 5.1 Global flags
 ```
---dry-run                 Never mutate; print the full plan and exit.
+--dry-run                 Never mutate. On a terminal, open the read-only preview TUI; otherwise print the plan and exit.
 -y, --yes                 Skip the interactive confirm (requires a preview unless --dry-run).
+--plain                   Non-interactive plain-text output instead of the TUI (auto when stdout is not a TTY, or with --json/--yes).
 --json                    Machine-readable output (clean/analyze/history/status).
 --only <list>             Comma list of categories or item IDs to include.
 --exclude <list>          Comma list of categories/IDs to exclude.
@@ -555,12 +556,22 @@ A dedicated `safety_test.go` + `testdata/safety/` covering every invariant I1–
 
 ## 16. UX details (clean preview screen)
 
+`clean` is TUI-first: on a terminal the preview TUI opens by default, including
+for `--dry-run` (read-only — confirming shows the plan and exits without
+mutating). `--plain`, `--json`, `--yes`, or a non-TTY stdout select the
+non-interactive path. `--json` remains the stable machine schema.
+
 - Top: detected platform (`Ubuntu 24.04 · apt · systemd · 118 GB free`).
-- Rows grouped by category with a header line (`▸ Developer tools   2.4 GB / 6 items`).
-- Per row: checkbox · name · size · `[trash]`/`[owner]` tag · `(root)` if elevating · risk dot.
-- Footer: `Selected: 3.8 GB across 14 items · [space] toggle [a] all-safe [enter] review [q] back`.
-- A second "review" screen lists every exact path/argv that will run (this is the "what will change" screen; Mole's product filter demands it).
+- Rows are a collapsible tree: category header (`▸ Developer tools   2.4 GB / 6 items`), optional
+  presentation sub-group, then item rows. Categories and groups with many items start collapsed;
+  `→`/`←` expand and collapse, and `space` on a category or group toggles every non-high-risk member.
+- Per row: checkbox · name · size · `[trash]`/`[owner]`/`[delete]` tag · `(root)` if elevating · risk dot.
+- Footer: `Selected: 3.8 GB across 14 items · [space] toggle [a] all-safe [/] search [enter] review [q] quit`.
+- A second "review" screen lists every exact owner argv that will run. Large trash selections are
+  aggregated by group (`trash 327 item(s), 44.5 GB — <project>`); the full per-path list is available
+  via `--json` (this is the "what will change" screen; Mole's product filter demands it).
 - High-risk items render red and are never auto-selected.
+- The non-interactive (`--plain`) preview caps item rows per group and points at `--json` for the full list.
 - After execution: per-item result lines + totals + `Freed X (df: 118GB → 121GB)` + `journal: <path>`.
 
 ---

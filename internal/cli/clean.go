@@ -30,6 +30,7 @@ type cleanFlags struct {
 	noOwner   bool
 	permanent bool
 	whitelist bool
+	plain     bool
 }
 
 func (a *App) newCleanCmd() *cobra.Command {
@@ -46,6 +47,7 @@ func (a *App) newCleanCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&f.noOwner, "no-owner", false, "skip all owner-command/system acts")
 	cmd.Flags().BoolVar(&f.permanent, "permanent", false, "delete trash-contract items permanently instead of trashing")
 	cmd.Flags().BoolVar(&f.whitelist, "whitelist", false, "manage the whitelist")
+	cmd.Flags().BoolVar(&f.plain, "plain", false, "non-interactive plain-text output instead of the TUI")
 	return cmd
 }
 
@@ -96,13 +98,25 @@ func (a *App) runClean(f cleanFlags) error {
 		return a.cleanJSON(plan, nil, true)
 	}
 
-	interactive := isTerminal(a.Out) && !a.Flags.Yes && !a.Flags.DryRun
+	// The TUI is the default view on a terminal, including --dry-run (where it
+	// is read-only). --plain, --json, --yes, or a non-TTY stdout select the
+	// non-interactive path.
+	interactive := isTerminal(a.Out) && !a.Flags.JSON && !f.plain && !a.Flags.Yes
 	if interactive {
-		confirmed, aborted, err := tui.RunInteractive(plan, color)
+		confirmed, aborted, err := tui.RunClean(tui.CleanConfig{
+			Plan:     plan,
+			Platform: platform,
+			Color:    color,
+			DryRun:   env.DryRun,
+		})
 		if err != nil {
 			return err
 		}
 		if aborted || !confirmed {
+			return nil
+		}
+		if env.DryRun {
+			// The read-only TUI showed the plan; nothing may run.
 			return nil
 		}
 	} else if !a.Flags.JSON {
@@ -306,21 +320,23 @@ func planHasPermanent(plan *engine.Plan) bool {
 }
 
 type cleanItemJSON struct {
-	ID        string   `json:"id"`
-	Category  string   `json:"category"`
-	Display   string   `json:"display"`
-	Path      string   `json:"path,omitempty"`
-	Size      int64    `json:"size"`
-	SizeKnown bool     `json:"size_known"`
-	Recovery  string   `json:"recovery"`
-	Permanent bool     `json:"permanent,omitempty"`
-	NeedsRoot bool     `json:"needs_root"`
-	Risk      string   `json:"risk"`
-	DefaultOn bool     `json:"default_on"`
-	Selected  bool     `json:"selected"`
-	Status    string   `json:"status"`
-	Reason    string   `json:"reason,omitempty"`
-	Argv      []string `json:"argv,omitempty"`
+	ID         string   `json:"id"`
+	Category   string   `json:"category"`
+	Display    string   `json:"display"`
+	Path       string   `json:"path,omitempty"`
+	Size       int64    `json:"size"`
+	SizeKnown  bool     `json:"size_known"`
+	Recovery   string   `json:"recovery"`
+	Permanent  bool     `json:"permanent,omitempty"`
+	NeedsRoot  bool     `json:"needs_root"`
+	Risk       string   `json:"risk"`
+	DefaultOn  bool     `json:"default_on"`
+	Selected   bool     `json:"selected"`
+	Status     string   `json:"status"`
+	Reason     string   `json:"reason,omitempty"`
+	Argv       []string `json:"argv,omitempty"`
+	Group      string   `json:"group,omitempty"`
+	GroupTitle string   `json:"group_title,omitempty"`
 }
 
 type cleanJSONDoc struct {
@@ -360,21 +376,23 @@ func (a *App) cleanJSON(plan *engine.Plan, sum *engine.Summary, dryRun bool) err
 			recovery = "delete"
 		}
 		doc.Items = append(doc.Items, cleanItemJSON{
-			ID:        it.Target.ID,
-			Category:  it.Target.Category,
-			Display:   it.Target.Display,
-			Path:      it.Target.Path,
-			Size:      it.Target.SizeBytes,
-			SizeKnown: it.Target.SizeKnown,
-			Recovery:  recovery,
-			Permanent: it.Permanent,
-			NeedsRoot: it.Target.NeedsRoot,
-			Risk:      it.Target.Risk.String(),
-			DefaultOn: it.Target.DefaultOn,
-			Selected:  it.Selected,
-			Status:    it.Status,
-			Reason:    it.Reason,
-			Argv:      it.Argv,
+			ID:         it.Target.ID,
+			Category:   it.Target.Category,
+			Display:    it.Target.Display,
+			Path:       it.Target.Path,
+			Size:       it.Target.SizeBytes,
+			SizeKnown:  it.Target.SizeKnown,
+			Recovery:   recovery,
+			Permanent:  it.Permanent,
+			NeedsRoot:  it.Target.NeedsRoot,
+			Risk:       it.Target.Risk.String(),
+			DefaultOn:  it.Target.DefaultOn,
+			Selected:   it.Selected,
+			Status:     it.Status,
+			Reason:     it.Reason,
+			Argv:       it.Argv,
+			Group:      it.Target.Group,
+			GroupTitle: it.Target.GroupTitle,
 		})
 	}
 	if sum != nil {

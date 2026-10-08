@@ -51,13 +51,26 @@ type Totals struct {
 	Unknown int   `json:"unknown"`
 }
 
+// ItemGroup is an optional presentation sub-group within a category. It is
+// populated from Target.Group; when every item in a category has an empty Group
+// the category has a single implicit group with an empty ID.
+type ItemGroup struct {
+	ID      string
+	Title   string
+	Items   []*PlannedItem
+	Bytes   int64
+	Unknown int
+}
+
 // CategoryGroup is a category's items for the preview.
 type CategoryGroup struct {
-	ID    string
-	Title string
-	Note  string
-	Items []*PlannedItem
-	Bytes int64
+	ID      string
+	Title   string
+	Note    string
+	Items   []*PlannedItem
+	Groups  []ItemGroup
+	Bytes   int64
+	Unknown int
 }
 
 // Options configures Build.
@@ -107,24 +120,52 @@ func TotalsOf(items []*PlannedItem) Totals {
 func (p *Plan) SelectedTotals() Totals { return TotalsOf(p.Selected()) }
 
 // GroupedByCategory returns items grouped by category, preserving plan order.
-func (p *Plan) GroupedByCategory() []CategoryGroup {
-	index := map[string]int{}
+// It is GroupedTree without the sub-group detail.
+func (p *Plan) GroupedByCategory() []CategoryGroup { return p.GroupedTree() }
+
+// GroupedTree returns items as category -> optional group -> item, preserving
+// plan order at every level. The grouping is presentation-only; it never
+// changes which targets execute or how.
+func (p *Plan) GroupedTree() []CategoryGroup {
+	catIndex := map[string]int{}
+	groupIndex := map[string]map[string]int{}
 	var groups []CategoryGroup
 	for _, it := range p.Items {
-		i, ok := index[it.Target.Category]
+		ci, ok := catIndex[it.Target.Category]
 		if !ok {
-			index[it.Target.Category] = len(groups)
+			catIndex[it.Target.Category] = len(groups)
 			groups = append(groups, CategoryGroup{
 				ID:    it.Target.Category,
 				Title: it.CategoryTitle,
 				Note:  it.CategoryNote,
 			})
-			i = len(groups) - 1
+			ci = len(groups) - 1
 		}
-		g := &groups[i]
-		g.Items = append(g.Items, it)
+		cg := &groups[ci]
+		cg.Items = append(cg.Items, it)
+
+		if groupIndex[it.Target.Category] == nil {
+			groupIndex[it.Target.Category] = map[string]int{}
+		}
+		gi, ok := groupIndex[it.Target.Category][it.Target.Group]
+		if !ok {
+			groupIndex[it.Target.Category][it.Target.Group] = len(cg.Groups)
+			title := it.Target.GroupTitle
+			if title == "" {
+				title = it.CategoryTitle
+			}
+			cg.Groups = append(cg.Groups, ItemGroup{ID: it.Target.Group, Title: title})
+			gi = len(cg.Groups) - 1
+		}
+		ig := &cg.Groups[gi]
+		ig.Items = append(ig.Items, it)
+
 		if it.Target.SizeKnown && it.Target.SizeBytes >= 0 {
-			g.Bytes += it.Target.SizeBytes
+			cg.Bytes += it.Target.SizeBytes
+			ig.Bytes += it.Target.SizeBytes
+		} else {
+			cg.Unknown++
+			ig.Unknown++
 		}
 	}
 	return groups

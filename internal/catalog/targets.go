@@ -22,14 +22,16 @@ import (
 
 // TrashTargetOptions configures NewTrashTarget.
 type TrashTargetOptions struct {
-	ID        string
-	Category  string
-	Display   string
-	Path      string
-	Roots     []string
-	Risk      engine.Risk
-	DefaultOn bool
-	Evidence  []string
+	ID         string
+	Category   string
+	Display    string
+	Path       string
+	Roots      []string
+	Risk       engine.Risk
+	DefaultOn  bool
+	Evidence   []string
+	Group      string
+	GroupTitle string
 }
 
 // NewTrashTarget validates, snapshots, and builds a trash-contract target. It
@@ -62,15 +64,17 @@ func NewTrashTarget(env *engine.Env, o TrashTargetOptions) (engine.Target, error
 	}
 	tr := trash.New(env.Paths.TrashDir, env.UID())
 	return engine.Target{
-		ID:        o.ID,
-		Category:  o.Category,
-		Display:   o.Display,
-		Path:      o.Path,
-		Action:    action.NewTrash(o.Path, tr, snap, v, false),
-		Recovery:  engine.RecoveryTrash,
-		Risk:      o.Risk,
-		DefaultOn: o.DefaultOn,
-		Evidence:  o.Evidence,
+		ID:         o.ID,
+		Category:   o.Category,
+		Display:    o.Display,
+		Path:       o.Path,
+		Action:     action.NewTrash(o.Path, tr, snap, v, false),
+		Recovery:   engine.RecoveryTrash,
+		Risk:       o.Risk,
+		DefaultOn:  o.DefaultOn,
+		Evidence:   o.Evidence,
+		Group:      o.Group,
+		GroupTitle: o.GroupTitle,
 	}, nil
 }
 

@@ -58,6 +58,9 @@ Machine-readable form (one edge per line, `A -> B` means B depends on A):
 04 -> 07
 05 -> 07
 06 -> 07
+03 -> 08
+04 -> 08
+05 -> 08
 ```
 
 ---
@@ -73,10 +76,13 @@ Machine-readable form (one edge per line, `A -> B` means B depends on A):
 | 05 | `05-containers-desktop-pkgs.md` | M4 | 03 | 07 | 04, 06 | done |
 | 06 | `06-purge.md` | M5 | 01, 02 | 07 | 04, 05 | done |
 | 07 | `07-polish-distro-packaging.md` | M6 | 02, 03, 04, 05, 06 | — | — | done |
+| 08 | `08-clean-tui-ux.md` | M7 | 03, 04, 05 | — | — | in progress |
 
-All seven plans landed and `make gate` is green. The audit, deviations, known
+Plans 01-07 landed and `make gate` is green. The audit, deviations, known
 gaps, and the open findings (F1-F6) are tracked in `docs/status.md`; read it
-before making further changes.
+before making further changes. Plan 08 is post-v0.1 UX work: it makes the clean
+TUI the default view (including `--dry-run`), adds `--plain` for non-interactive
+output, and collapses large categories.
 
 ---
 
@@ -91,6 +97,7 @@ concurrently, subject to the shared-file notes below.
   - Plan 06 only requires Plan 02, so it may start in Wave 1b (as soon as 02
     merges) if you want to pull it forward. It has no dependency on 03/04/05.
 - **Wave 3:** Plan 07.
+- **Wave 4:** Plan 08 (post-v0.1 UX; depends on the clean catalog from 03/04/05).
 
 A plan is "mergeable" only when its acceptance criteria pass and `scripts/check.sh`
 is green on the branch.
@@ -107,7 +114,8 @@ Agents working in parallel must not both edit the same files. Ownership per plan
 | `internal/scan` | 01 (spike) then 02 | Plan 06 reads `internal/scan`; treat as frozen after 02 |
 | `internal/engine`, `internal/action`, `internal/catalog` (framework) | 03 | 04/05 add catalog *data* + small Discover funcs |
 | `internal/owner`, `internal/distro` | 03 | 04/05/07 add command tables / adapters |
-| `internal/tui` | split by file | `analyze.go` (02), `clean.go` (03), `purge.go` (06). Do not edit another plan's model file. |
+| `internal/tui` | split by file | `analyze.go` (02), `clean.go` (03, rewritten by 08), `purge.go` (06). Do not edit another plan's model file. |
+| `internal/engine` (presentation grouping), `internal/catalog/dev` (pycache grouping) | 08 | Additive only; keep the framework backward compatible. |
 | `internal/cli` | additive | each plan adds its own command file; root wiring touched once in 01 |
 | `cmd/burrow/main.go` | 01 | leave alone after 01 |
 | `internal/metrics` | 07 | new package |

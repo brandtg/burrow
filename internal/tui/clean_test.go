@@ -2,8 +2,10 @@ package tui
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/brandtg/burrow/internal/engine"
@@ -96,5 +98,97 @@ func TestRenderPermanentLabelsDelete(t *testing.T) {
 	RenderReview(&review, plan)
 	if !bytes.Contains(review.Bytes(), []byte("permanently delete")) {
 		t.Fatalf("review must say permanently delete:\n%s", review.String())
+	}
+}
+
+func bigPlan() *engine.Plan {
+	var items []*engine.PlannedItem
+	for i := 0; i < 30; i++ {
+		items = append(items, &engine.PlannedItem{
+			Target: engine.Target{
+				ID:        fmt.Sprintf("dev.pycache.%d", i),
+				Category:  "dev",
+				Display:   "Python bytecode cache",
+				Path:      fmt.Sprintf("/home/u/Projects/p%d/__pycache__", i),
+				SizeBytes: 1024, SizeKnown: true,
+				Recovery: engine.RecoveryTrash, Risk: engine.RiskLow, DefaultOn: true,
+				Group:      fmt.Sprintf("/home/u/Projects/p%d", i),
+				GroupTitle: fmt.Sprintf("p%d", i),
+			},
+			CategoryTitle: "Developer caches",
+			Selected:      true,
+		})
+	}
+	return &engine.Plan{RunID: "TESTRUN", Command: "clean", Items: items}
+}
+
+func TestCleanModelCollapsesLargeCategories(t *testing.T) {
+	m := NewCleanModel(CleanConfig{Plan: bigPlan()})
+	if len(m.rows) != 1 || m.rows[0].kind != rowCategory {
+		t.Fatalf("large category should start collapsed: %d rows", len(m.rows))
+	}
+	m.expand()
+	if len(m.rows) <= 1 {
+		t.Fatalf("expanding should reveal rows, got %d", len(m.rows))
+	}
+}
+
+func TestCleanModelCategoryToggle(t *testing.T) {
+	plan := bigPlan()
+	m := NewCleanModel(CleanConfig{Plan: plan})
+	m.toggle()
+	for _, it := range plan.Items {
+		if it.Selected {
+			t.Fatal("category toggle should deselect all when all are selected")
+		}
+	}
+	m.toggle()
+	for _, it := range plan.Items {
+		if !it.Selected {
+			t.Fatal("category toggle should select all non-high-risk members")
+		}
+	}
+}
+
+func TestCleanModelFilter(t *testing.T) {
+	m := NewCleanModel(CleanConfig{Plan: bigPlan()})
+	m.filter.SetValue("p7")
+	m.rebuildRows()
+	var items []*engine.PlannedItem
+	for _, r := range m.rows {
+		if r.kind == rowItem {
+			items = append(items, r.item)
+		}
+	}
+	if len(items) != 1 || !strings.Contains(items[0].Target.Path, "/p7/") {
+		t.Fatalf("filter p7 = %d item(s)", len(items))
+	}
+}
+
+func TestReviewTextDryRun(t *testing.T) {
+	if got := reviewText(samplePlan(), true); !strings.Contains(got, "dry run: nothing will run") {
+		t.Fatalf("dry-run review must say nothing will run:\n%s", got)
+	}
+}
+
+func TestReviewAggregatesLargeTrashSelection(t *testing.T) {
+	got := reviewText(bigPlan(), false)
+	if strings.Contains(got, "/home/u/Projects/p0/__pycache__") {
+		t.Fatalf("large selection must aggregate, not list every path:\n%s", got)
+	}
+	if !strings.Contains(got, "trash 30 item(s)") {
+		t.Fatalf("expected an aggregated trash line:\n%s", got)
+	}
+}
+
+func TestCleanModelViewRenders(t *testing.T) {
+	m := NewCleanModel(CleanConfig{Plan: bigPlan(), Platform: "Fedora · dnf", DryRun: true})
+	view := m.View()
+	if !strings.Contains(view, "Developer caches") {
+		t.Fatalf("preview view missing category:\n%s", view)
+	}
+	m.screen = 1
+	if got := m.View(); !strings.Contains(got, "dry run: nothing will run") {
+		t.Fatalf("review view missing dry-run notice:\n%s", got)
 	}
 }

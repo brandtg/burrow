@@ -105,20 +105,27 @@ type Guard interface {
 }
 
 // Target is one concrete thing the tool might act on (spec §6.2).
+//
+// Group and GroupTitle are presentation-only: they let a category that produces
+// many similar targets (for example one per project's __pycache__) collapse into
+// meaningful sub-rows. Execution, guards, and identity snapshots stay per-Target,
+// so grouping never changes what a mutation does (I3/I4).
 type Target struct {
-	ID        string
-	Category  string
-	Display   string
-	Path      string
-	SizeBytes int64
-	SizeKnown bool
-	Action    Action
-	Recovery  Recovery
-	NeedsRoot bool
-	Guard     Guard
-	Evidence  []string
-	Risk      Risk
-	DefaultOn bool
+	ID         string
+	Category   string
+	Display    string
+	Path       string
+	SizeBytes  int64
+	SizeKnown  bool
+	Action     Action
+	Recovery   Recovery
+	NeedsRoot  bool
+	Guard      Guard
+	Evidence   []string
+	Risk       Risk
+	DefaultOn  bool
+	Group      string
+	GroupTitle string
 }
 
 // Validate enforces invariant I2: every mutation declares a valid recovery
