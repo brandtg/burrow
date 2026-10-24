@@ -28,9 +28,6 @@ type Options struct {
 	// MaxAge is the inactivity window. Artifacts with activity newer than this
 	// are kept. Zero disables the age filter.
 	MaxAge time.Duration
-	// MaxAgeByType overrides MaxAge per artifact pattern. A present key with a
-	// zero value disables the age filter for that type.
-	MaxAgeByType map[string]time.Duration
 	// ActiveWithin keeps an artifact whose owning repository saw a commit within
 	// this window, regardless of artifact age. Zero disables the guard.
 	ActiveWithin time.Duration
@@ -176,13 +173,6 @@ func classify(ctx context.Context, p, pattern, root string, opts Options, git *g
 		a.KeepReason = firstReason(a.KeepReason, "git state unknown: "+err.Error())
 	}
 
-	// A generic directory name (build, dist, target, .gradle) is only a build
-	// artifact when its parent looks like a project. Without a marker it may
-	// hold hand-written content, so keep it.
-	if requiresMarker(pattern) && !hasMarker(filepath.Dir(p)) {
-		a.KeepReason = firstReason(a.KeepReason, "no project marker for "+pattern)
-	}
-
 	// Active-project guard: a repository committed recently is under active work
 	// even if this artifact has not been touched. The guard is advisory; a git
 	// error contributes no keep reason (tracked-set remains the hard check).
@@ -194,26 +184,14 @@ func classify(ctx context.Context, p, pattern, root string, opts Options, git *g
 		}
 	}
 
-	if window := effectiveMaxAge(opts, pattern); window > 0 {
+	if opts.MaxAge > 0 {
 		if !a.AgeKnown {
 			a.KeepReason = firstReason(a.KeepReason, "cannot verify activity age")
-		} else if age, _ := a.Age(now); age < window {
+		} else if age, _ := a.Age(now); age < opts.MaxAge {
 			a.KeepReason = firstReason(a.KeepReason, "recent activity")
 		}
 	}
 	return a
-}
-
-// effectiveMaxAge returns the inactivity window for pattern: the per-type
-// override when present (a zero value disables the filter for that type),
-// otherwise the fallback MaxAge.
-func effectiveMaxAge(opts Options, pattern string) time.Duration {
-	if opts.MaxAgeByType != nil {
-		if d, ok := opts.MaxAgeByType[pattern]; ok {
-			return d
-		}
-	}
-	return opts.MaxAge
 }
 
 // humanAge renders a duration as whole days when a day or more, else hours.

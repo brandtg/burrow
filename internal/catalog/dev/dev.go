@@ -44,7 +44,7 @@ func (*Category) Title() string { return "Developer caches" }
 
 // PreviewNote is the category guidance shown in the preview.
 func (*Category) PreviewNote() string {
-	return "Language and toolchain caches. Owner commands where available; otherwise the documented cache root is trashed."
+	return "Language and toolchain caches, shown but not pre-selected by default. Owner commands where available; otherwise the documented cache root is trashed."
 }
 
 // Process guards (spec §7.5). A running owner means skip, fail closed.
@@ -86,6 +86,7 @@ func (*Category) Discover(ctx context.Context, env *engine.Env) ([]engine.Target
 	out = append(out, ghItem(env)...)
 	out = applyRegen(out)
 	out = applyIdleGate(env, out)
+	out = applyPreselect(env, out)
 	return out, nil
 }
 
@@ -134,6 +135,23 @@ func applyIdleGate(env *engine.Env, targets []engine.Target) []engine.Target {
 			t.Gated = true
 			t.Evidence = append(t.Evidence, fmt.Sprintf("active within %s; shown but not pre-selected", within))
 		}
+	}
+	return targets
+}
+
+// applyPreselect implements the v2 default: the owner of the machine actively
+// uses their toolchain caches, so nothing in this category is pre-selected
+// unless [dev] preselect opts in. Rows stay visible and individually
+// toggleable; the idle gate and regen cost still apply to bulk selection when
+// preselect is enabled.
+func applyPreselect(env *engine.Env, targets []engine.Target) []engine.Target {
+	if env == nil || env.Cfg == nil || env.Cfg.Dev.Preselect {
+		return targets
+	}
+	for i := range targets {
+		t := &targets[i]
+		t.DefaultOn = false
+		t.Evidence = append([]string{"dev caches are not pre-selected by default"}, t.Evidence...)
 	}
 	return targets
 }

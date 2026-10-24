@@ -1,8 +1,8 @@
 // Package projects implements the `projects` cleanup category: rebuildable
 // build artifacts (node_modules, target, virtualenvs, __pycache__, ...) under
 // the configured project roots. Discovery is internal/purge's own — the
-// git-tracked check, the active-project guard, and its per-project keep logic
-// — reused, not duplicated. Every target carries the trash recovery contract,
+// git-tracked check, the active-project guard, and the inactivity window —
+// reused, not duplicated. Every target carries the trash recovery contract,
 // so a wrong guess costs disk space, not data.
 //
 // Provenance: behavioral port of Mole's purge rule (git-tracked-file
@@ -80,15 +80,9 @@ func (c *Category) Discover(ctx context.Context, env *engine.Env) ([]engine.Targ
 	if err != nil {
 		return nil, fmt.Errorf("invalid [purge] active_within: %w", err)
 	}
-	byType, err := parseDurations(env.Cfg.Purge.MaxAgeByType)
-	if err != nil {
-		return nil, err
-	}
 	arts, err := purge.Discover(ctx, purge.Options{
 		Roots:        roots,
-		ArtifactDirs: env.Cfg.Purge.ArtifactDirs,
 		MaxAge:       maxAge,
-		MaxAgeByType: byType,
 		ActiveWithin: activeWithin,
 		Git:          c.git,
 		Warn:         c.warn,
@@ -228,22 +222,4 @@ func Roots(env *engine.Env) []string {
 		roots = append(roots, abs)
 	}
 	return roots
-}
-
-// parseDurations converts the per-artifact windows from config. A value that
-// does not parse is an error so the category fails closed (no targets) rather
-// than silently disabling a protection window.
-func parseDurations(raw map[string]string) (map[string]time.Duration, error) {
-	if len(raw) == 0 {
-		return nil, nil
-	}
-	out := make(map[string]time.Duration, len(raw))
-	for pattern, s := range raw {
-		d, err := config.ParseDuration(s)
-		if err != nil {
-			return nil, fmt.Errorf("invalid [purge] max_age_by_type entry %q: %w", pattern, err)
-		}
-		out[pattern] = d
-	}
-	return out, nil
 }

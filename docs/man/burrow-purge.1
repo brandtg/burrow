@@ -2,7 +2,7 @@
 .TH "BURROW" "1" "Oct 2026" "burrow 0.1.0-dev" "burrow manual"
 
 .SH NAME
-burrow-purge - remove rebuildable project artifacts
+burrow-purge - deprecated alias for: burrow clean --only projects
 
 
 .SH SYNOPSIS
@@ -10,16 +10,16 @@ burrow-purge - remove rebuildable project artifacts
 
 
 .SH DESCRIPTION
-Find rebuildable build artifacts (node_modules, target, virtualenvs,
-\fBpycache\fP, ...) under the configured project roots and move them to the
-Trash.
+Deprecated alias for \fBburrow clean --only projects\fR\&.
 
 .PP
-Artifacts are kept when they are git-tracked, when git state cannot be
+Finds rebuildable build artifacts (node_modules, target, virtualenvs,
+\fBpycache\fP, ...) under the configured project roots and moves them to the
+Trash. Artifacts are kept when they are git-tracked, when git state cannot be
 determined, when they contain a git repository, when their activity age cannot
-be verified, or when they have seen file activity within the age window. Purged
-artifacts are recoverable from the Trash (burrow history --restore). The preview
-lists every exact path, and --yes is required when stdout is not a terminal.
+be verified, or when they have seen file activity within the age window.
+Trashed artifacts are recoverable (burrow history --restore); nothing is
+permanently deleted.
 
 
 .SH OPTIONS
@@ -68,8 +68,16 @@ lists every exact path, and --yes is required when stdout is not a terminal.
 	disable color (same as --color=never)
 
 .PP
+\fB--no-owner\fP[=false]
+	skip all owner-command/system acts
+
+.PP
 \fB--only\fP=[]
 	comma list of categories or item ids to include
+
+.PP
+\fB--plain\fP[=false]
+	non-interactive plain-text output instead of the TUI
 
 .PP
 \fB--quiet\fP[=false]

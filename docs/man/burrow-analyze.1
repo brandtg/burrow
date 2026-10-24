@@ -2,7 +2,7 @@
 .TH "BURROW" "1" "Oct 2026" "burrow 0.1.0-dev" "burrow manual"
 
 .SH NAME
-burrow-analyze - interactive disk explorer
+burrow-analyze - read-only disk explorer
 
 
 .SH SYNOPSIS
@@ -13,8 +13,8 @@ burrow-analyze - interactive disk explorer
 Explore where disk space went.
 
 .PP
-Interactive mode navigates a tree (arrow keys) and can move items to the
-freedesktop Trash with 'd'/'D'. Read-only otherwise.
+Read-only: navigate the tree with the arrow keys. The only way to delete
+things in burrow is the clean flow's review screen.
 
 .PP
 The --json schema is stable:
@@ -42,10 +42,6 @@ When stdout is not a terminal (or --json is set), analyze behaves like
 .PP
 \fB-h\fP, \fB--help\fP[=false]
 	help for analyze
-
-.PP
-\fB--no-delete\fP[=false]
-	disable the 'd'/'D' trash keys (read-only mode)
 
 .PP
 \fB-H\fP, \fB--no-hidden\fP[=false]
@@ -93,8 +89,16 @@ When stdout is not a terminal (or --json is set), analyze behaves like
 	disable color (same as --color=never)
 
 .PP
+\fB--no-owner\fP[=false]
+	skip all owner-command/system acts
+
+.PP
 \fB--only\fP=[]
 	comma list of categories or item ids to include
+
+.PP
+\fB--plain\fP[=false]
+	non-interactive plain-text output instead of the TUI
 
 .PP
 \fB--quiet\fP[=false]

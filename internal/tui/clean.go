@@ -210,7 +210,13 @@ func itemLine(it *engine.PlannedItem, color bool) string {
 	if it.Target.Gated {
 		regen += ",active"
 	}
-	return fmt.Sprintf("%s %-26s %10s  %s%s %-9s %s", check, it.Target.Display, size, rec, root, regen, riskLabel(it.Target.Risk, color))
+	line := fmt.Sprintf("%s %-26s %10s  %s%s %-9s %s", check, it.Target.Display, size, rec, root, regen, riskLabel(it.Target.Risk, color))
+	// Unselected rows state why, so a left-on item is a decision, not a
+	// surprise (for example "dev caches are not pre-selected by default").
+	if !it.Selected && len(it.Target.Evidence) > 0 {
+		line += "  # " + it.Target.Evidence[0]
+	}
+	return line
 }
 
 func riskLabel(r engine.Risk, color bool) string {

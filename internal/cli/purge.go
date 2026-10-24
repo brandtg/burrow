@@ -47,10 +47,8 @@ permanently deleted.`,
 				if _, err := config.ParseDuration(opts.age); err != nil {
 					return &ExitError{Code: ExitUsage, Err: err}
 				}
-				// An explicit --age overrides the whole policy: it becomes the
-				// fallback window and per-type windows are dropped.
+				// An explicit --age overrides the fallback window.
 				env.Cfg.Purge.MaxAge = opts.age
-				env.Cfg.Purge.MaxAgeByType = nil
 			}
 			fmt.Fprintln(a.ErrOut, "notice: 'burrow purge' is deprecated; running the equivalent of 'burrow clean --only projects'")
 			a.Flags.Only = []string{projects.ID}

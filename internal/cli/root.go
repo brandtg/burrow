@@ -114,6 +114,7 @@ func (a *App) Root() *cobra.Command {
 		a.newAnalyzeCmd(),
 		a.newCleanCmd(),
 		a.newPurgeCmd(),
+		a.newDocsCmd(root),
 	)
 	return root
 }

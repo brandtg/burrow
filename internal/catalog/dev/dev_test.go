@@ -182,6 +182,10 @@ func TestOwnerPathChangeGuardStops(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Dev caches are not pre-selected by default; the guard is being tested.
+	for _, it := range plan.Items {
+		it.Selected = true
+	}
 	// Point the owner at a different cache between planning and execution.
 	other := t.TempDir()
 	t.Setenv("BURROW_TEST_HOME", other)
@@ -497,5 +501,76 @@ func TestDevExpensiveNotAutoSelectable(t *testing.T) {
 	}
 	if tg.AutoSelectable() {
 		t.Fatal("expensive go-mod cache must not be auto-selectable")
+	}
+}
+
+// TestDevNotPreselectedByDefault pins the v2 default: every dev row is shown
+// but off, with the reason as its first evidence, and the built plan selects
+// nothing unless the user opts in per run.
+func TestDevNotPreselectedByDefault(t *testing.T) {
+	env := testEnv(t, true)
+	// No owner tools: discovery uses the documented cache roots.
+	t.Setenv("PATH", t.TempDir())
+	mkdirs(t,
+		filepath.Join(env.Home, ".npm", "_cacache"),
+		filepath.Join(env.XDGCache, "pip"),
+		filepath.Join(env.XDGCache, "uv"),
+	)
+	targets, err := dev.New().Discover(context.Background(), env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) == 0 {
+		t.Fatal("expected dev targets")
+	}
+	for _, tg := range targets {
+		if tg.DefaultOn {
+			t.Fatalf("%s must not be pre-selected by default", tg.ID)
+		}
+		if tg.Evidence[0] != "dev caches are not pre-selected by default" {
+			t.Fatalf("%s evidence[0] = %q, want the preselect reason", tg.ID, tg.Evidence[0])
+		}
+	}
+
+	plan, err := engine.Build(context.Background(), env, engine.Options{Categories: []engine.Category{dev.New()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := plan.Selected(); len(got) != 0 {
+		t.Fatalf("nothing in the dev category may be pre-selected, got %d items", len(got))
+	}
+}
+
+// TestDevPreselectOptIn: [dev] preselect = true restores regen-cost-driven
+// pre-selection (free/cheap on, expensive off) and the idle gate still
+// applies; the opt-out note is gone.
+func TestDevPreselectOptIn(t *testing.T) {
+	env := testEnv(t, true)
+	t.Setenv("PATH", t.TempDir())
+	pip := filepath.Join(env.XDGCache, "pip")
+	mod := filepath.Join(env.Home, "go", "pkg", "mod")
+	mkdirs(t, pip, mod)
+	stale := time.Now().Add(-90 * 24 * time.Hour)
+	for _, p := range []string{pip, mod} {
+		if err := filepath.WalkDir(p, func(path string, _ os.DirEntry, _ error) error {
+			return os.Chtimes(path, stale, stale)
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	env.Cfg.Dev.Preselect = true
+	byID := discover(t, env)
+	if !byID["dev.pip"].DefaultOn {
+		t.Fatalf("cheap caches must be pre-selected when opted in: %+v", byID["dev.pip"])
+	}
+	if byID["dev.go-mod"].AutoSelectable() {
+		t.Fatalf("expensive caches stay out of bulk selection even when opted in: %+v", byID["dev.go-mod"])
+	}
+	for _, tg := range byID {
+		for _, e := range tg.Evidence {
+			if e == "dev caches are not pre-selected by default" {
+				t.Fatalf("%s must not carry the opt-out note when preselect is on", tg.ID)
+			}
+		}
 	}
 }

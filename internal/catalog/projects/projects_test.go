@@ -256,6 +256,23 @@ func TestDiscoverRegenDefaults(t *testing.T) {
 	}
 }
 
+// TestDiscoverGenericNameNeedsNoMarker: with Trash recovery a wrong guess
+// costs disk space, not data, so a generic build/dist dir is a candidate like
+// any other; the ecosystem-marker gating is gone.
+func TestDiscoverGenericNameNeedsNoMarker(t *testing.T) {
+	root := t.TempDir()
+	makeArtifact(t, root, "build")
+	env := testEnv(t, root)
+
+	targets := discover(t, New(), env)
+	if len(targets) != 1 {
+		t.Fatalf("expected 1 target for the unmarked build dir, got %+v", targets)
+	}
+	if targets[0].Display != "build" {
+		t.Fatalf("display = %q, want build", targets[0].Display)
+	}
+}
+
 func TestDiscoverInvalidWindowFailsClosed(t *testing.T) {
 	root := t.TempDir()
 	makeArtifact(t, root, "node_modules")

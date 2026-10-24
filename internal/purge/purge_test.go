@@ -262,18 +262,17 @@ func TestDiscoverActiveProjectKept(t *testing.T) {
 	}
 }
 
-func TestDiscoverPerTypeAge(t *testing.T) {
+// TestDiscoverSingleAgeWindow pins the v2 policy: one max_age fallback for
+// every artifact pattern — no per-type windows, no marker gating. With Trash
+// recovery a wrong guess costs disk space, not data.
+func TestDiscoverSingleAgeWindow(t *testing.T) {
 	root := t.TempDir()
 	makeArtifact(t, root, "node_modules", time.Now().Add(-20*24*time.Hour))
 	makeArtifact(t, root, "__pycache__", time.Now().Add(-20*24*time.Hour))
 	got, err := Discover(context.Background(), Options{
 		Roots:        []string{root},
 		ArtifactDirs: []string{"node_modules", "__pycache__"},
-		MaxAge:       7 * 24 * time.Hour,
-		MaxAgeByType: map[string]time.Duration{
-			"node_modules": 30 * 24 * time.Hour,
-			"__pycache__":  0,
-		},
+		MaxAge:       30 * 24 * time.Hour,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -282,18 +281,30 @@ func TestDiscoverPerTypeAge(t *testing.T) {
 	for _, a := range got {
 		byName[filepath.Base(a.Path)] = a
 	}
-	if !byName["node_modules"].Kept() {
-		t.Fatalf("node_modules within its 30d window must be kept: %+v", byName["node_modules"])
+	for _, name := range []string{"node_modules", "__pycache__"} {
+		if !byName[name].Kept() {
+			t.Fatalf("%s within the 30d window must be kept: %+v", name, byName[name])
+		}
 	}
-	if byName["__pycache__"].Kept() {
-		t.Fatalf("__pycache__ with a zero window must be purgeable: %+v", byName["__pycache__"])
+
+	got, err = Discover(context.Background(), Options{
+		Roots:        []string{root},
+		ArtifactDirs: []string{"node_modules", "__pycache__"},
+		MaxAge:       7 * 24 * time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("beyond the window every pattern is a candidate, got %+v", got)
 	}
 }
 
-func TestDiscoverGenericNameRequiresMarker(t *testing.T) {
+// TestDiscoverGenericNameNeedsNoMarker: a generic name (build, dist) is a
+// candidate like any other; the ecosystem-marker gating is gone.
+func TestDiscoverGenericNameNeedsNoMarker(t *testing.T) {
 	root := t.TempDir()
 	makeArtifact(t, root, "build", time.Now().Add(-30*24*time.Hour))
-
 	got, err := Discover(context.Background(), Options{
 		Roots:        []string{root},
 		ArtifactDirs: []string{"build"},
@@ -302,23 +313,8 @@ func TestDiscoverGenericNameRequiresMarker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || !got[0].Kept() || !strings.Contains(got[0].KeepReason, "project marker") {
-		t.Fatalf("unmarked build dir must be kept: %+v", got)
-	}
-
-	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte("{}"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	got, err = Discover(context.Background(), Options{
-		Roots:        []string{root},
-		ArtifactDirs: []string{"build"},
-		MaxAge:       7 * 24 * time.Hour,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	if len(got) != 1 || got[0].Kept() {
-		t.Fatalf("build dir with a project marker should be purgeable: %+v", got)
+		t.Fatalf("an old untracked build dir must be a candidate: %+v", got)
 	}
 }
 
