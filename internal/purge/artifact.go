@@ -1,13 +1,13 @@
 // Package purge discovers rebuildable project artifacts (node_modules, Rust
 // target, virtualenvs, __pycache__, ...) under configured project roots and
-// deletes them permanently after proving they are safe to remove.
+// moves them to the Trash after proving they are safe to remove.
 //
 // Safety: discovery is read-only (invariant I1). An artifact is kept (never
 // purged) when it is git-tracked, when git state cannot be determined, when it
 // is or contains a git repository, when its activity age cannot be verified, or
-// when it has seen recent activity. Deletion flows through safe.RemoveTree, the
-// single permanent-delete primitive, and is journaled with action "purge" and
-// recovery "owner".
+// when it has seen recent activity. Deletion flows through internal/trash with
+// a proper .trashinfo entry (recoverable by default; no permanent-delete
+// primitive) and is journaled with action "trash" and recovery "trash".
 //
 // Provenance: behavioral port of Mole's purge rule (git-tracked-file
 // protection, nested-repo protection, age filter). Reimplemented clean-room; no
@@ -15,7 +15,6 @@
 package purge
 
 import (
-	"os"
 	"path"
 	"path/filepath"
 	"strings"
@@ -46,49 +45,6 @@ const DefaultMaxDepth = 6
 // artifact in a repository committed within this window is kept regardless of
 // the artifact's own age.
 const DefaultActiveWithin = 30 * 24 * time.Hour
-
-// markerRequired names the generic artifact directories whose name alone is not
-// proof of a project build output. A candidate matches only when its parent
-// holds an ecosystem marker (see markerFiles). Unambiguous names such as
-// node_modules or __pycache__ are not listed.
-var markerRequired = map[string]bool{
-	"build":   true,
-	"dist":    true,
-	"target":  true,
-	".gradle": true,
-}
-
-// markerFiles are the project files that justify a generic artifact directory.
-var markerFiles = []string{
-	"package.json",
-	"Cargo.toml",
-	"pyproject.toml",
-	"setup.py",
-	"setup.cfg",
-	"go.mod",
-	"pom.xml",
-	"build.gradle",
-	"build.gradle.kts",
-	"settings.gradle",
-	"settings.gradle.kts",
-	"CMakeLists.txt",
-	"meson.build",
-	"Makefile",
-}
-
-// requiresMarker reports whether pattern must be justified by a project marker.
-func requiresMarker(pattern string) bool { return markerRequired[pattern] }
-
-// hasMarker reports whether dir (the artifact's parent) holds an ecosystem
-// marker file.
-func hasMarker(dir string) bool {
-	for _, name := range markerFiles {
-		if fi, err := os.Stat(filepath.Join(dir, name)); err == nil && !fi.IsDir() {
-			return true
-		}
-	}
-	return false
-}
 
 // Artifact is one discovered rebuildable artifact directory.
 type Artifact struct {

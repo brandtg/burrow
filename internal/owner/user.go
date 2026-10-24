@@ -1,14 +1,13 @@
 package owner
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/user"
 	"path/filepath"
 	"strconv"
 	"syscall"
-
-	"github.com/brandtg/burrow/internal/i18n"
 )
 
 // ResolveInvokingUser returns the user on whose behalf burrow is running. If
@@ -21,13 +20,13 @@ func ResolveInvokingUser(getenv func(string) string) (*user.User, error) {
 	if sudoUser := getenv("SUDO_USER"); sudoUser != "" {
 		u, err := user.Lookup(sudoUser)
 		if err != nil {
-			return nil, fmt.Errorf(i18n.T(i18n.ErrUserResolve), err)
+			return nil, fmt.Errorf("cannot resolve invoking user: %v", err)
 		}
 		return u, nil
 	}
 	u, err := user.Current()
 	if err != nil {
-		return nil, fmt.Errorf(i18n.T(i18n.ErrUserResolve), err)
+		return nil, fmt.Errorf("cannot resolve invoking user: %v", err)
 	}
 	return u, nil
 }
@@ -48,7 +47,7 @@ func CheckRoot(geteuid func() int, getenv func(string) string) error {
 		getenv = os.Getenv
 	}
 	if geteuid() == 0 && getenv("SUDO_USER") == "" {
-		return fmt.Errorf("%s", i18n.T(i18n.ErrRootRefused))
+		return errors.New("refusing to run as root without SUDO_USER; run burrow as your normal user")
 	}
 	return nil
 }

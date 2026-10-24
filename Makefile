@@ -76,14 +76,6 @@ doctor: ## Check that the external gate tools are installed.
 setup-tools: ## Install the external gate tools at the CI-pinned versions.
 	scripts/dev-tools.sh --install
 
-.PHONY: safety-gate
-safety-gate: ## Run the static destructive-sink gate.
-	$(GO) run ./scripts/safety-gate .
-
-.PHONY: docs
-docs: ## Generate the man pages into docs/man (review the diff).
-	$(GO) run ./cmd/burrow docs --dir docs/man
-
 .PHONY: verify-static
 verify-static: build ## Verify the built binary has no dynamic loader deps.
 	@if command -v ldd >/dev/null 2>&1; then \
@@ -103,10 +95,6 @@ gate: ## Run the canonical gate (scripts/check.sh).
 
 .PHONY: check
 check: gate ## Alias for gate.
-
-.PHONY: gate-strict
-gate-strict: ## Gate that fails if lint/vuln tools are missing.
-	BURROW_REQUIRE_TOOLS=1 ./scripts/check.sh
 
 .PHONY: integration
 integration: ## Run the loopback cross-device trash test (requires root).

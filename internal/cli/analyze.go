@@ -11,8 +11,6 @@ import (
 	"syscall"
 
 	"github.com/brandtg/burrow/internal/engine"
-	"github.com/brandtg/burrow/internal/journal"
-	"github.com/brandtg/burrow/internal/safe"
 	"github.com/brandtg/burrow/internal/scan"
 	"github.com/brandtg/burrow/internal/tui"
 	"github.com/spf13/cobra"
@@ -27,18 +25,17 @@ type analyzeOptions struct {
 	noHidden    bool
 	depth       int
 	top         int
-	noDelete    bool
 }
 
 func (a *App) newAnalyzeCmd() *cobra.Command {
 	var opts analyzeOptions
 	cmd := &cobra.Command{
 		Use:   "analyze [path...]",
-		Short: "interactive disk explorer",
+		Short: "read-only disk explorer",
 		Long: `Explore where disk space went.
 
-Interactive mode navigates a tree (arrow keys) and can move items to the
-freedesktop Trash with 'd'/'D'. Read-only otherwise.
+Read-only: navigate the tree with the arrow keys. The only way to delete
+things in burrow is the clean flow's review screen.
 
 The --json schema is stable:
   {"path":"...","total_size":N,"total_files":N,
@@ -76,7 +73,6 @@ When stdout is not a terminal (or --json is set), analyze behaves like
 	f.BoolVarP(&opts.noHidden, "no-hidden", "H", false, "skip dotfiles")
 	f.IntVar(&opts.depth, "depth", 0, "non-interactive depth (with --json); 0 = unlimited")
 	f.IntVarP(&opts.top, "top", "t", 10, "non-interactive top-N largest entries (with --json)")
-	f.BoolVar(&opts.noDelete, "no-delete", false, "disable the 'd'/'D' trash keys (read-only mode)")
 	return cmd
 }
 
@@ -137,11 +133,6 @@ func (a *App) scanRoots(ctx context.Context, paths []string, opts scan.Options) 
 }
 
 func (a *App) runAnalyzeTUI(env *engine.Env, paths []string, scanOpts scan.Options, opts analyzeOptions) error {
-	writer, err := journal.NewWriter(env.Paths.Journal)
-	if err != nil {
-		return err
-	}
-	validator := safe.NewValidator(env.UID(), env.Cfg.Clean.ProtectedPaths...)
 	model := tui.NewAnalyzeModel(tui.AnalyzeConfig{
 		// Scan in the background so the TUI can show progress instead of
 		// freezing on a cold cache (the model renders a loading view).
@@ -149,14 +140,8 @@ func (a *App) runAnalyzeTUI(env *engine.Env, paths []string, scanOpts scan.Optio
 			scanOpts.Progress = progress
 			return a.scanRoots(ctx, paths, scanOpts)
 		},
-		Apparent:  opts.apparent,
-		NoDelete:  opts.noDelete,
-		Color:     a.colorEnabled(env),
-		TrashDir:  env.Paths.TrashDir,
-		UID:       env.UID(),
-		Validator: validator,
-		Journal:   writer,
-		Command:   "analyze",
+		Apparent: opts.apparent,
+		Color:    a.colorEnabled(env),
 	})
 	return model.Run()
 }

@@ -1,7 +1,5 @@
 package safe
 
-import "github.com/brandtg/burrow/internal/i18n"
-
 // State is the tri-state outcome of a guard. Busy and Unknown both stop the
 // action (fail closed, spec §7.5).
 type State int
@@ -53,7 +51,7 @@ func Stop(state State, reason string) GuardResult {
 		state = Unknown
 	}
 	if reason == "" {
-		reason = i18n.T(i18n.ErrGuardUnknown)
+		reason = "cannot prove the action is safe right now"
 	}
 	return GuardResult{State: state, Reason: reason}
 }

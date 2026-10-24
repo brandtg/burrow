@@ -15,6 +15,7 @@ import (
 	"github.com/brandtg/burrow/internal/catalog/desktoppkgs"
 	"github.com/brandtg/burrow/internal/catalog/dev"
 	"github.com/brandtg/burrow/internal/catalog/downloads"
+	"github.com/brandtg/burrow/internal/catalog/projects"
 	"github.com/brandtg/burrow/internal/catalog/system"
 	"github.com/brandtg/burrow/internal/catalog/usercache"
 	"github.com/brandtg/burrow/internal/config"
@@ -27,10 +28,7 @@ import (
 
 type cleanFlags struct {
 	all       bool
-	noOwner   bool
-	permanent bool
 	whitelist bool
-	plain     bool
 }
 
 func (a *App) newCleanCmd() *cobra.Command {
@@ -44,10 +42,7 @@ func (a *App) newCleanCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&f.all, "all", false, "include every category (still respects whitelist and guards)")
-	cmd.Flags().BoolVar(&f.noOwner, "no-owner", false, "skip all owner-command/system acts")
-	cmd.Flags().BoolVar(&f.permanent, "permanent", false, "delete trash-contract items permanently instead of trashing")
 	cmd.Flags().BoolVar(&f.whitelist, "whitelist", false, "manage the whitelist")
-	cmd.Flags().BoolVar(&f.plain, "plain", false, "non-interactive plain-text output instead of the TUI")
 	return cmd
 }
 
@@ -65,7 +60,7 @@ func (a *App) runClean(f cleanFlags) error {
 		return &ExitError{Code: ExitUsage, Err: err}
 	}
 
-	reg := catalog.NewRegistry(system.New(), dev.New(), usercache.New(), downloads.New(), containers.New(), desktoppkgs.New())
+	reg := catalog.NewRegistry(system.New(), projects.New(), dev.New(), usercache.New(), downloads.New(), containers.New(), desktoppkgs.New())
 	cats := a.selectCategories(env, reg, f.all)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -77,18 +72,15 @@ func (a *App) runClean(f cleanFlags) error {
 		Only:       a.Flags.Only,
 		Exclude:    a.Flags.Exclude,
 		MinSize:    minSize,
-		NoOwner:    f.noOwner,
-		Permanent:  f.permanent,
+		NoOwner:    a.Flags.NoOwner,
 	})
 	if err != nil {
 		return err
 	}
 	a.reconcile(cats, plan)
+	mergeCategoryWarnings(cats, plan)
 	for _, w := range plan.Warnings {
 		fmt.Fprintf(a.ErrOut, "warning: %s\n", w)
-	}
-	if planHasPermanent(plan) {
-		fmt.Fprintln(a.ErrOut, "warning: --permanent deletes trash items irreversibly; they cannot be restored from the Trash")
 	}
 
 	platform := a.platformHeader(env)
@@ -101,7 +93,7 @@ func (a *App) runClean(f cleanFlags) error {
 	// The TUI is the default view on a terminal, including --dry-run (where it
 	// is read-only). --plain, --json, --yes, or a non-TTY stdout select the
 	// non-interactive path.
-	interactive := isTerminal(a.Out) && !a.Flags.JSON && !f.plain && !a.Flags.Yes
+	interactive := isTerminal(a.Out) && !a.Flags.JSON && !a.Flags.Plain && !a.Flags.Yes
 	if interactive {
 		confirmed, aborted, err := tui.RunClean(tui.CleanConfig{
 			Plan:      plan,
@@ -159,6 +151,17 @@ func (a *App) reconcile(cats []engine.Category, plan *engine.Plan) {
 	for _, c := range cats {
 		if rec, ok := c.(catalog.Reconciler); ok {
 			rec.Reconcile(plan)
+		}
+	}
+}
+
+// mergeCategoryWarnings pulls a category's non-fatal discovery notes (for
+// example a configured project root that does not exist) into the plan's
+// warning list so they surface on stderr.
+func mergeCategoryWarnings(cats []engine.Category, plan *engine.Plan) {
+	for _, c := range cats {
+		if w, ok := c.(catalog.Warner); ok {
+			plan.Warnings = append(plan.Warnings, w.Warnings()...)
 		}
 	}
 }
@@ -323,17 +326,6 @@ func cleanExit(sum *engine.Summary) error {
 	return nil
 }
 
-// planHasPermanent reports whether any planned item will be permanently
-// deleted, so the caller can print the --permanent warning.
-func planHasPermanent(plan *engine.Plan) bool {
-	for _, it := range plan.Items {
-		if it.Permanent {
-			return true
-		}
-	}
-	return false
-}
-
 type cleanItemJSON struct {
 	ID         string   `json:"id"`
 	Category   string   `json:"category"`
@@ -342,7 +334,6 @@ type cleanItemJSON struct {
 	Size       int64    `json:"size"`
 	SizeKnown  bool     `json:"size_known"`
 	Recovery   string   `json:"recovery"`
-	Permanent  bool     `json:"permanent,omitempty"`
 	NeedsRoot  bool     `json:"needs_root"`
 	Risk       string   `json:"risk"`
 	Regen      string   `json:"regen"`
@@ -387,11 +378,6 @@ func (a *App) cleanJSON(plan *engine.Plan, sum *engine.Summary, dryRun bool) err
 		Totals:  plan.SelectedTotals(),
 	}
 	for _, it := range plan.Items {
-		recovery := it.Target.Recovery.String()
-		if it.Permanent {
-			// The effective contract is an irreversible delete, not a trash move.
-			recovery = "delete"
-		}
 		doc.Items = append(doc.Items, cleanItemJSON{
 			ID:         it.Target.ID,
 			Category:   it.Target.Category,
@@ -399,8 +385,7 @@ func (a *App) cleanJSON(plan *engine.Plan, sum *engine.Summary, dryRun bool) err
 			Path:       it.Target.Path,
 			Size:       it.Target.SizeBytes,
 			SizeKnown:  it.Target.SizeKnown,
-			Recovery:   recovery,
-			Permanent:  it.Permanent,
+			Recovery:   it.Target.Recovery.String(),
 			NeedsRoot:  it.Target.NeedsRoot,
 			Risk:       it.Target.Risk.String(),
 			Regen:      it.Target.Regen.String(),

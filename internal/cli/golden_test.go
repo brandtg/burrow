@@ -2,13 +2,10 @@ package cli
 
 import (
 	"bytes"
-	"context"
 	"os"
 	"path/filepath"
 	"regexp"
 	"testing"
-
-	"github.com/brandtg/burrow/internal/metrics"
 )
 
 // goldenCompare compares got to the file at path. Run the test with
@@ -51,32 +48,6 @@ func TestCleanDryRunJSONGolden(t *testing.T) {
 	}
 	got := maskRunID(te.out.Bytes())
 	goldenCompare(t, filepath.Join("..", "..", "testdata", "clean", "json.golden"), got)
-}
-
-func TestStatusJSONGolden(t *testing.T) {
-	te := newTestApp(t, nil)
-	te.app.CollectMetrics = func(context.Context, string) (metrics.Snapshot, error) {
-		return metrics.Snapshot{
-			CPUPercent:   12.5,
-			MemTotal:     16 << 30,
-			MemUsed:      8 << 30,
-			MemAvailable: 7 << 30,
-			MemPercent:   50,
-			DiskPath:     "/",
-			DiskTotal:    500 << 30,
-			DiskUsed:     300 << 30,
-			DiskFree:     200 << 30,
-			DiskPercent:  60,
-			NetRxBytes:   123456,
-			NetTxBytes:   654321,
-			ProcessCount: 321,
-			TopProcesses: []metrics.Process{{PID: 1, Name: "systemd", RSS: 10 << 20, CPUPercent: 0.1}},
-		}, nil
-	}
-	if code := te.run("status", "--json"); code != ExitOK {
-		t.Fatalf("exit = %d: %s", code, te.errOut.String())
-	}
-	goldenCompare(t, filepath.Join("..", "..", "testdata", "status", "cli.golden"), te.out.Bytes())
 }
 
 func TestHistoryJSONGolden(t *testing.T) {

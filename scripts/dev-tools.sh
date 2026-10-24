@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# dev-tools.sh - verify (or install) the external tools the strict gate needs.
+# dev-tools.sh - verify (or install) the external lint/audit tools the gate uses.
 #
-# The strict gate (make gate-strict / BURROW_REQUIRE_TOOLS=1) fails if any of
-# these are missing. CI pins the same versions in .github/workflows/ci.yml; keep
-# the two in sync.
+# BURROW_REQUIRE_TOOLS=1 ./scripts/check.sh fails if any of these are missing.
+# CI pins the same versions in .github/workflows/ci.yml; keep the two in sync.
 #
 # Usage:
 #   scripts/dev-tools.sh            # report status; exit 1 if anything is missing
@@ -74,4 +73,4 @@ if [[ "$missing" == "1" && "$INSTALL" != "1" ]]; then
 fi
 
 echo
-echo "gate tools ready; run 'make gate-strict'"
+echo "gate tools ready; run 'make gate'"

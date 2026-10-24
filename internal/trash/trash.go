@@ -19,8 +19,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-
-	"github.com/brandtg/burrow/internal/i18n"
 )
 
 // Entry is one item in the trash.
@@ -183,10 +181,10 @@ func (t *Trash) Restore(e Entry) error {
 	filesPath := filepath.Join(t.home, "files", e.Name)
 	fi, err := os.Lstat(filesPath)
 	if err != nil {
-		return fmt.Errorf("%s: %w", i18n.T(i18n.ErrTrashNotInTrash), err)
+		return fmt.Errorf("item is not present in the trash: %w", err)
 	}
 	if _, err := os.Lstat(e.Path); err == nil {
-		return fmt.Errorf("%s", i18n.Tf(i18n.ErrTrashTargetExists, e.Path))
+		return fmt.Errorf("restore target already exists: %s", e.Path)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
