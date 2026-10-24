@@ -9,9 +9,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/brandtg/burrow/internal/journal"
-	"github.com/brandtg/burrow/internal/safe"
 )
 
 func TestMatchArtifact(t *testing.T) {
@@ -222,8 +219,32 @@ func TestDiscoverWarnsOnMissingRoot(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("expected the good root to still be scanned, got %d artifacts", len(got))
 	}
+	// A missing root is silent (stock configs ship optional roots that may
+	// not exist); only an unreadable root warns.
+	if len(warnings) != 0 {
+		t.Fatalf("expected no warning for the missing root, got %v", warnings)
+	}
+}
+
+func TestDiscoverWarnsOnUnreadableRoot(t *testing.T) {
+	root := t.TempDir()
+	unreadable := filepath.Join(t.TempDir(), "locked")
+	if err := os.Mkdir(unreadable, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(unreadable, 0o700) })
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: unreadable-dir check is meaningless")
+	}
+	var warnings []string
+	if _, err := Discover(context.Background(), Options{
+		Roots: []string{unreadable, root},
+		Warn:  func(msg string) { warnings = append(warnings, msg) },
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if len(warnings) != 1 {
-		t.Fatalf("expected 1 warning for the missing root, got %v", warnings)
+		t.Fatalf("expected 1 warning for the unreadable root, got %v", warnings)
 	}
 }
 
@@ -265,18 +286,17 @@ func TestDiscoverActiveProjectKept(t *testing.T) {
 	}
 }
 
-func TestDiscoverPerTypeAge(t *testing.T) {
+// TestDiscoverSingleAgeWindow pins the v2 policy: one max_age fallback for
+// every artifact pattern — no per-type windows, no marker gating. With Trash
+// recovery a wrong guess costs disk space, not data.
+func TestDiscoverSingleAgeWindow(t *testing.T) {
 	root := t.TempDir()
 	makeArtifact(t, root, "node_modules", time.Now().Add(-20*24*time.Hour))
 	makeArtifact(t, root, "__pycache__", time.Now().Add(-20*24*time.Hour))
 	got, err := Discover(context.Background(), Options{
 		Roots:        []string{root},
 		ArtifactDirs: []string{"node_modules", "__pycache__"},
-		MaxAge:       7 * 24 * time.Hour,
-		MaxAgeByType: map[string]time.Duration{
-			"node_modules": 30 * 24 * time.Hour,
-			"__pycache__":  0,
-		},
+		MaxAge:       30 * 24 * time.Hour,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -285,18 +305,30 @@ func TestDiscoverPerTypeAge(t *testing.T) {
 	for _, a := range got {
 		byName[filepath.Base(a.Path)] = a
 	}
-	if !byName["node_modules"].Kept() {
-		t.Fatalf("node_modules within its 30d window must be kept: %+v", byName["node_modules"])
+	for _, name := range []string{"node_modules", "__pycache__"} {
+		if !byName[name].Kept() {
+			t.Fatalf("%s within the 30d window must be kept: %+v", name, byName[name])
+		}
 	}
-	if byName["__pycache__"].Kept() {
-		t.Fatalf("__pycache__ with a zero window must be purgeable: %+v", byName["__pycache__"])
+
+	got, err = Discover(context.Background(), Options{
+		Roots:        []string{root},
+		ArtifactDirs: []string{"node_modules", "__pycache__"},
+		MaxAge:       7 * 24 * time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("beyond the window every pattern is a candidate, got %+v", got)
 	}
 }
 
-func TestDiscoverGenericNameRequiresMarker(t *testing.T) {
+// TestDiscoverGenericNameNeedsNoMarker: a generic name (build, dist) is a
+// candidate like any other; the ecosystem-marker gating is gone.
+func TestDiscoverGenericNameNeedsNoMarker(t *testing.T) {
 	root := t.TempDir()
 	makeArtifact(t, root, "build", time.Now().Add(-30*24*time.Hour))
-
 	got, err := Discover(context.Background(), Options{
 		Roots:        []string{root},
 		ArtifactDirs: []string{"build"},
@@ -305,111 +337,8 @@ func TestDiscoverGenericNameRequiresMarker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || !got[0].Kept() || !strings.Contains(got[0].KeepReason, "project marker") {
-		t.Fatalf("unmarked build dir must be kept: %+v", got)
-	}
-
-	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte("{}"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	got, err = Discover(context.Background(), Options{
-		Roots:        []string{root},
-		ArtifactDirs: []string{"build"},
-		MaxAge:       7 * 24 * time.Hour,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	if len(got) != 1 || got[0].Kept() {
-		t.Fatalf("build dir with a project marker should be purgeable: %+v", got)
-	}
-}
-
-func TestExecutorDeleteAndJournal(t *testing.T) {
-	root := t.TempDir()
-	art := makeArtifact(t, root, "node_modules", time.Now().Add(-30*24*time.Hour))
-	arts, err := Discover(context.Background(), Options{Roots: []string{root}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(arts) != 1 {
-		t.Fatalf("expected 1 artifact, got %d", len(arts))
-	}
-	journalPath := filepath.Join(t.TempDir(), "operations.jsonl")
-	w, err := journal.NewWriter(journalPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	exec := &Executor{Journal: w, Command: "purge"}
-	freed, err := exec.Delete(&arts[0], false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if freed <= 0 {
-		t.Fatalf("expected freed bytes > 0, got %d", freed)
-	}
-	if _, err := os.Lstat(art); !os.IsNotExist(err) {
-		t.Fatalf("artifact should be deleted, stat err = %v", err)
-	}
-	if err := exec.EndRun(freed); err != nil {
-		t.Fatal(err)
-	}
-	records, err := journal.Read(journalPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var found bool
-	for _, r := range records {
-		if r.Action == journal.ActionPurge {
-			found = true
-			if r.Recovery != journal.RecoveryOwner {
-				t.Fatalf("recovery = %q, want owner", r.Recovery)
-			}
-			if r.Status != journal.StatusOK {
-				t.Fatalf("status = %q, want ok", r.Status)
-			}
-		}
-	}
-	if !found {
-		t.Fatal("no purge record in journal")
-	}
-}
-
-func TestExecutorDryRunDoesNotDelete(t *testing.T) {
-	root := t.TempDir()
-	art := makeArtifact(t, root, "node_modules", time.Now().Add(-30*24*time.Hour))
-	arts, err := Discover(context.Background(), Options{Roots: []string{root}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	exec := &Executor{Command: "purge"}
-	if _, err := exec.Delete(&arts[0], true); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Lstat(art); err != nil {
-		t.Fatalf("dry-run must not delete: %v", err)
-	}
-}
-
-func TestRemoveTreeRejectsChangedIdentity(t *testing.T) {
-	root := t.TempDir()
-	art := makeArtifact(t, root, "node_modules", time.Now())
-	snap, err := safe.TakeSnapshot(art)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Replace the artifact with a different directory. Rename the original
-	// away rather than deleting it so its inode stays allocated and the
-	// replacement cannot reuse it; ext4 reuses freed inodes.
-	if err := os.Rename(art, art+".moved"); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(art, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	v := safe.NewValidator(os.Getuid())
-	if err := safe.RemoveTree(art, v, snap); err == nil {
-		t.Fatal("expected a guard-stop for a changed identity")
+		t.Fatalf("an old untracked build dir must be a candidate: %+v", got)
 	}
 }
 

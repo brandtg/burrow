@@ -5,8 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
-
-	"github.com/brandtg/burrow/internal/i18n"
 )
 
 // Snapshot records the identity of a path and its parent immediately before a
@@ -72,7 +70,7 @@ func (s *Snapshot) Matches() (bool, error) {
 		return false, err
 	}
 	if dev != s.TargetDev || ino != s.TargetIno || pdev != s.ParentDev || pino != s.ParentIno {
-		return false, &Violation{Path: s.Path, Reason: i18n.T(i18n.ErrIdentityChanged)}
+		return false, &Violation{Path: s.Path, Reason: "path identity changed since snapshot"}
 	}
 	return true, nil
 }

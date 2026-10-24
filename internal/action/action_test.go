@@ -26,7 +26,7 @@ func TestTrashActionMovesToTrash(t *testing.T) {
 		t.Fatal(err)
 	}
 	tr := trash.New(filepath.Join(dir, "Trash"), os.Getuid())
-	a := action.NewTrash(src, tr, snap, nil, false)
+	a := action.NewTrash(src, tr, snap, nil)
 
 	res, err := a.Run(context.Background(), false)
 	if err != nil {
@@ -65,7 +65,7 @@ func TestTrashActionIdentityGuard(t *testing.T) {
 		t.Fatal(err)
 	}
 	tr := trash.New(filepath.Join(dir, "Trash"), os.Getuid())
-	a := action.NewTrash(src, tr, snap, nil, false)
+	a := action.NewTrash(src, tr, snap, nil)
 
 	_, err = a.Run(context.Background(), false)
 	var gs *safe.GuardStopError
@@ -80,7 +80,7 @@ func TestTrashActionIdentityGuard(t *testing.T) {
 func TestTrashActionIdempotentWhenAbsent(t *testing.T) {
 	dir := t.TempDir()
 	missing := filepath.Join(dir, "gone")
-	a := action.NewTrash(missing, trash.New(filepath.Join(dir, "Trash"), os.Getuid()), nil, nil, false)
+	a := action.NewTrash(missing, trash.New(filepath.Join(dir, "Trash"), os.Getuid()), nil, nil)
 	res, err := a.Run(context.Background(), false)
 	if err != nil {
 		t.Fatal(err)

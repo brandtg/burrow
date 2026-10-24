@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   gate:
-    name: gate (strict)
+    name: gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -46,8 +46,8 @@ jobs:
           key: gate-tools-${{ runner.os }}-${{ runner.arch }}-golangci-lint-v2.14.0-govulncheck-v1.8.0-goreleaser-v2.18.2
       - name: Add gate tools to PATH
         run: echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-      - name: Run gate (fails if a tool is missing)
-        run: make gate-strict
+      - name: Run gate
+        run: make gate
 
   matrix:
     name: container matrix

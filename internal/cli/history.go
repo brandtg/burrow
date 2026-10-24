@@ -114,9 +114,6 @@ func (a *App) restoreRun(env *engine.Env, runID string) error {
 	if owners := journal.OwnerItems(run); len(owners) > 0 {
 		fmt.Fprintf(a.Out, "%d owner-contract item(s) in this run are not restorable (owner-regenerable)\n", len(owners))
 	}
-	if deleted := journal.DeletedItems(run); len(deleted) > 0 {
-		fmt.Fprintf(a.Out, "%d item(s) in this run were permanently deleted (--permanent) and cannot be restored\n", len(deleted))
-	}
 	if restored == 0 {
 		fmt.Fprintln(a.Out, "nothing restored")
 	}

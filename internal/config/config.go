@@ -46,16 +46,14 @@ type Trash struct {
 	ExternalCommand string `toml:"external_command"`
 }
 
-// Purge holds project-artifact purge settings.
+// Purge holds project-artifact settings. With Trash recovery a wrong guess
+// costs disk space, not data, so the policy is deliberately small: one root
+// list, one inactivity window, one active-project window.
 type Purge struct {
-	Paths        []string `toml:"paths"`
-	ArtifactDirs []string `toml:"artifact_dirs"`
-	// MaxAge is the fallback inactivity window applied to artifact types not
-	// named in MaxAgeByType. Zero disables the age filter.
+	Paths []string `toml:"paths"`
+	// MaxAge is the inactivity window. Artifacts with activity newer than this
+	// are kept. Zero disables the age filter.
 	MaxAge string `toml:"max_age"`
-	// MaxAgeByType overrides MaxAge per artifact pattern. An explicit "0"
-	// disables the age filter for that type (for example __pycache__).
-	MaxAgeByType map[string]string `toml:"max_age_by_type"`
 	// ActiveWithin keeps artifacts belonging to a project whose git repository
 	// saw a commit within this window, regardless of artifact age. Zero disables
 	// the active-project guard.
@@ -67,6 +65,10 @@ type Dev struct {
 	// MaxAge gates pre-selection of a dev cache touched within the window. Zero
 	// disables idle gating.
 	MaxAge string `toml:"max_age"`
+	// Preselect opts dev caches into pre-selection. Off by default: the owner
+	// of the machine actively uses these caches, so rows are shown but stay
+	// unselected unless opted in per run or here.
+	Preselect bool `toml:"preselect"`
 }
 
 // UserCache holds the generic XDG cache sweep settings.
@@ -98,7 +100,7 @@ func Default() *Config {
 	return &Config{
 		General: General{Color: "auto", LogLevel: "info"},
 		Clean: Clean{
-			DefaultCategories: []string{"dev", "user-cache", "desktop-pkgs", "downloads"},
+			DefaultCategories: []string{"projects", "dev", "user-cache", "desktop-pkgs", "downloads"},
 			JournaldMaxSize:   "500M",
 			JournaldMaxAge:    "",
 			MinSize:           "0",
@@ -107,20 +109,7 @@ func Default() *Config {
 		Trash: Trash{Backend: "native", ExternalCommand: ""},
 		Purge: Purge{
 			Paths:        []string{"~/Projects", "~/src", "~/dev", "~/code", "~/work"},
-			ArtifactDirs: []string{"node_modules", "target", ".venv", "venv", "__pycache__", ".next/cache", "build", "dist", ".gradle", "_cacache"},
 			MaxAge:       "7d",
-			MaxAgeByType: map[string]string{
-				"node_modules": "30d",
-				"target":       "7d",
-				".next/cache":  "7d",
-				"__pycache__":  "0",
-				".venv":        "30d",
-				"venv":         "30d",
-				"build":        "14d",
-				"dist":         "14d",
-				".gradle":      "30d",
-				"_cacache":     "30d",
-			},
 			ActiveWithin: "30d",
 		},
 		Analyze: Analyze{
@@ -133,7 +122,7 @@ func Default() *Config {
 			OldMinAge:           "90d",
 			OldMinSize:          "100M",
 		},
-		Dev:       Dev{MaxAge: "30d"},
+		Dev:       Dev{MaxAge: "30d", Preselect: false},
 		UserCache: UserCache{SweepUnknown: false, MaxAge: "30d"},
 	}
 }
@@ -188,6 +177,11 @@ func (c *Config) ApplyEnv(getenv func(string) string) {
 	}
 	if v := getenv("BURROW_DEV_MAX_AGE"); v != "" {
 		c.Dev.MaxAge = v
+	}
+	if v := getenv("BURROW_DEV_PRESELECT"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			c.Dev.Preselect = b
+		}
 	}
 	if v := getenv("BURROW_USER_CACHE_MAX_AGE"); v != "" {
 		c.UserCache.MaxAge = v

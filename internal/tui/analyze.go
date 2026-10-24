@@ -1,6 +1,6 @@
 // Package tui holds burrow's Bubble Tea models. This file is the read-only
-// analyze explorer: a navigable tree with trash keys routed through the Trash
-// module.
+// analyze explorer: a navigable tree. It never mutates the filesystem; the
+// only deletion path in burrow is the clean flow's review screen.
 //
 // Provenance: the UI shape and keybindings mirror Mole's analyze TUI
 // behaviourally; this is an independent implementation (Mole is GPL-3.0, no
@@ -14,10 +14,8 @@ import (
 	"strings"
 
 	"github.com/brandtg/burrow/internal/config"
-	"github.com/brandtg/burrow/internal/journal"
 	"github.com/brandtg/burrow/internal/safe"
 	"github.com/brandtg/burrow/internal/scan"
-	"github.com/brandtg/burrow/internal/trash"
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -55,8 +53,7 @@ func (s SortMode) String() string {
 type LoadFunc func(ctx context.Context, progress func(scan.Progress)) (*scan.Node, error)
 
 // AnalyzeConfig carries the dependencies the analyze model needs. Root is the
-// already-scanned tree; the model never mutates it except by removing nodes it
-// has successfully trashed.
+// already-scanned tree; the model never mutates it.
 //
 // Root and Load are mutually exclusive: when Root is nil the model starts in a
 // loading state and calls Load, rendering progress until the tree is ready.
@@ -65,16 +62,9 @@ type AnalyzeConfig struct {
 	Load LoadFunc
 
 	Apparent bool
-	NoDelete bool
 	Color    bool
 
-	TrashDir string
-	UID      int
-
-	Validator     *safe.Validator
-	Journal       *journal.Writer
 	CategoryRoots []string
-	Command       string
 }
 
 type progressMsg scan.Progress
@@ -87,9 +77,8 @@ type loadDoneMsg struct {
 // AnalyzeModel is the Bubble Tea model for `burrow analyze`.
 type AnalyzeModel struct {
 	cfg  AnalyzeConfig
-	exec *TrashExec
+	root *scan.Node
 
-	root    *scan.Node
 	dir     *scan.Node
 	parents map[*scan.Node]*scan.Node
 	entries []*scan.Node
@@ -100,17 +89,8 @@ type AnalyzeModel struct {
 	sort   SortMode
 	showCt bool
 
-	selected      map[string]bool
-	selectedNodes map[string]*scan.Node
-
 	filter    textinput.Model
 	filtering bool
-
-	confirm bool
-	pending []deleteTarget
-
-	status string
-	freed  int64
 
 	loading     bool
 	loadErr     error
@@ -129,12 +109,6 @@ type AnalyzeModel struct {
 	styles styles
 }
 
-type deleteTarget struct {
-	node *scan.Node
-	snap *safe.Snapshot
-	size int64
-}
-
 // NewAnalyzeModel builds the analyze model from a scanned tree.
 func NewAnalyzeModel(cfg AnalyzeConfig) *AnalyzeModel {
 	filter := textinput.New()
@@ -142,26 +116,18 @@ func NewAnalyzeModel(cfg AnalyzeConfig) *AnalyzeModel {
 	filter.Prompt = "/"
 
 	m := &AnalyzeModel{
-		cfg:           cfg,
-		root:          cfg.Root,
-		dir:           cfg.Root,
-		parents:       map[*scan.Node]*scan.Node{},
-		sort:          SortBySize,
-		selected:      map[string]bool{},
-		selectedNodes: map[string]*scan.Node{},
-		filter:        filter,
-		help:          help.New(),
-		keys:          defaultKeys(),
-		styles:        newStyles(cfg.Color),
-		spin:          spinner.New(spinner.WithSpinner(spinner.Dot)),
-		height:        24,
-		width:         80,
-	}
-	m.exec = &TrashExec{
-		Trash:     trash.New(cfg.TrashDir, cfg.UID),
-		Validator: cfg.Validator,
-		Journal:   cfg.Journal,
-		Command:   cfg.Command,
+		cfg:     cfg,
+		root:    cfg.Root,
+		dir:     cfg.Root,
+		parents: map[*scan.Node]*scan.Node{},
+		sort:    SortBySize,
+		filter:  filter,
+		help:    help.New(),
+		keys:    defaultKeys(),
+		styles:  newStyles(cfg.Color),
+		spin:    spinner.New(spinner.WithSpinner(spinner.Dot)),
+		height:  24,
+		width:   80,
 	}
 	if cfg.Root != nil {
 		m.indexParents(cfg.Root)
@@ -181,7 +147,7 @@ func (m *AnalyzeModel) indexParents(n *scan.Node) {
 	}
 }
 
-// Run starts the Bubble Tea program and closes the journal run frame on exit.
+// Run starts the Bubble Tea program.
 func (m *AnalyzeModel) Run() error {
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	_, err := p.Run()
@@ -191,10 +157,7 @@ func (m *AnalyzeModel) Run() error {
 	if err != nil {
 		return err
 	}
-	if m.loadErr != nil {
-		return m.loadErr
-	}
-	return m.exec.EndRun(m.freed)
+	return m.loadErr
 }
 
 // Init implements tea.Model. When the tree was not pre-scanned it starts the
@@ -285,17 +248,6 @@ func (m *AnalyzeModel) finishLoad(msg loadDoneMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *AnalyzeModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if m.confirm {
-		switch msg.String() {
-		case "y", "Y":
-			m.executeDelete()
-		default:
-			m.confirm = false
-			m.pending = nil
-			m.status = "delete cancelled"
-		}
-		return m, nil
-	}
 	if m.filtering {
 		switch msg.String() {
 		case "esc":
@@ -346,14 +298,6 @@ func (m *AnalyzeModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, m.keys.Filter):
 		m.filtering = true
 		m.filter.Focus()
-	case key.Matches(msg, m.keys.Delete):
-		m.beginDelete(false)
-	case key.Matches(msg, m.keys.DeleteOne):
-		m.beginDelete(true)
-	case key.Matches(msg, m.keys.Select):
-		m.toggleSelect()
-	case key.Matches(msg, m.keys.SelectAll):
-		m.selectAll()
 	}
 	return m, nil
 }
@@ -413,129 +357,6 @@ func (m *AnalyzeModel) parent() {
 func (m *AnalyzeModel) setSort(s SortMode) {
 	m.sort = s
 	m.rebuildEntries()
-}
-
-func (m *AnalyzeModel) toggleSelect() {
-	if m.cursor >= len(m.entries) {
-		return
-	}
-	n := m.entries[m.cursor]
-	if m.selected[n.Path] {
-		m.deselect(n.Path)
-	} else {
-		m.selected[n.Path] = true
-		m.selectedNodes[n.Path] = n
-	}
-}
-
-// deselect drops path from both selection maps. It is called when a selected
-// node is skipped or fails, so a stale selection cannot shadow the cursor on a
-// later delete.
-func (m *AnalyzeModel) deselect(path string) {
-	delete(m.selected, path)
-	delete(m.selectedNodes, path)
-}
-
-func (m *AnalyzeModel) selectAll() {
-	for _, n := range m.entries {
-		m.selected[n.Path] = true
-		m.selectedNodes[n.Path] = n
-	}
-}
-
-func (m *AnalyzeModel) beginDelete(cursorOnly bool) {
-	if m.cfg.NoDelete {
-		m.status = "deletion disabled (--no-delete)"
-		return
-	}
-	var nodes []*scan.Node
-	if !cursorOnly && len(m.selectedNodes) > 0 {
-		for _, n := range m.selectedNodes {
-			nodes = append(nodes, n)
-		}
-	} else if m.cursor < len(m.entries) {
-		nodes = append(nodes, m.entries[m.cursor])
-	}
-	if len(nodes) == 0 {
-		return
-	}
-	var targets []deleteTarget
-	skipped := 0
-	for _, n := range nodes {
-		if m.cfg.Validator != nil {
-			if err := m.cfg.Validator.Validate(n.Path); err != nil {
-				skipped++
-				m.status = fmt.Sprintf("skip %s: %v", n.Name, err)
-				m.deselect(n.Path)
-				continue
-			}
-		}
-		snap, err := safe.TakeSnapshot(n.Path)
-		if err != nil {
-			skipped++
-			m.status = fmt.Sprintf("skip %s: %v", n.Name, err)
-			m.deselect(n.Path)
-			continue
-		}
-		targets = append(targets, deleteTarget{node: n, snap: snap, size: n.Size})
-	}
-	if len(targets) == 0 {
-		if skipped > 0 {
-			m.status = fmt.Sprintf("nothing to trash (%d skipped)", skipped)
-		}
-		return
-	}
-	m.pending = targets
-	m.confirm = true
-	m.status = fmt.Sprintf("trash %d item(s)? [y/n]", len(targets))
-}
-
-func (m *AnalyzeModel) executeDelete() {
-	m.confirm = false
-	trashed := 0
-	for _, t := range m.pending {
-		if err := m.exec.MoveToTrash(t.snap, t.size, t.node.Path); err != nil {
-			m.status = fmt.Sprintf("skip %s: %v", t.node.Name, err)
-			m.deselect(t.node.Path)
-			continue
-		}
-		m.freed += t.size
-		trashed++
-		m.removeNode(t.node)
-		m.deselect(t.node.Path)
-	}
-	m.pending = nil
-	if trashed > 0 {
-		m.status = fmt.Sprintf("trashed %d item(s), %s freed", trashed, config.FormatBytes(m.freed))
-	}
-	m.rebuildEntries()
-}
-
-// removeNode detaches a trashed node from the tree and subtracts its size from
-// every ancestor so the displayed totals stay honest.
-func (m *AnalyzeModel) removeNode(n *scan.Node) {
-	parent, ok := m.parents[n]
-	if !ok {
-		return
-	}
-	m.unknown -= scan.UnknownCount(n)
-	for i, c := range parent.Children {
-		if c == n {
-			parent.Children = append(parent.Children[:i], parent.Children[i+1:]...)
-			break
-		}
-	}
-	delete(m.parents, n)
-	// gdu's ItemCount includes the node itself plus its whole subtree, so
-	// subtract the removed subtree's count (not 1) from each ancestor.
-	for p := parent; p != nil; p = m.parents[p] {
-		p.Size -= n.Size
-		p.Apparent -= n.Apparent
-		p.ItemCount -= n.ItemCount
-		if p.ItemCount < 0 {
-			p.ItemCount = 0
-		}
-	}
 }
 
 func (m *AnalyzeModel) rebuildEntries() {
@@ -725,10 +546,6 @@ func (m *AnalyzeModel) row(n *scan.Node, cursor bool, maxSize int64) string {
 	if cursor {
 		marker = ">"
 	}
-	sel := " "
-	if m.selected[n.Path] {
-		sel = "x"
-	}
 	reclaim := "   "
 	if m.isCategoryRoot(n.Path) {
 		reclaim = "[R]"
@@ -743,7 +560,7 @@ func (m *AnalyzeModel) row(n *scan.Node, cursor bool, maxSize int64) string {
 	if m.showCt {
 		count = fmt.Sprintf(" %d", n.ItemCount)
 	}
-	line := fmt.Sprintf("%s%s %s [%s] %s %s%s", marker, sel, reclaim, bar, size, name, count)
+	line := fmt.Sprintf("%s %s [%s] %s %s%s", marker, reclaim, bar, size, name, count)
 	if cursor {
 		return m.styles.cursor.Render(line)
 	}
@@ -790,17 +607,10 @@ func (m *AnalyzeModel) isCategoryRoot(path string) bool {
 }
 
 func (m *AnalyzeModel) footer() string {
-	if m.confirm {
-		return m.styles.warn.Render(m.status + "  [y] confirm  [n] cancel")
-	}
 	if m.filtering {
 		return m.filter.View()
 	}
-	line := m.help.ShortHelpView(m.keys.shortHelp())
-	if m.status != "" {
-		return line + "\n" + m.styles.subtle.Render(m.status)
-	}
-	return line
+	return m.help.ShortHelpView(m.keys.shortHelp())
 }
 
 func (m *AnalyzeModel) helpView() string {
@@ -827,10 +637,6 @@ type keyMap struct {
 	SortMtime key.Binding
 	Count     key.Binding
 	Filter    key.Binding
-	Delete    key.Binding
-	DeleteOne key.Binding
-	Select    key.Binding
-	SelectAll key.Binding
 	Help      key.Binding
 	Quit      key.Binding
 }
@@ -846,24 +652,19 @@ func defaultKeys() keyMap {
 		SortMtime: key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "sort mtime")),
 		Count:     key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "item count")),
 		Filter:    key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
-		Delete:    key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "trash selected")),
-		DeleteOne: key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "trash highlighted")),
-		Select:    key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "select")),
-		SelectAll: key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "select all")),
 		Help:      key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 		Quit:      key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
 	}
 }
 
 func (k keyMap) shortHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Down, k.Enter, k.Parent, k.SortSize, k.Filter, k.Delete, k.Help, k.Quit}
+	return []key.Binding{k.Up, k.Down, k.Enter, k.Parent, k.SortSize, k.Filter, k.Help, k.Quit}
 }
 
 func (k keyMap) fullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.Enter, k.Parent},
 		{k.SortSize, k.SortName, k.SortMtime, k.Count, k.Filter},
-		{k.Delete, k.DeleteOne, k.Select, k.SelectAll},
 		{k.Help, k.Quit},
 	}
 }

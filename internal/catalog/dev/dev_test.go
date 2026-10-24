@@ -3,7 +3,6 @@ package dev_test
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -182,6 +181,10 @@ func TestOwnerPathChangeGuardStops(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	// Dev caches are not pre-selected by default; the guard is being tested.
+	for _, it := range plan.Items {
+		it.Selected = true
 	}
 	// Point the owner at a different cache between planning and execution.
 	other := t.TempDir()
@@ -364,55 +367,6 @@ func TestMiscTrashItems(t *testing.T) {
 	}
 }
 
-func TestPycacheGitProtection(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git not available")
-	}
-	env := testEnv(t, false)
-	useTestbin(t, env)
-	repo := filepath.Join(env.Home, "Projects", "repo")
-	tracked := filepath.Join(repo, "tracked", "__pycache__")
-	untracked := filepath.Join(repo, "untracked", "__pycache__")
-	mkdirs(t, tracked, untracked)
-	if err := os.WriteFile(filepath.Join(tracked, "a.pyc"), []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(untracked, "b.pyc"), []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	run := func(args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", args...)
-		cmd.Dir = repo
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v: %s", args, err, out)
-		}
-	}
-	run("init", "-q")
-	run("add", "tracked/__pycache__/a.pyc")
-
-	byID := discover(t, env)
-	var trackedID string
-	for id, tg := range byID {
-		if strings.HasPrefix(id, "dev.pycache.") && tg.Path == tracked {
-			trackedID = id
-		}
-	}
-	if trackedID == "" {
-		t.Fatalf("tracked __pycache__ not discovered: %v", keys(byID))
-	}
-	sum := runOnly(t, env, "dev.pycache")
-	if sum.GuardStops < 1 {
-		t.Fatalf("expected the tracked __pycache__ to be guard-stopped, got %+v", sum)
-	}
-	if _, err := os.Stat(tracked); err != nil {
-		t.Fatalf("tracked __pycache__ must survive: %v", err)
-	}
-	if _, err := os.Stat(untracked); !os.IsNotExist(err) {
-		t.Fatalf("untracked __pycache__ should be trashed: %v", err)
-	}
-}
-
 func keys(m map[string]engine.Target) []string {
 	var out []string
 	for k := range m {
@@ -500,33 +454,6 @@ func TestFixtureKeepDiscard(t *testing.T) {
 	}
 }
 
-func TestPycacheGroupsByProject(t *testing.T) {
-	env := testEnv(t, true)
-	mkdirs(t,
-		filepath.Join(env.Home, "Projects", "alpha", "pkg", "__pycache__"),
-		filepath.Join(env.Home, "Projects", "beta", "src", "__pycache__"),
-	)
-	byID := discover(t, env)
-	groups := map[string]string{}
-	for id, tg := range byID {
-		if !strings.HasPrefix(id, "dev.pycache.") {
-			continue
-		}
-		if tg.Group == "" || tg.GroupTitle == "" {
-			t.Fatalf("%s has no presentation group: %+v", id, tg)
-		}
-		groups[id] = tg.Group
-	}
-	if len(groups) != 2 {
-		t.Fatalf("expected 2 pycache targets, got %v", keys(byID))
-	}
-	for id, g := range groups {
-		if !strings.HasSuffix(g, string(filepath.Separator)+"alpha") && !strings.HasSuffix(g, string(filepath.Separator)+"beta") {
-			t.Fatalf("%s grouped under %q, want alpha or beta", id, g)
-		}
-	}
-}
-
 func TestDevIdleGateAndRegen(t *testing.T) {
 	env := testEnv(t, true)
 	// No owner tools: discovery uses the documented cache roots.
@@ -574,5 +501,76 @@ func TestDevExpensiveNotAutoSelectable(t *testing.T) {
 	}
 	if tg.AutoSelectable() {
 		t.Fatal("expensive go-mod cache must not be auto-selectable")
+	}
+}
+
+// TestDevNotPreselectedByDefault pins the v2 default: every dev row is shown
+// but off, with the reason as its first evidence, and the built plan selects
+// nothing unless the user opts in per run.
+func TestDevNotPreselectedByDefault(t *testing.T) {
+	env := testEnv(t, true)
+	// No owner tools: discovery uses the documented cache roots.
+	t.Setenv("PATH", t.TempDir())
+	mkdirs(t,
+		filepath.Join(env.Home, ".npm", "_cacache"),
+		filepath.Join(env.XDGCache, "pip"),
+		filepath.Join(env.XDGCache, "uv"),
+	)
+	targets, err := dev.New().Discover(context.Background(), env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) == 0 {
+		t.Fatal("expected dev targets")
+	}
+	for _, tg := range targets {
+		if tg.DefaultOn {
+			t.Fatalf("%s must not be pre-selected by default", tg.ID)
+		}
+		if tg.Evidence[0] != "dev caches are not pre-selected by default" {
+			t.Fatalf("%s evidence[0] = %q, want the preselect reason", tg.ID, tg.Evidence[0])
+		}
+	}
+
+	plan, err := engine.Build(context.Background(), env, engine.Options{Categories: []engine.Category{dev.New()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := plan.Selected(); len(got) != 0 {
+		t.Fatalf("nothing in the dev category may be pre-selected, got %d items", len(got))
+	}
+}
+
+// TestDevPreselectOptIn: [dev] preselect = true restores regen-cost-driven
+// pre-selection (free/cheap on, expensive off) and the idle gate still
+// applies; the opt-out note is gone.
+func TestDevPreselectOptIn(t *testing.T) {
+	env := testEnv(t, true)
+	t.Setenv("PATH", t.TempDir())
+	pip := filepath.Join(env.XDGCache, "pip")
+	mod := filepath.Join(env.Home, "go", "pkg", "mod")
+	mkdirs(t, pip, mod)
+	stale := time.Now().Add(-90 * 24 * time.Hour)
+	for _, p := range []string{pip, mod} {
+		if err := filepath.WalkDir(p, func(path string, _ os.DirEntry, _ error) error {
+			return os.Chtimes(path, stale, stale)
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	env.Cfg.Dev.Preselect = true
+	byID := discover(t, env)
+	if !byID["dev.pip"].DefaultOn {
+		t.Fatalf("cheap caches must be pre-selected when opted in: %+v", byID["dev.pip"])
+	}
+	if byID["dev.go-mod"].AutoSelectable() {
+		t.Fatalf("expensive caches stay out of bulk selection even when opted in: %+v", byID["dev.go-mod"])
+	}
+	for _, tg := range byID {
+		for _, e := range tg.Evidence {
+			if e == "dev caches are not pre-selected by default" {
+				t.Fatalf("%s must not carry the opt-out note when preselect is on", tg.ID)
+			}
+		}
 	}
 }

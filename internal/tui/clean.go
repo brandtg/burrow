@@ -11,6 +11,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/brandtg/burrow/internal/catalog/projects"
 	"github.com/brandtg/burrow/internal/config"
 	"github.com/brandtg/burrow/internal/engine"
 	"github.com/brandtg/burrow/internal/whitelist"
@@ -40,6 +41,7 @@ func RenderPreview(w io.Writer, plan *engine.Plan, platform string, color bool) 
 	if platform != "" {
 		fmt.Fprintln(w, platform)
 	}
+	cw := planItemWidths(plan)
 	unknown := 0
 	for _, g := range plan.GroupedTree() {
 		fmt.Fprintf(w, "\u25b8 %s  %s / %d items\n", g.Title, config.FormatBytes(g.Bytes), len(g.Items))
@@ -66,7 +68,7 @@ func RenderPreview(w io.Writer, plan *engine.Plan, platform string, color bool) 
 				if ig.ID != "" {
 					indent = "    "
 				}
-				fmt.Fprintf(w, "%s%s\n", indent, itemLine(it, color))
+				fmt.Fprintf(w, "%s%s\n", indent, itemLine(it, cw, color))
 				shown++
 			}
 			if extra := len(ig.Items) - shown; extra > 0 {
@@ -125,23 +127,12 @@ func reviewText(plan *engine.Plan, dryRun bool) string {
 				continue
 			}
 			var bytes int64
-			permanent := 0
 			for _, it := range items {
 				if it.Target.SizeKnown {
 					bytes += it.Target.SizeBytes
 				}
-				if it.Permanent {
-					permanent++
-				}
 			}
-			verb := "trash"
-			if permanent == len(items) {
-				verb = "permanently delete"
-			}
-			line := fmt.Sprintf("  %s %d item(s), %s \u2014 %s", verb, len(items), config.FormatBytes(bytes), g.Title)
-			if permanent > 0 && permanent < len(items) {
-				line += fmt.Sprintf(" (%d permanent)", permanent)
-			}
+			line := fmt.Sprintf("  trash %d item(s), %s \u2014 %s", len(items), config.FormatBytes(bytes), g.Title)
 			b.WriteString(line + "\n")
 		}
 	}
@@ -188,10 +179,7 @@ func reviewLine(it *engine.PlannedItem) string {
 	}
 	if it.Target.Path != "" {
 		verb := "trash"
-		switch {
-		case it.Permanent:
-			verb = "permanently delete"
-		case it.Target.Recovery == engine.RecoveryOwner:
+		if it.Target.Recovery == engine.RecoveryOwner {
 			verb = "owner"
 		}
 		return fmt.Sprintf("%s: %s %s", it.Target.ID, verb, it.Target.Path)
@@ -199,7 +187,71 @@ func reviewLine(it *engine.PlannedItem) string {
 	return fmt.Sprintf("%s: (no path)", it.Target.ID)
 }
 
-func itemLine(it *engine.PlannedItem, color bool) string {
+// colWidths carries the per-column paddings so item rows align vertically.
+// Widths are computed once from every item in the plan, not per row.
+type colWidths struct {
+	display int
+	size    int
+	tag     int
+	regen   int
+}
+
+func itemWidths(items []*engine.PlannedItem) colWidths {
+	var cw colWidths
+	for _, it := range items {
+		if n := displayWidth(it.Target.Display); n > cw.display {
+			cw.display = n
+		}
+		if n := len(sizeField(it.Target)); n > cw.size {
+			cw.size = n
+		}
+		if n := len(tagField(it.Target)); n > cw.tag {
+			cw.tag = n
+		}
+		if n := len(regenField(it.Target)); n > cw.regen {
+			cw.regen = n
+		}
+	}
+	return cw
+}
+
+// displayWidth is the rune count of a display name (display names are plain
+// text; no ANSI escapes reach the Target).
+func displayWidth(s string) int {
+	n := 0
+	for range s {
+		n++
+	}
+	return n
+}
+
+func sizeField(t engine.Target) string {
+	if !t.SizeKnown {
+		return "unknown"
+	}
+	return config.FormatBytes(t.SizeBytes)
+}
+
+func tagField(t engine.Target) string {
+	tag := "[trash]"
+	if t.Recovery == engine.RecoveryOwner {
+		tag = "[owner]"
+	}
+	if t.NeedsRoot {
+		tag += " (root)"
+	}
+	return tag
+}
+
+func regenField(t engine.Target) string {
+	regen := t.Regen.String()
+	if t.Gated {
+		regen += ",active"
+	}
+	return regen
+}
+
+func itemLine(it *engine.PlannedItem, cw colWidths, color bool) string {
 	check := "[ ]"
 	switch {
 	case it.Kept:
@@ -207,26 +259,17 @@ func itemLine(it *engine.PlannedItem, color bool) string {
 	case it.Selected:
 		check = "[x]"
 	}
-	rec := "[owner]"
-	switch {
-	case it.Permanent:
-		rec = "[delete]"
-	case it.Target.Recovery == engine.RecoveryTrash:
-		rec = "[trash]"
-	}
-	root := ""
-	if it.Target.NeedsRoot {
-		root = " (root)"
-	}
-	size := "unknown (owner-reported)"
-	if it.Target.SizeKnown {
-		size = config.FormatBytes(it.Target.SizeBytes)
-	}
-	regen := it.Target.Regen.String()
-	if it.Target.Gated {
-		regen += ",active"
-	}
-	return fmt.Sprintf("%s %-26s %10s  %s%s %-9s %s", check, it.Target.Display, size, rec, root, regen, riskLabel(it.Target.Risk, color))
+	line := fmt.Sprintf("%s %-*s  %*s  %-*s %-*s %s",
+		check, cw.display, it.Target.Display,
+		cw.size, sizeField(it.Target),
+		cw.tag, tagField(it.Target),
+		cw.regen, regenField(it.Target),
+		riskLabel(it.Target.Risk, color))
+	return line
+}
+
+func planItemWidths(plan *engine.Plan) colWidths {
+	return itemWidths(plan.Items)
 }
 
 func riskLabel(r engine.Risk, color bool) string {
@@ -323,6 +366,8 @@ type CleanModel struct {
 	help   help.Model
 	keys   cleanKeyMap
 	styles styles
+
+	widths colWidths
 }
 
 // NewCleanModel builds the clean model from a plan.
@@ -337,6 +382,7 @@ func NewCleanModel(cfg CleanConfig) *CleanModel {
 		dryRun:       cfg.DryRun,
 		whitelist:    cfg.Whitelist,
 		cats:         cfg.Plan.GroupedTree(),
+		widths:       planItemWidths(cfg.Plan),
 		collapsedCat: map[string]bool{},
 		collapsedGrp: map[string]bool{},
 		filter:       filter,
@@ -351,7 +397,10 @@ func NewCleanModel(cfg CleanConfig) *CleanModel {
 			m.collapsedCat[m.cats[i].ID] = true
 		}
 		for j := range m.cats[i].Groups {
-			if len(m.cats[i].Groups[j].Items) > collapseThreshold {
+			// Project artifact groups always start collapsed: one row per
+			// project (name + total artifact size), expandable — a monorepo is
+			// one row, not thirty.
+			if m.cats[i].ID == projects.ID || len(m.cats[i].Groups[j].Items) > collapseThreshold {
 				m.collapsedGrp[groupKey(m.cats[i].ID, m.cats[i].Groups[j].ID)] = true
 			}
 		}
@@ -437,6 +486,14 @@ func (m *CleanModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.move(-1)
 	case key.Matches(msg, m.keys.Down):
 		m.move(1)
+	case key.Matches(msg, m.keys.PageUp):
+		m.page(-1)
+	case key.Matches(msg, m.keys.PageDown):
+		m.page(1)
+	case key.Matches(msg, m.keys.Top):
+		m.setCursor(0)
+	case key.Matches(msg, m.keys.Bottom):
+		m.setCursor(len(m.rows) - 1)
 	case key.Matches(msg, m.keys.Toggle):
 		m.toggle()
 	case key.Matches(msg, m.keys.Expand):
@@ -459,12 +516,22 @@ func (m *CleanModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *CleanModel) move(delta int) {
+	m.setCursor(m.cursor + delta)
+}
+
+// setCursor jumps to an absolute row and keeps it visible.
+func (m *CleanModel) setCursor(idx int) {
 	if len(m.rows) == 0 {
 		return
 	}
-	m.cursor += delta
+	m.cursor = idx
 	m.clampCursor()
 	m.ensureVisible()
+}
+
+// page scrolls by one viewport height.
+func (m *CleanModel) page(delta int) {
+	m.setCursor(m.cursor + delta*m.listHeight())
 }
 
 func (m *CleanModel) clampCursor() {
@@ -803,7 +870,7 @@ func (m *CleanModel) row(r cleanRow, cursor bool) string {
 		if r.group != nil && r.group.ID == "" {
 			indent = "  "
 		}
-		line = marker + " " + indent + itemLine(r.item, m.color)
+		line = marker + " " + indent + itemLine(r.item, m.widths, m.color)
 	}
 	if cursor {
 		return m.styles.cursor.Render(line)
@@ -853,6 +920,10 @@ func (m *CleanModel) footer() string {
 type cleanKeyMap struct {
 	Up        key.Binding
 	Down      key.Binding
+	PageUp    key.Binding
+	PageDown  key.Binding
+	Top       key.Binding
+	Bottom    key.Binding
 	Toggle    key.Binding
 	Expand    key.Binding
 	Collapse  key.Binding
@@ -869,26 +940,32 @@ func defaultCleanKeys() cleanKeyMap {
 	return cleanKeyMap{
 		Up:        key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("\u2191/k", "up")),
 		Down:      key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("\u2193/j", "down")),
+		PageUp:    key.NewBinding(key.WithKeys("pgup", "ctrl+b"), key.WithHelp("pgup/^b", "page up")),
+		PageDown:  key.NewBinding(key.WithKeys("pgdown", "ctrl+f"), key.WithHelp("pgdn/^f", "page down")),
+		Top:       key.NewBinding(key.WithKeys("g", "home"), key.WithHelp("g/home", "top")),
+		Bottom:    key.NewBinding(key.WithKeys("G", "end"), key.WithHelp("G/end", "bottom")),
 		Toggle:    key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "toggle")),
 		Expand:    key.NewBinding(key.WithKeys("right", "l", "tab"), key.WithHelp("\u2192/l", "expand")),
 		Collapse:  key.NewBinding(key.WithKeys("left", "h"), key.WithHelp("\u2190/h", "collapse")),
 		SelectAll: key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "all-safe")),
 		Clear:     key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "none")),
-		Keep:      key.NewBinding(key.WithKeys("k"), key.WithHelp("k", "keep")),
-		Filter:    key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search")),
-		Review:    key.NewBinding(key.WithKeys("enter", "r"), key.WithHelp("enter", "review")),
-		Help:      key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
-		Quit:      key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
+		// Shift-K: lowercase k is the vim "up" binding, so the whitelist key
+		// must be distinct or it is unreachable.
+		Keep:   key.NewBinding(key.WithKeys("K"), key.WithHelp("K", "keep")),
+		Filter: key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search")),
+		Review: key.NewBinding(key.WithKeys("enter", "r"), key.WithHelp("enter", "review")),
+		Help:   key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
+		Quit:   key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
 	}
 }
 
 func (k cleanKeyMap) shortHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Down, k.Toggle, k.SelectAll, k.Keep, k.Filter, k.Review, k.Help, k.Quit}
+	return []key.Binding{k.Up, k.Down, k.PageUp, k.PageDown, k.Toggle, k.SelectAll, k.Keep, k.Filter, k.Review, k.Help, k.Quit}
 }
 
 func (k cleanKeyMap) fullHelp() [][]key.Binding {
 	return [][]key.Binding{
-		{k.Up, k.Down, k.Expand, k.Collapse},
+		{k.Up, k.Down, k.PageUp, k.PageDown, k.Top, k.Bottom, k.Expand, k.Collapse},
 		{k.Toggle, k.SelectAll, k.Clear, k.Filter},
 		{k.Keep, k.Review, k.Help, k.Quit},
 	}

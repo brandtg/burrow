@@ -72,36 +72,6 @@ func TestRenderReviewListsExactArgv(t *testing.T) {
 	}
 }
 
-func TestRenderPermanentLabelsDelete(t *testing.T) {
-	plan := &engine.Plan{
-		RunID:   "TESTRUN",
-		Command: "clean",
-		Items: []*engine.PlannedItem{{
-			Target: engine.Target{
-				ID: "dev.yarn", Category: "dev", Display: "yarn cache",
-				Path: "/home/u/.yarn/cache", SizeBytes: 10, SizeKnown: true,
-				Recovery: engine.RecoveryTrash, Risk: engine.RiskLow, DefaultOn: true,
-			},
-			CategoryTitle: "Developer caches",
-			Selected:      true,
-			Permanent:     true,
-		}},
-	}
-	var preview bytes.Buffer
-	RenderPreview(&preview, plan, "", false)
-	if !bytes.Contains(preview.Bytes(), []byte("[delete]")) {
-		t.Fatalf("permanent item must be labeled [delete]:\n%s", preview.String())
-	}
-	if bytes.Contains(preview.Bytes(), []byte("[trash]")) {
-		t.Fatalf("permanent item must not be labeled [trash]:\n%s", preview.String())
-	}
-	var review bytes.Buffer
-	RenderReview(&review, plan)
-	if !bytes.Contains(review.Bytes(), []byte("permanently delete")) {
-		t.Fatalf("review must say permanently delete:\n%s", review.String())
-	}
-}
-
 func bigPlan() *engine.Plan {
 	var items []*engine.PlannedItem
 	for i := 0; i < 30; i++ {
@@ -131,6 +101,86 @@ func TestCleanModelCollapsesLargeCategories(t *testing.T) {
 	m.expand()
 	if len(m.rows) <= 1 {
 		t.Fatalf("expanding should reveal rows, got %d", len(m.rows))
+	}
+}
+
+// projectsPlan builds a Projects category with two small groups (alpha, beta)
+// plus an ungrouped system item. Projects groups start collapsed regardless of
+// size: one row per project, expandable.
+func projectsPlan() *engine.Plan {
+	mk := func(id, group, title string) *engine.PlannedItem {
+		return &engine.PlannedItem{
+			Target: engine.Target{
+				ID: id, Category: "projects", Display: "node_modules",
+				Path: group + "/" + id, SizeBytes: 1024, SizeKnown: true,
+				Recovery: engine.RecoveryTrash, Risk: engine.RiskLow,
+				Group: group, GroupTitle: title,
+			},
+			CategoryTitle: "Projects",
+		}
+	}
+	return &engine.Plan{
+		RunID:   "TESTRUN",
+		Command: "clean",
+		Items: []*engine.PlannedItem{
+			mk("projects.alpha-node_modules", "/w/alpha", "alpha"),
+			mk("projects.alpha-node_modules-2", "/w/alpha", "alpha"),
+			mk("projects.beta-node_modules", "/w/beta", "beta"),
+			{
+				Target: engine.Target{
+					ID: "system.journald", Category: "system", Display: "systemd journal",
+					SizeBytes: 1, SizeKnown: true, Recovery: engine.RecoveryOwner,
+				},
+				CategoryTitle: "System",
+			},
+		},
+	}
+}
+
+func TestProjectsGroupsStartCollapsed(t *testing.T) {
+	m := NewCleanModel(CleanConfig{Plan: projectsPlan()})
+	var groups, items int
+	for _, r := range m.rows {
+		switch r.kind {
+		case rowGroup:
+			groups++
+		case rowItem:
+			if r.item.Target.Group != "" {
+				items++
+			}
+		}
+	}
+	if groups != 2 {
+		t.Fatalf("expected one row per project group, got %d group rows: %+v", groups, m.rows)
+	}
+	if items != 0 {
+		t.Fatalf("project artifacts must be hidden behind their project row, got %d item rows", items)
+	}
+}
+
+func TestProjectsGroupsExpandable(t *testing.T) {
+	m := NewCleanModel(CleanConfig{Plan: projectsPlan()})
+	for i, r := range m.rows {
+		if r.kind == rowGroup && r.group.Title == "alpha" {
+			m.cursor = i
+			break
+		}
+	}
+	m.expand()
+	var alphaItems int
+	for _, r := range m.rows {
+		if r.kind == rowItem && r.group != nil && r.group.Title == "alpha" {
+			alphaItems++
+		}
+	}
+	if alphaItems != 2 {
+		t.Fatalf("expanding alpha should reveal its 2 artifacts, got %d", alphaItems)
+	}
+	// beta stays collapsed.
+	for _, r := range m.rows {
+		if r.kind == rowItem && r.group != nil && r.group.Title == "beta" {
+			t.Fatal("beta must stay collapsed")
+		}
 	}
 }
 

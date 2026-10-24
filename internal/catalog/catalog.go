@@ -49,3 +49,10 @@ func (r *Registry) ByID(id string) (engine.Category, bool) {
 type Reconciler interface {
 	Reconcile(*engine.Plan)
 }
+
+// Warner is an optional category hook exposing non-fatal discovery notes (for
+// example a configured root that does not exist) for the plan's warning list.
+// Discovery never aborts on a bad input; the warning is the only signal.
+type Warner interface {
+	Warnings() []string
+}

@@ -1,6 +1,5 @@
 // Package safe is the safety core: path validation, identity snapshots, and
-// fail-closed guards. The only mutation here is RemoveTree, the single
-// permanent-delete primitive (invariant I3); everything else is read-only.
+// fail-closed guards. Nothing in this package mutates the filesystem.
 //
 // Provenance: this is an independent reimplementation of the safety contract
 // Mole applies on macOS (path validation, TOCTOU identity snapshots,
@@ -15,8 +14,6 @@ import (
 	"strings"
 	"syscall"
 	"unicode"
-
-	"github.com/brandtg/burrow/internal/i18n"
 )
 
 // ErrUnsafe is the sentinel returned (via errors.Is) by every validation
@@ -156,36 +153,36 @@ func (v *Validator) ValidateForDeletion(path string) error { return v.Validate(p
 // violation.
 func (v *Validator) Validate(path string) error {
 	if path == "" {
-		return violation(path, i18n.T(i18n.ErrPathEmpty))
+		return violation(path, "path is empty")
 	}
 	if !filepath.IsAbs(path) {
-		return violation(path, i18n.T(i18n.ErrPathNotAbs))
+		return violation(path, "path is not absolute")
 	}
 	for _, r := range path {
 		if unicode.IsControl(r) {
-			return violation(path, i18n.T(i18n.ErrPathControl))
+			return violation(path, "path contains control characters")
 		}
 	}
 	if strings.Contains(path, "//") {
-		return violation(path, i18n.T(i18n.ErrPathDoubleSlash))
+		return violation(path, "path contains an empty segment (//)")
 	}
 	clean := filepath.Clean(path)
 	if clean != path {
-		return violation(path, i18n.T(i18n.ErrPathNotClean))
+		return violation(path, "path is not in canonical form")
 	}
 	trimmed := strings.TrimPrefix(clean, string(filepath.Separator))
 	for _, seg := range strings.Split(trimmed, string(filepath.Separator)) {
 		if seg == "" || seg == "." || seg == ".." {
-			return violation(path, i18n.T(i18n.ErrPathDotSegment))
+			return violation(path, "path contains a '.' or '..' segment")
 		}
 	}
 	if isProtectedRoot(clean) {
-		return violation(path, i18n.T(i18n.ErrPathProtected))
+		return violation(path, "path is a protected root or under one")
 	}
 	for _, p := range v.Protected {
 		pc := filepath.Clean(p)
 		if within(clean, pc) {
-			return violation(path, i18n.T(i18n.ErrPathProtected))
+			return violation(path, "path is a protected root or under one")
 		}
 	}
 	if v.RequireRoot {
@@ -197,19 +194,19 @@ func (v *Validator) Validate(path string) error {
 			}
 		}
 		if !ok {
-			return violation(path, i18n.T(i18n.ErrPathNoRoot))
+			return violation(path, "path is outside the allow-listed roots")
 		}
 	}
 	fi, err := os.Lstat(clean)
 	if err != nil {
-		return violation(path, i18n.Tf(i18n.ErrPathResolve, err))
+		return violation(path, fmt.Sprintf("cannot resolve path: %v", err))
 	}
 	if fi.Mode()&os.ModeSymlink != 0 {
 		resolved, rerr := filepath.EvalSymlinks(clean)
 		if rerr != nil {
 			resolved = clean
 		}
-		return violation(path, i18n.Tf(i18n.ErrPathSymlink, resolved))
+		return violation(path, fmt.Sprintf("path root is a symlink (resolves to %s)", resolved))
 	}
 	// Ancestors may legitimately be symlinks (Fedora Silverblue's /home ->
 	// /var/home, symlinked mounts, some container homes). Resolve the parent
@@ -218,16 +215,16 @@ func (v *Validator) Validate(path string) error {
 	// directory or outside the allow-listed roots.
 	physical, err := physicalPath(clean)
 	if err != nil {
-		return violation(path, i18n.Tf(i18n.ErrPathResolve, err))
+		return violation(path, fmt.Sprintf("cannot resolve path: %v", err))
 	}
 	if physical != clean {
 		if isProtectedRoot(physical) {
-			return violation(path, i18n.T(i18n.ErrPathProtected))
+			return violation(path, "path is a protected root or under one")
 		}
 		for _, p := range v.Protected {
 			pc := filepath.Clean(p)
 			if within(physical, pc) || within(physical, resolveOrSelf(pc)) {
-				return violation(path, i18n.T(i18n.ErrPathProtected))
+				return violation(path, "path is a protected root or under one")
 			}
 		}
 		if v.RequireRoot {
@@ -240,17 +237,17 @@ func (v *Validator) Validate(path string) error {
 				}
 			}
 			if !ok {
-				return violation(path, i18n.T(i18n.ErrPathNoRoot))
+				return violation(path, "path is outside the allow-listed roots")
 			}
 		}
 	}
 	if v.CheckOwnership {
 		st, ok := fi.Sys().(*syscall.Stat_t)
 		if !ok {
-			return violation(path, i18n.Tf(i18n.ErrPathResolve, "cannot read stat"))
+			return violation(path, "cannot resolve path: cannot read stat")
 		}
 		if int(st.Uid) != v.UID {
-			return violation(path, i18n.Tf(i18n.ErrPathNotOwned, v.UID, st.Uid))
+			return violation(path, fmt.Sprintf("path is not owned by the invoking user (uid %d, owner %d)", v.UID, st.Uid))
 		}
 	}
 	return nil

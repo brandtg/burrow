@@ -35,6 +35,11 @@ type TrashTargetOptions struct {
 	Evidence   []string
 	Group      string
 	GroupTitle string
+	// Size and SizeKnown carry a measurement taken during discovery, so the
+	// engine does not have to walk the tree again. Leave SizeKnown false to
+	// let engine.Measure fill it.
+	Size      int64
+	SizeKnown bool
 }
 
 // NewTrashTarget validates, snapshots, and builds a trash-contract target. It
@@ -71,7 +76,9 @@ func NewTrashTarget(env *engine.Env, o TrashTargetOptions) (engine.Target, error
 		Category:   o.Category,
 		Display:    o.Display,
 		Path:       o.Path,
-		Action:     action.NewTrash(o.Path, tr, snap, v, false),
+		SizeBytes:  o.Size,
+		SizeKnown:  o.SizeKnown,
+		Action:     action.NewTrash(o.Path, tr, snap, v),
 		Recovery:   engine.RecoveryTrash,
 		Risk:       o.Risk,
 		Regen:      o.Regen,
