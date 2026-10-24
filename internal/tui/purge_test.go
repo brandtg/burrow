@@ -8,6 +8,7 @@ import (
 
 	"github.com/brandtg/burrow/internal/purge"
 	"github.com/brandtg/burrow/internal/safe"
+	"github.com/brandtg/burrow/internal/trash"
 )
 
 func sampleArtifacts(t *testing.T) []purge.Artifact {
@@ -92,7 +93,10 @@ func TestPurgeModelJumpGroup(t *testing.T) {
 
 func TestPurgeModelExecuteDeletes(t *testing.T) {
 	arts := sampleArtifacts(t)
-	exec := &purge.Executor{Validator: safe.NewValidator(os.Getuid())}
+	exec := &purge.Executor{
+		Validator: safe.NewValidator(os.Getuid()),
+		Trash:     trash.New(filepath.Join(t.TempDir(), "Trash"), os.Getuid()),
+	}
 	m := NewPurgeModel(PurgeConfig{Artifacts: arts, Now: time.Now(), Executor: exec})
 	m.selectAll()
 	victim := arts[0].Path

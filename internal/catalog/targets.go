@@ -71,7 +71,7 @@ func NewTrashTarget(env *engine.Env, o TrashTargetOptions) (engine.Target, error
 		Category:   o.Category,
 		Display:    o.Display,
 		Path:       o.Path,
-		Action:     action.NewTrash(o.Path, tr, snap, v, false),
+		Action:     action.NewTrash(o.Path, tr, snap, v),
 		Recovery:   engine.RecoveryTrash,
 		Risk:       o.Risk,
 		Regen:      o.Regen,

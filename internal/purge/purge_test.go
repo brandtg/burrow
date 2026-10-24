@@ -12,6 +12,7 @@ import (
 
 	"github.com/brandtg/burrow/internal/journal"
 	"github.com/brandtg/burrow/internal/safe"
+	"github.com/brandtg/burrow/internal/trash"
 )
 
 func TestMatchArtifact(t *testing.T) {
@@ -340,7 +341,11 @@ func TestExecutorDeleteAndJournal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	exec := &Executor{Journal: w, Command: "purge"}
+	exec := &Executor{
+		Trash:   trash.New(filepath.Join(t.TempDir(), "Trash"), os.Getuid()),
+		Journal: w,
+		Command: "purge",
+	}
 	freed, err := exec.Delete(&arts[0], false)
 	if err != nil {
 		t.Fatal(err)
@@ -360,10 +365,10 @@ func TestExecutorDeleteAndJournal(t *testing.T) {
 	}
 	var found bool
 	for _, r := range records {
-		if r.Action == journal.ActionPurge {
+		if r.Action == journal.ActionTrash {
 			found = true
-			if r.Recovery != journal.RecoveryOwner {
-				t.Fatalf("recovery = %q, want owner", r.Recovery)
+			if r.Recovery != journal.RecoveryTrash {
+				t.Fatalf("recovery = %q, want trash", r.Recovery)
 			}
 			if r.Status != journal.StatusOK {
 				t.Fatalf("status = %q, want ok", r.Status)
@@ -382,7 +387,7 @@ func TestExecutorDryRunDoesNotDelete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	exec := &Executor{Command: "purge"}
+	exec := &Executor{Trash: trash.New(filepath.Join(t.TempDir(), "Trash"), os.Getuid()), Command: "purge"}
 	if _, err := exec.Delete(&arts[0], true); err != nil {
 		t.Fatal(err)
 	}
@@ -391,7 +396,10 @@ func TestExecutorDryRunDoesNotDelete(t *testing.T) {
 	}
 }
 
-func TestRemoveTreeRejectsChangedIdentity(t *testing.T) {
+// TestExecutorIdentityGuard pins the TOCTOU defense: an artifact whose on-disk
+// identity no longer matches the discovery snapshot must be skipped, not
+// trashed.
+func TestExecutorIdentityGuard(t *testing.T) {
 	root := t.TempDir()
 	art := makeArtifact(t, root, "node_modules", time.Now())
 	snap, err := safe.TakeSnapshot(art)
@@ -407,9 +415,20 @@ func TestRemoveTreeRejectsChangedIdentity(t *testing.T) {
 	if err := os.MkdirAll(art, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	v := safe.NewValidator(os.Getuid())
-	if err := safe.RemoveTree(art, v, snap); err == nil {
+	arts, err := Discover(context.Background(), Options{Roots: []string{root}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(arts) != 1 {
+		t.Fatalf("expected 1 artifact, got %d", len(arts))
+	}
+	arts[0].Snapshot = snap
+	exec := &Executor{Validator: safe.NewValidator(os.Getuid()), Trash: trash.New(filepath.Join(t.TempDir(), "Trash"), os.Getuid())}
+	if _, err := exec.Delete(&arts[0], false); err == nil {
 		t.Fatal("expected a guard-stop for a changed identity")
+	}
+	if _, err := os.Lstat(art); err != nil {
+		t.Fatalf("guard-stopped artifact must be left in place: %v", err)
 	}
 }
 

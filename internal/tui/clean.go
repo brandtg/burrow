@@ -125,23 +125,12 @@ func reviewText(plan *engine.Plan, dryRun bool) string {
 				continue
 			}
 			var bytes int64
-			permanent := 0
 			for _, it := range items {
 				if it.Target.SizeKnown {
 					bytes += it.Target.SizeBytes
 				}
-				if it.Permanent {
-					permanent++
-				}
 			}
-			verb := "trash"
-			if permanent == len(items) {
-				verb = "permanently delete"
-			}
-			line := fmt.Sprintf("  %s %d item(s), %s \u2014 %s", verb, len(items), config.FormatBytes(bytes), g.Title)
-			if permanent > 0 && permanent < len(items) {
-				line += fmt.Sprintf(" (%d permanent)", permanent)
-			}
+			line := fmt.Sprintf("  trash %d item(s), %s \u2014 %s", len(items), config.FormatBytes(bytes), g.Title)
 			b.WriteString(line + "\n")
 		}
 	}
@@ -188,10 +177,7 @@ func reviewLine(it *engine.PlannedItem) string {
 	}
 	if it.Target.Path != "" {
 		verb := "trash"
-		switch {
-		case it.Permanent:
-			verb = "permanently delete"
-		case it.Target.Recovery == engine.RecoveryOwner:
+		if it.Target.Recovery == engine.RecoveryOwner {
 			verb = "owner"
 		}
 		return fmt.Sprintf("%s: %s %s", it.Target.ID, verb, it.Target.Path)
@@ -208,10 +194,7 @@ func itemLine(it *engine.PlannedItem, color bool) string {
 		check = "[x]"
 	}
 	rec := "[owner]"
-	switch {
-	case it.Permanent:
-		rec = "[delete]"
-	case it.Target.Recovery == engine.RecoveryTrash:
+	if it.Target.Recovery == engine.RecoveryTrash {
 		rec = "[trash]"
 	}
 	root := ""

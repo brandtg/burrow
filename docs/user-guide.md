@@ -46,7 +46,7 @@ burrow clean --yes --only system.pkg-cache
 
 On a terminal, `clean` opens a preview TUI grouped by category (with an optional
 sub-group level) showing each item's size, recovery contract
-(`[trash]`/`[owner]`, or `[delete]` under `--permanent`), `(root)` marker,
+(`[trash]`/`[owner]`), `(root)` marker,
 regeneration cost (`free`/`cheap`/`expensive`/`data`, plus `,active` when the
 cache was used recently), and risk. Categories and groups with many items start
 collapsed; `→`/`←` expand and collapse, `/` filters, and `space` on a category
@@ -78,13 +78,7 @@ burrow clean --only dev.npm             # one item
 burrow clean --exclude containers       # drop a category
 burrow clean --min-size 100M            # only items at/above a size
 burrow clean --no-owner                 # trash user caches, skip owner commands
-burrow clean --permanent                # trash-contract items deleted instead (warned)
 ```
-
-`--permanent` is an explicit escape hatch; it never applies to owner commands. A
-permanent trash-contract item is labeled `[delete]` in the preview and review, a
-warning is printed, and the journal records `action: "delete"` /
-`recovery: "delete"` so it is never offered by `history --restore`.
 
 ## Whitelist
 

@@ -200,7 +200,7 @@ func newUserdataTarget(env *engine.Env, id, display, path, root string, guard en
 		Category:  ID,
 		Display:   display,
 		Path:      path,
-		Action:    action.NewTrash(path, tr, snap, v, false),
+		Action:    action.NewTrash(path, tr, snap, v),
 		Recovery:  engine.RecoveryTrash,
 		NeedsRoot: false,
 		Guard:     guard,

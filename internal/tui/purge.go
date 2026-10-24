@@ -32,7 +32,8 @@ type purgeRow struct {
 }
 
 // PurgeModel is the Bubble Tea model for `burrow purge`. It groups candidates
-// by project and deletes the selected artifacts through purge.Executor.
+// by project and moves the selected artifacts to the Trash through
+// purge.Executor.
 type PurgeModel struct {
 	cfg  PurgeConfig
 	exec *purge.Executor
@@ -292,7 +293,7 @@ func (m *PurgeModel) beginConfirm() {
 		return
 	}
 	m.confirm = true
-	m.status = fmt.Sprintf("permanently delete %d artifact(s), %s? [y/n]",
+	m.status = fmt.Sprintf("move %d artifact(s) to the Trash, %s? [y/n]",
 		m.SelectedCount(), config.FormatBytes(m.SelectedSize()))
 }
 
@@ -417,7 +418,7 @@ func (m *PurgeModel) header() string {
 	kept := len(m.artifacts) - purgeable
 	line1 := m.styles.header.Render("purge — rebuildable project artifacts")
 	line2 := m.styles.subtle.Render(fmt.Sprintf(
-		"%d candidate(s) · %d kept · %d selected (%s) · permanent delete",
+		"%d candidate(s) · %d kept · %d selected (%s) · recoverable via Trash",
 		len(m.artifacts), kept, m.SelectedCount(), config.FormatBytes(m.SelectedSize())))
 	return line1 + "\n" + line2
 }

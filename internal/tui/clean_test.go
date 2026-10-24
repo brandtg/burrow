@@ -72,36 +72,6 @@ func TestRenderReviewListsExactArgv(t *testing.T) {
 	}
 }
 
-func TestRenderPermanentLabelsDelete(t *testing.T) {
-	plan := &engine.Plan{
-		RunID:   "TESTRUN",
-		Command: "clean",
-		Items: []*engine.PlannedItem{{
-			Target: engine.Target{
-				ID: "dev.yarn", Category: "dev", Display: "yarn cache",
-				Path: "/home/u/.yarn/cache", SizeBytes: 10, SizeKnown: true,
-				Recovery: engine.RecoveryTrash, Risk: engine.RiskLow, DefaultOn: true,
-			},
-			CategoryTitle: "Developer caches",
-			Selected:      true,
-			Permanent:     true,
-		}},
-	}
-	var preview bytes.Buffer
-	RenderPreview(&preview, plan, "", false)
-	if !bytes.Contains(preview.Bytes(), []byte("[delete]")) {
-		t.Fatalf("permanent item must be labeled [delete]:\n%s", preview.String())
-	}
-	if bytes.Contains(preview.Bytes(), []byte("[trash]")) {
-		t.Fatalf("permanent item must not be labeled [trash]:\n%s", preview.String())
-	}
-	var review bytes.Buffer
-	RenderReview(&review, plan)
-	if !bytes.Contains(review.Bytes(), []byte("permanently delete")) {
-		t.Fatalf("review must say permanently delete:\n%s", review.String())
-	}
-}
-
 func bigPlan() *engine.Plan {
 	var items []*engine.PlannedItem
 	for i := 0; i < 30; i++ {

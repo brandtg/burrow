@@ -11,15 +11,15 @@ burrow-purge - remove rebuildable project artifacts
 
 .SH DESCRIPTION
 Find rebuildable build artifacts (node_modules, target, virtualenvs,
-\fBpycache\fP, ...) under the configured project roots and delete them
-permanently.
+\fBpycache\fP, ...) under the configured project roots and move them to the
+Trash.
 
 .PP
 Artifacts are kept when they are git-tracked, when git state cannot be
 determined, when they contain a git repository, when their activity age cannot
-be verified, or when they have seen file activity within the age window. Purge
-never uses the Trash: artifacts are rebuildable. The preview lists every exact
-path, and --yes is required when stdout is not a terminal.
+be verified, or when they have seen file activity within the age window. Purged
+artifacts are recoverable from the Trash (burrow history --restore). The preview
+lists every exact path, and --yes is required when stdout is not a terminal.
 
 
 .SH OPTIONS

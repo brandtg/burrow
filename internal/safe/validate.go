@@ -1,6 +1,5 @@
 // Package safe is the safety core: path validation, identity snapshots, and
-// fail-closed guards. The only mutation here is RemoveTree, the single
-// permanent-delete primitive (invariant I3); everything else is read-only.
+// fail-closed guards. Nothing in this package mutates the filesystem.
 //
 // Provenance: this is an independent reimplementation of the safety contract
 // Mole applies on macOS (path validation, TOCTOU identity snapshots,

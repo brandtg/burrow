@@ -1,13 +1,13 @@
 // Package purge discovers rebuildable project artifacts (node_modules, Rust
 // target, virtualenvs, __pycache__, ...) under configured project roots and
-// deletes them permanently after proving they are safe to remove.
+// moves them to the Trash after proving they are safe to remove.
 //
 // Safety: discovery is read-only (invariant I1). An artifact is kept (never
 // purged) when it is git-tracked, when git state cannot be determined, when it
 // is or contains a git repository, when its activity age cannot be verified, or
-// when it has seen recent activity. Deletion flows through safe.RemoveTree, the
-// single permanent-delete primitive, and is journaled with action "purge" and
-// recovery "owner".
+// when it has seen recent activity. Deletion flows through internal/trash with
+// a proper .trashinfo entry (recoverable by default; no permanent-delete
+// primitive) and is journaled with action "trash" and recovery "trash".
 //
 // Provenance: behavioral port of Mole's purge rule (git-tracked-file
 // protection, nested-repo protection, age filter). Reimplemented clean-room; no

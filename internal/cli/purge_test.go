@@ -119,10 +119,10 @@ func TestPurgeYesDeletesAndJournals(t *testing.T) {
 	}
 	var found bool
 	for _, r := range records {
-		if r.Action == journal.ActionPurge && r.Path == art {
+		if r.Action == journal.ActionTrash && r.Path == art {
 			found = true
-			if r.Recovery != journal.RecoveryOwner {
-				t.Fatalf("recovery = %q, want owner", r.Recovery)
+			if r.Recovery != journal.RecoveryTrash {
+				t.Fatalf("recovery = %q, want trash", r.Recovery)
 			}
 		}
 	}

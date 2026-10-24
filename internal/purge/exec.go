@@ -2,16 +2,23 @@ package purge
 
 import (
 	"errors"
+	"path/filepath"
 
 	"github.com/brandtg/burrow/internal/journal"
 	"github.com/brandtg/burrow/internal/safe"
+	"github.com/brandtg/burrow/internal/trash"
 )
 
-// Executor performs permanent artifact deletion with validation, identity
-// re-checking, and journaling. It is the only purge path that mutates, and it
-// deletes only through safe.RemoveTree.
+// Executor moves purgeable artifacts to the Trash with validation, identity
+// re-checking, and journaling. It is the only purge path that mutates.
+//
+// Provenance: recoverable by default; there is no permanent-delete primitive.
+// Artifacts are rebuildable, but a wrong guess costs disk space, not data, so
+// they go through the same freedesktop Trash contract as every other
+// hand-delete in burrow (independent implementation; no Mole source copied).
 type Executor struct {
 	Validator *safe.Validator
+	Trash     *trash.Trash
 	Journal   *journal.Writer
 	Command   string
 
@@ -43,7 +50,7 @@ func (e *Executor) EndRun(freed int64) error {
 	return e.Journal.EndRun(e.runID, e.command(), freed)
 }
 
-// Delete permanently removes a. dryRun records the plan without mutating and
+// Delete moves a to the Trash. dryRun records the plan without mutating and
 // returns zero bytes. The artifact must carry the snapshot taken during
 // discovery; without one it is a guard-stop (fail closed).
 func (e *Executor) Delete(a *Artifact, dryRun bool) (int64, error) {
@@ -59,7 +66,41 @@ func (e *Executor) Delete(a *Artifact, dryRun bool) (int64, error) {
 		e.record(a, 0, journal.StatusSkipped, err.Error())
 		return 0, err
 	}
-	if err := safe.RemoveTree(a.Path, e.Validator, a.Snapshot); err != nil {
+	if filepath.Clean(a.Path) != a.Snapshot.Path {
+		err := safe.GuardStop("identity snapshot does not match %s", a.Path)
+		e.record(a, 0, journal.StatusSkipped, err.Error())
+		return 0, err
+	}
+	if e.Validator != nil {
+		if err := e.Validator.Validate(a.Path); err != nil {
+			e.record(a, 0, journal.StatusSkipped, err.Error())
+			return 0, err
+		}
+	}
+	ok, err := a.Snapshot.Matches()
+	if err != nil {
+		err = safe.GuardStop("cannot re-check identity for %s: %v", a.Path, err)
+		e.record(a, 0, journal.StatusSkipped, err.Error())
+		return 0, err
+	}
+	if !ok {
+		err := safe.GuardStop("path identity changed since snapshot: %s", a.Path)
+		e.record(a, 0, journal.StatusSkipped, err.Error())
+		return 0, err
+	}
+	if e.Trash == nil {
+		err := safe.GuardStop("trash is unavailable for %s", a.Path)
+		e.record(a, 0, journal.StatusSkipped, err.Error())
+		return 0, err
+	}
+	entry, err := e.Trash.Put(a.Path)
+	if err != nil {
+		if entry.Name != "" {
+			// The item is fully in the trash and restorable even though the
+			// source could not be unlinked (cross-device copy).
+			e.record(a, a.Size, journal.StatusOK, err.Error())
+			return a.Size, nil
+		}
 		e.record(a, a.Size, journal.StatusFailed, err.Error())
 		return 0, err
 	}
@@ -86,8 +127,8 @@ func (e *Executor) record(a *Artifact, size int64, status, reason string) {
 		RunID:    runID,
 		Command:  e.command(),
 		Item:     a.Type,
-		Action:   journal.ActionPurge,
-		Recovery: journal.RecoveryOwner,
+		Action:   journal.ActionTrash,
+		Recovery: journal.RecoveryTrash,
 		Path:     a.Path,
 		Status:   status,
 		Bytes:    size,

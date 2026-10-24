@@ -19,6 +19,7 @@ import (
 	"github.com/brandtg/burrow/internal/journal"
 	"github.com/brandtg/burrow/internal/purge"
 	"github.com/brandtg/burrow/internal/safe"
+	"github.com/brandtg/burrow/internal/trash"
 	"github.com/brandtg/burrow/internal/tui"
 	"github.com/spf13/cobra"
 )
@@ -35,14 +36,14 @@ func (a *App) newPurgeCmd() *cobra.Command {
 		Use:   "purge",
 		Short: "remove rebuildable project artifacts",
 		Long: `Find rebuildable build artifacts (node_modules, target, virtualenvs,
-__pycache__, ...) under the configured project roots and delete them
-permanently.
+__pycache__, ...) under the configured project roots and move them to the
+Trash.
 
 Artifacts are kept when they are git-tracked, when git state cannot be
 determined, when they contain a git repository, when their activity age cannot
-be verified, or when they have seen file activity within the age window. Purge
-never uses the Trash: artifacts are rebuildable. The preview lists every exact
-path, and --yes is required when stdout is not a terminal.`,
+be verified, or when they have seen file activity within the age window. Purged
+artifacts are recoverable from the Trash (burrow history --restore). The preview
+lists every exact path, and --yes is required when stdout is not a terminal.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			env, err := a.Env()
@@ -94,6 +95,7 @@ func (a *App) runPurge(env *engine.Env, opts purgeOptions) error {
 
 	exec := &purge.Executor{
 		Validator: purgeValidator(env, roots),
+		Trash:     trash.New(env.Paths.TrashDir, env.UID()),
 		Journal:   a.purgeJournal(env),
 		Command:   "purge",
 	}
@@ -110,8 +112,8 @@ func (a *App) runPurge(env *engine.Env, opts purgeOptions) error {
 	if !a.Flags.Yes {
 		return &ExitError{Code: ExitUsage, Err: errors.New("refusing to purge without --yes when not a TTY; re-run with --dry-run to preview")}
 	}
-	// Purge is a permanent delete: --yes must still show exactly what will be
-	// removed before doing it (spec §5.1).
+	// Purge mutates: --yes must still show exactly what will be removed before
+	// doing it (spec §5.1).
 	if !a.Flags.JSON {
 		if err := a.printPurgeTable(artifacts); err != nil {
 			return err

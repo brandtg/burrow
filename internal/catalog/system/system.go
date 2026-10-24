@@ -267,7 +267,7 @@ func coreDumpItems(env *engine.Env) []engine.Target {
 	}
 	var out []engine.Target
 	for _, path := range findUserCoreFiles(env.Home) {
-		t, err := newTrashTarget(env, "system.core-dumps", "core dump", path, env.Home, engine.RiskLow, false, false)
+		t, err := newTrashTarget(env, "system.core-dumps", "core dump", path, env.Home, engine.RiskLow, false)
 		if err == nil {
 			out = append(out, t)
 		}
@@ -276,7 +276,7 @@ func coreDumpItems(env *engine.Env) []engine.Target {
 }
 
 // newTrashTarget builds a validated, identity-snapshotted trash target.
-func newTrashTarget(env *engine.Env, id, display, path, root string, risk engine.Risk, defaultOn, permanent bool) (engine.Target, error) {
+func newTrashTarget(env *engine.Env, id, display, path, root string, risk engine.Risk, defaultOn bool) (engine.Target, error) {
 	protected := []string(nil)
 	if env.Cfg != nil {
 		protected = env.Cfg.Clean.ProtectedPaths
@@ -299,7 +299,7 @@ func newTrashTarget(env *engine.Env, id, display, path, root string, risk engine
 		Category:  ID,
 		Display:   display,
 		Path:      path,
-		Action:    action.NewTrash(path, tr, snap, v, permanent),
+		Action:    action.NewTrash(path, tr, snap, v),
 		Recovery:  engine.RecoveryTrash,
 		Risk:      risk,
 		DefaultOn: defaultOn,

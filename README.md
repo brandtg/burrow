@@ -7,8 +7,8 @@ things:
 2. **Clean** — reclaim space prescriptively by driving the *owner* of each kind of
    junk (package manager, journald, container runtime, flatpak/snap, language
    toolchains), with a mandatory preview, dry-run, whitelist, and an undo log.
-3. **Purge** — delete rebuildable project artifacts (`node_modules`, `target`,
-   virtualenvs, `__pycache__`, ...) with git-tracked-file protection.
+3. **Purge** — move rebuildable project artifacts (`node_modules`, `target`,
+   virtualenvs, `__pycache__`, ...) to the Trash, with git-tracked-file protection.
 
 It is an **orchestrator with a safety contract**, not a path-deleter.
 
@@ -70,7 +70,7 @@ Every action therefore has a **recovery contract**, and the UI always states whi
 one applies:
 
 - **`trash`** — move to the freedesktop Trash. Recoverable. Used for user caches,
-  downloads, installers, and analyze deletions.
+  downloads, installers, purge artifacts, and analyze deletions.
 - **`owner`** — invoke the owner command. Permanent but re-downloadable /
   rebuildable. Used for package caches, journald, container prune, flatpak/snap,
   and language caches.
@@ -273,17 +273,17 @@ rather than regenerable data.
 
 ### `purge` — rebuildable project artifacts (separate command)
 
-`purge` is a distinct command, not a `clean` category. It permanently deletes
-rebuildable build artifacts under the configured project roots, with git-tracked
-protection:
+`purge` is a distinct command, not a `clean` category. It moves rebuildable
+build artifacts under the configured project roots to the Trash (recoverable via
+`history --restore`), with git-tracked protection:
 
 | Artifact | Detection | Recovery | Guard | Default |
 |---|---|---|---|---|
-| `node_modules` | under a `[purge] paths` root | permanent (rebuildable) | git-tracked/nested-repo check, age filter | off |
-| `target` | same | permanent (rebuildable) | git-tracked check, age filter | off |
-| `.venv`, `venv` | same | permanent (rebuildable) | git-tracked check, age filter | off |
-| `__pycache__` | same | permanent (rebuildable) | git-tracked check, age filter | off |
-| `.next/cache`, `build`, `dist`, `.gradle`, `_cacache` | same | permanent (rebuildable) | git-tracked check, age filter | off |
+| `node_modules` | under a `[purge] paths` root | trash (rebuildable) | git-tracked/nested-repo check, age filter | off |
+| `target` | same | trash (rebuildable) | git-tracked check, age filter | off |
+| `.venv`, `venv` | same | trash (rebuildable) | git-tracked check, age filter | off |
+| `__pycache__` | same | trash (rebuildable) | git-tracked check, age filter | off |
+| `.next/cache`, `build`, `dist`, `.gradle`, `_cacache` | same | trash (rebuildable) | git-tracked check, age filter | off |
 
 The artifact list is pinned and extensible via `[purge] artifact_dirs`. A
 candidate inside a git repo that is tracked (or whose git state is unknown) is
@@ -407,8 +407,7 @@ make fuzz FUZZTIME=2m            # longer run
 ```
 
 The safety regression suite (invariants I1–I7) lives in
-`internal/safe/safety_test.go`; the static gate has its own tests in
-`scripts/safety-gate/check_test.go`.
+`internal/safe/safety_test.go`.
 
 ### Format, vet, lint
 
@@ -422,14 +421,12 @@ make vuln                        # govulncheck (skips if not installed)
 
 ### The gate
 
-`make gate` runs `scripts/check.sh`: `gofmt`, `go vet`, `go test`, and the static
-"no direct destructive sink" gate. `golangci-lint` and `govulncheck` run when
-installed and are otherwise skipped with a warning.
+`make gate` runs `scripts/check.sh`: `gofmt`, `go vet`, and `go test`.
+`golangci-lint` and `govulncheck` run when installed and are otherwise skipped
+with a warning.
 
 ```sh
 make gate                        # canonical gate
-make gate-strict                 # fail if lint/vuln tools are missing
-make safety-gate                 # only the static destructive-sink gate
 ```
 
 ### Integration (cross-device trash)
@@ -453,7 +450,7 @@ make matrix                      # requires a container runtime
 BURROW_MATRIX=1 make gate        # gate form: skips with a reason if no runtime
 ```
 
-CI (`.github/workflows/ci.yml`) runs `make gate-strict` and `make matrix`.
+CI (`.github/workflows/ci.yml`) runs `make gate` and `make matrix`.
 
 ### Repository layout
 

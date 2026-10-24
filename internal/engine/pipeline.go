@@ -28,11 +28,6 @@ type PlannedItem struct {
 	Argv          []string
 	GuardStop     bool
 	TimedOut      bool
-	// Permanent is true when --permanent switched this trash-contract item to an
-	// irreversible delete. It is surfaced in the preview, the --json output, and
-	// the journal so a permanent delete is never presented as recoverable (I2,
-	// spec §7.2).
-	Permanent bool
 	// Kept is true when the user pressed keep in the interactive preview. The
 	// item stays in the plan for transparency but is never executed.
 	Kept bool
@@ -86,13 +81,7 @@ type Options struct {
 	DiscoverTimeout time.Duration
 	// NoOwner leaves owner-contract items unselected (still shown).
 	NoOwner bool
-	// Permanent switches trash-contract items to a permanent delete.
-	Permanent bool
 }
-
-// permanentSetter is implemented by trash actions that can be switched to a
-// permanent delete.
-type permanentSetter interface{ SetPermanent(bool) }
 
 // Selected returns the items marked for execution.
 func (p *Plan) Selected() []*PlannedItem {
@@ -235,13 +224,6 @@ func Build(ctx context.Context, env *Env, opts Options) (*Plan, error) {
 				plan.Warnings = append(plan.Warnings, fmt.Sprintf("%s: %v", t.ID, err))
 				continue
 			}
-			permanent := false
-			if opts.Permanent {
-				if ps, ok := t.Action.(permanentSetter); ok {
-					ps.SetPermanent(true)
-					permanent = true
-				}
-			}
 			selected := t.DefaultOn && t.AutoSelectable()
 			if opts.NoOwner && t.Recovery == RecoveryOwner {
 				selected = false
@@ -252,7 +234,6 @@ func Build(ctx context.Context, env *Env, opts Options) (*Plan, error) {
 				CategoryNote:  cat.PreviewNote(),
 				Selected:      selected,
 				Status:        StatusPending,
-				Permanent:     permanent,
 			}
 			if ap, ok := t.Action.(ArgvPlanner); ok {
 				item.Argv = ap.PlannedArgv()
@@ -458,14 +439,7 @@ func appendRecord(jw *journal.Writer, plan *Plan, it *PlannedItem) {
 	}
 	action := journal.ActionOwner
 	recovery := journal.RecoveryOwner
-	switch {
-	case it.Target.Recovery == RecoveryTrash && it.Permanent:
-		// A --permanent trash item is an irreversible delete, not a trash move.
-		// Recording it as "delete" keeps it out of `history --restore`, which
-		// only offers ActionTrash records (spec §7.4, §12).
-		action = journal.ActionDelete
-		recovery = journal.RecoveryDelete
-	case it.Target.Recovery == RecoveryTrash:
+	if it.Target.Recovery == RecoveryTrash {
 		action = journal.ActionTrash
 		recovery = journal.RecoveryTrash
 	}

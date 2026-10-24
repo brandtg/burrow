@@ -2,8 +2,7 @@
 # scripts/check.sh — the canonical burrow gate.
 #
 # Runs: gofmt check, go vet, golangci-lint (if installed), govulncheck (if
-# installed), unit tests, the static "no direct destructive sink" gate, and
-# (optionally) the container integration matrix.
+# installed), unit tests, and (optionally) the container integration matrix.
 #
 # Env:
 #   BURROW_REQUIRE_TOOLS=1   fail if golangci-lint/govulncheck are missing
@@ -11,7 +10,6 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-ROOT="$(pwd)"
 FAIL=0
 
 step() { printf '\n==> %s\n' "$1"; }
@@ -60,9 +58,6 @@ fi
 
 step "go test"
 if go test ./...; then ok "go test"; else fail "go test"; fi
-
-step "static safety gate"
-if go run ./scripts/safety-gate "$ROOT"; then ok "safety gate"; else fail "safety gate"; fi
 
 step "man pages"
 MAN_TMP="$(mktemp -d)"

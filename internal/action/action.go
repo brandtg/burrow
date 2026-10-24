@@ -1,7 +1,7 @@
 // Package action holds the two Action implementations from spec §6.2:
-// TrashAction (move to the freedesktop Trash, or an explicit permanent delete)
-// and OwnerCommandAction (run an allow-listed owner command). Both re-validate
-// at execution time and are idempotent.
+// TrashAction (move to the freedesktop Trash) and OwnerCommandAction (run an
+// allow-listed owner command). Both re-validate at execution time and are
+// idempotent. Recoverable by default; there is no permanent-delete primitive.
 //
 // Provenance: the recovery-contract split (trash vs owner) and the review-then-
 // act discipline are behavioral ports of Mole's cleanup UX, reimplemented
@@ -79,38 +79,29 @@ func (a *OwnerCommandAction) Run(ctx context.Context, dryRun bool) (engine.Resul
 	return out, err
 }
 
-// TrashAction moves a user-owned path to the Trash (recoverable), or deletes it
-// permanently only when Permanent is explicitly set.
+// TrashAction moves a user-owned path to the Trash (recoverable).
 type TrashAction struct {
 	Path      string
 	Trash     *trash.Trash
 	Snapshot  *safe.Snapshot
 	Validator *safe.Validator
-	Permanent bool
 	Size      int64
 }
 
 // NewTrash builds a trash action. snapshot may be nil only for an
 // already-absent path; a present path with no snapshot is refused at Run time
 // (fail closed).
-func NewTrash(path string, t *trash.Trash, snapshot *safe.Snapshot, v *safe.Validator, permanent bool) *TrashAction {
-	return &TrashAction{Path: path, Trash: t, Snapshot: snapshot, Validator: v, Permanent: permanent}
+func NewTrash(path string, t *trash.Trash, snapshot *safe.Snapshot, v *safe.Validator) *TrashAction {
+	return &TrashAction{Path: path, Trash: t, Snapshot: snapshot, Validator: v}
 }
 
 // Describe renders a human description.
 func (a *TrashAction) Describe() string {
-	if a.Permanent {
-		return "permanently delete " + a.Path
-	}
 	return "trash " + a.Path
 }
 
 // Recovery declares the trash contract.
 func (a *TrashAction) Recovery() engine.Recovery { return engine.RecoveryTrash }
-
-// SetPermanent switches this action from Trash to an explicit permanent delete.
-// It is only called when --permanent is set; the default remains Trash.
-func (a *TrashAction) SetPermanent(p bool) { a.Permanent = p }
 
 // Run re-validates the path and identity, then moves the item. A path that is
 // already absent is treated as done (idempotent).
@@ -137,12 +128,6 @@ func (a *TrashAction) Run(ctx context.Context, dryRun bool) (engine.Result, erro
 	}
 	if dryRun {
 		return engine.Result{Status: engine.StatusDryRun, Bytes: a.Size}, nil
-	}
-	if a.Permanent {
-		if err := trash.Remove(a.Path); err != nil {
-			return engine.Result{Status: engine.StatusFailed, Reason: err.Error()}, err
-		}
-		return engine.Result{Status: engine.StatusOK, Bytes: a.Size}, nil
 	}
 	if a.Trash == nil {
 		return skip("trash is unavailable"), safe.GuardStop("%s", "trash is unavailable")
