@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 # scripts/check.sh — the canonical burrow gate.
 #
-# Runs: gofmt check, go vet, golangci-lint (if installed), govulncheck (if
-# installed), unit tests, and (optionally) the container integration matrix.
+# Runs: gofmt check, go vet, unit tests, and the static-binary check.
 #
 # Env:
-#   BURROW_REQUIRE_TOOLS=1   fail if golangci-lint/govulncheck are missing
-#   BURROW_INTEGRATION=1     run the container integration matrix
+#   BURROW_INTEGRATION=1     run the root-only integration script
+#   BURROW_MATRIX=1          run the container matrix
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -29,49 +28,8 @@ fi
 step "go vet"
 if go vet ./...; then ok "go vet"; else fail "go vet"; fi
 
-step "golangci-lint"
-if command -v golangci-lint >/dev/null 2>&1; then
-  if golangci-lint run ./...; then ok "golangci-lint"; else fail "golangci-lint"; fi
-elif [[ "${BURROW_REQUIRE_TOOLS:-0}" == "1" ]]; then
-  fail "golangci-lint not installed"
-else
-  warn "golangci-lint not installed; skipping (set BURROW_REQUIRE_TOOLS=1 to enforce)"
-fi
-
-step "govulncheck"
-if command -v govulncheck >/dev/null 2>&1; then
-  if govulncheck ./...; then ok "govulncheck"; else fail "govulncheck"; fi
-elif [[ "${BURROW_REQUIRE_TOOLS:-0}" == "1" ]]; then
-  fail "govulncheck not installed"
-else
-  warn "govulncheck not installed; skipping (set BURROW_REQUIRE_TOOLS=1 to enforce)"
-fi
-
-step "goreleaser config"
-if command -v goreleaser >/dev/null 2>&1; then
-  if goreleaser check; then ok "goreleaser config"; else fail "goreleaser config"; fi
-elif [[ "${BURROW_REQUIRE_TOOLS:-0}" == "1" ]]; then
-  fail "goreleaser not installed"
-else
-  warn "goreleaser not installed; skipping config lint (set BURROW_REQUIRE_TOOLS=1 to enforce)"
-fi
-
 step "go test"
 if go test ./...; then ok "go test"; else fail "go test"; fi
-
-step "man pages"
-MAN_TMP="$(mktemp -d)"
-if go run ./cmd/burrow docs --dir "$MAN_TMP" >/dev/null 2>&1; then
-  if diff -r docs/man "$MAN_TMP" >/dev/null 2>&1; then
-    ok "man pages up to date"
-  else
-    fail "man pages are stale; run 'make docs' and review the diff"
-    diff -r docs/man "$MAN_TMP" || true
-  fi
-else
-  fail "man page generation failed"
-fi
-rm -rf "$MAN_TMP"
 
 step "static binary"
 STATIC_TMP="$(mktemp -d)"

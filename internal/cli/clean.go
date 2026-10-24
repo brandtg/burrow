@@ -15,6 +15,7 @@ import (
 	"github.com/brandtg/burrow/internal/catalog/desktoppkgs"
 	"github.com/brandtg/burrow/internal/catalog/dev"
 	"github.com/brandtg/burrow/internal/catalog/downloads"
+	"github.com/brandtg/burrow/internal/catalog/projects"
 	"github.com/brandtg/burrow/internal/catalog/system"
 	"github.com/brandtg/burrow/internal/catalog/usercache"
 	"github.com/brandtg/burrow/internal/config"
@@ -27,9 +28,7 @@ import (
 
 type cleanFlags struct {
 	all       bool
-	noOwner   bool
 	whitelist bool
-	plain     bool
 }
 
 func (a *App) newCleanCmd() *cobra.Command {
@@ -43,9 +42,7 @@ func (a *App) newCleanCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&f.all, "all", false, "include every category (still respects whitelist and guards)")
-	cmd.Flags().BoolVar(&f.noOwner, "no-owner", false, "skip all owner-command/system acts")
 	cmd.Flags().BoolVar(&f.whitelist, "whitelist", false, "manage the whitelist")
-	cmd.Flags().BoolVar(&f.plain, "plain", false, "non-interactive plain-text output instead of the TUI")
 	return cmd
 }
 
@@ -63,7 +60,7 @@ func (a *App) runClean(f cleanFlags) error {
 		return &ExitError{Code: ExitUsage, Err: err}
 	}
 
-	reg := catalog.NewRegistry(system.New(), dev.New(), usercache.New(), downloads.New(), containers.New(), desktoppkgs.New())
+	reg := catalog.NewRegistry(system.New(), projects.New(), dev.New(), usercache.New(), downloads.New(), containers.New(), desktoppkgs.New())
 	cats := a.selectCategories(env, reg, f.all)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -75,12 +72,13 @@ func (a *App) runClean(f cleanFlags) error {
 		Only:       a.Flags.Only,
 		Exclude:    a.Flags.Exclude,
 		MinSize:    minSize,
-		NoOwner:    f.noOwner,
+		NoOwner:    a.Flags.NoOwner,
 	})
 	if err != nil {
 		return err
 	}
 	a.reconcile(cats, plan)
+	mergeCategoryWarnings(cats, plan)
 	for _, w := range plan.Warnings {
 		fmt.Fprintf(a.ErrOut, "warning: %s\n", w)
 	}
@@ -95,7 +93,7 @@ func (a *App) runClean(f cleanFlags) error {
 	// The TUI is the default view on a terminal, including --dry-run (where it
 	// is read-only). --plain, --json, --yes, or a non-TTY stdout select the
 	// non-interactive path.
-	interactive := isTerminal(a.Out) && !a.Flags.JSON && !f.plain && !a.Flags.Yes
+	interactive := isTerminal(a.Out) && !a.Flags.JSON && !a.Flags.Plain && !a.Flags.Yes
 	if interactive {
 		confirmed, aborted, err := tui.RunClean(tui.CleanConfig{
 			Plan:      plan,
@@ -153,6 +151,17 @@ func (a *App) reconcile(cats []engine.Category, plan *engine.Plan) {
 	for _, c := range cats {
 		if rec, ok := c.(catalog.Reconciler); ok {
 			rec.Reconcile(plan)
+		}
+	}
+}
+
+// mergeCategoryWarnings pulls a category's non-fatal discovery notes (for
+// example a configured project root that does not exist) into the plan's
+// warning list so they surface on stderr.
+func mergeCategoryWarnings(cats []engine.Category, plan *engine.Plan) {
+	for _, c := range cats {
+		if w, ok := c.(catalog.Warner); ok {
+			plan.Warnings = append(plan.Warnings, w.Warnings()...)
 		}
 	}
 }

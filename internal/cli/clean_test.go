@@ -232,3 +232,65 @@ func TestCleanPlainDryRunPrintsPreview(t *testing.T) {
 		t.Fatalf("plain dry-run should print preview + review:\n%s", out)
 	}
 }
+
+// TestBareBurrowIsTheCleanFlow pins the product shape: no subcommand runs the
+// full clean flow. On a non-TTY it refuses to execute without --yes, so a bare
+// invocation can never mutate anything.
+func TestBareBurrowIsTheCleanFlow(t *testing.T) {
+	useTestbin(t)
+	env := cleanTestEnv(t)
+	// Keep discovery hermetic: the configured project roots must be a scratch
+	// dir, not the developer's real home.
+	env["BURROW_PURGE_PATHS"] = t.TempDir()
+	te := newTestApp(t, env)
+	te.app.Adapter = aptAdapter()
+	if code := te.run(); code != ExitUsage {
+		t.Fatalf("exit = %d, want %d: %s", code, ExitUsage, te.errOut.String())
+	}
+	if !strings.Contains(te.errOut.String(), "refusing to execute without confirmation") {
+		t.Fatalf("expected the clean-flow refusal, got %q", te.errOut.String())
+	}
+}
+
+// TestBareBurrowDryRunPlainGroupsProjects: the bare flow previews the Projects
+// category grouped one row per project and mutates nothing.
+func TestBareBurrowDryRunPlainGroupsProjects(t *testing.T) {
+	useTestbin(t)
+	root := t.TempDir()
+	art := makeOldArtifact(t, root, "__pycache__")
+	env := cleanTestEnv(t)
+	env["BURROW_PURGE_PATHS"] = root
+	te := newTestApp(t, env)
+	te.app.Adapter = aptAdapter()
+	if code := te.run("--dry-run", "--plain"); code != ExitOK {
+		t.Fatalf("exit = %d: %s", code, te.errOut.String())
+	}
+	out := te.out.String()
+	for _, want := range []string{"Projects", filepath.Base(root), "__pycache__"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("bare dry-run preview missing %q:\n%s", want, out)
+		}
+	}
+	if _, err := os.Lstat(art); err != nil {
+		t.Fatalf("dry-run must not mutate: %v", err)
+	}
+}
+
+// TestBareBurrowDryRunJSONSystem: the bare flow with --json is the stable
+// machine document, filtered by --only like `clean`.
+func TestBareBurrowDryRunJSONSystem(t *testing.T) {
+	useTestbin(t)
+	env := cleanTestEnv(t)
+	env["BURROW_PURGE_PATHS"] = t.TempDir()
+	te := newTestApp(t, env)
+	te.app.Adapter = aptAdapter()
+	if code := te.run("--dry-run", "--json", "--only", "system"); code != ExitOK {
+		t.Fatalf("exit = %d: %s", code, te.errOut.String())
+	}
+	out := te.out.String()
+	for _, want := range []string{`"command": "clean"`, `"dry_run": true`, `"system.pkg-cache"`} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("json missing %q:\n%s", want, out)
+		}
+	}
+}

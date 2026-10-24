@@ -98,7 +98,7 @@ func Default() *Config {
 	return &Config{
 		General: General{Color: "auto", LogLevel: "info"},
 		Clean: Clean{
-			DefaultCategories: []string{"dev", "user-cache", "desktop-pkgs", "downloads"},
+			DefaultCategories: []string{"projects", "dev", "user-cache", "desktop-pkgs", "downloads"},
 			JournaldMaxSize:   "500M",
 			JournaldMaxAge:    "",
 			MinSize:           "0",

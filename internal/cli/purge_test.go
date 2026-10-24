@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/brandtg/burrow/internal/journal"
+	"github.com/brandtg/burrow/internal/trash"
 )
 
 func purgeEnv(t *testing.T, root string) map[string]string {
@@ -55,63 +56,124 @@ func TestPurgePathsPrintsRoots(t *testing.T) {
 	}
 }
 
-func TestPurgeDryRunDeletesNothing(t *testing.T) {
+// stubOwnerTools keeps the alias flow hermetic: discovery of the other
+// categories probes owner tools, which must hit the testbin stubs, not real
+// ones on the machine.
+func stubOwnerTools(t *testing.T) {
+	t.Helper()
+	useTestbin(t)
+}
+
+// TestPurgeAliasNoticeAndFlow pins the fold: `purge` is a thin alias for
+// `clean --only projects`. It announces itself on stderr and previews the
+// grouped projects plan; a dry run mutates nothing.
+func TestPurgeAliasNoticeAndFlow(t *testing.T) {
 	root := t.TempDir()
 	art := makeOldArtifact(t, root, "node_modules")
+	stubOwnerTools(t)
 	te := newTestApp(t, purgeEnv(t, root))
 	if code := te.run("purge", "--dry-run"); code != ExitOK {
 		t.Fatalf("exit code = %d: %s", code, te.errOut.String())
 	}
-	if !strings.Contains(te.out.String(), "dry-run") {
-		t.Fatalf("expected a dry-run notice: %q", te.out.String())
+	if !strings.Contains(te.errOut.String(), "deprecated") {
+		t.Fatalf("expected a deprecation notice on stderr: %q", te.errOut.String())
+	}
+	out := te.out.String()
+	if !strings.Contains(out, "Projects") || !strings.Contains(out, "node_modules") {
+		t.Fatalf("expected the grouped projects preview:\n%s", out)
 	}
 	if _, err := os.Lstat(art); err != nil {
-		t.Fatalf("dry-run must not delete: %v", err)
+		t.Fatalf("dry-run must not trash: %v", err)
 	}
 }
 
-func TestPurgeRequiresYesWhenNotTTY(t *testing.T) {
+// TestPurgeAliasDryRunJSONGrouped checks the stable JSON schema carries the
+// per-project grouping (item 1): every projects item names its group.
+func TestPurgeAliasDryRunJSONGrouped(t *testing.T) {
 	root := t.TempDir()
 	art := makeOldArtifact(t, root, "node_modules")
+	stubOwnerTools(t)
+	te := newTestApp(t, purgeEnv(t, root))
+	if code := te.run("purge", "--dry-run", "--json"); code != ExitOK {
+		t.Fatalf("exit code = %d: %s", code, te.errOut.String())
+	}
+	out := te.out.String()
+	for _, want := range []string{
+		`"command": "clean"`,
+		`"dry_run": true`,
+		`"category": "projects"`,
+		`"recovery": "trash"`,
+		`"path": "` + art + `"`,
+		`"group": "` + root + `"`,
+		`"group_title": "` + filepath.Base(root) + `"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("json missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestPurgeAliasRequiresYesWhenNotTTY(t *testing.T) {
+	root := t.TempDir()
+	art := makeOldArtifact(t, root, "node_modules")
+	stubOwnerTools(t)
 	te := newTestApp(t, purgeEnv(t, root))
 	if code := te.run("purge"); code != ExitUsage {
 		t.Fatalf("exit code = %d, want %d: %s", code, ExitUsage, te.errOut.String())
 	}
 	if _, err := os.Lstat(art); err != nil {
-		t.Fatalf("refused purge must not delete: %v", err)
+		t.Fatalf("refused run must not trash: %v", err)
 	}
 }
 
-// TestPurgeYesPreviewsBeforeDeleting pins the fix for F5: --yes is a permanent
-// delete and must show the candidate listing before executing.
-func TestPurgeYesPreviewsBeforeDeleting(t *testing.T) {
+// TestPurgeAliasYesPreviewsBeforeTrashing: --yes still shows the plan before
+// executing, and pre-selected items (free/cheap artifacts) are trashed.
+func TestPurgeAliasYesPreviewsBeforeTrashing(t *testing.T) {
 	root := t.TempDir()
-	art := makeOldArtifact(t, root, "node_modules")
+	art := makeOldArtifact(t, root, "__pycache__")
+	stubOwnerTools(t)
 	te := newTestApp(t, purgeEnv(t, root))
 	if code := te.run("purge", "--yes"); code != ExitOK {
 		t.Fatalf("exit code = %d: %s", code, te.errOut.String())
 	}
 	out := te.out.String()
-	iPath := strings.Index(out, art)
-	iPurged := strings.Index(out, "purged ")
-	if iPath < 0 || iPurged < 0 || iPath > iPurged {
-		t.Fatalf("candidate listing must precede the summary:\n%s", out)
+	iPath := strings.Index(out, "__pycache__")
+	iFreed := strings.Index(out, "Freed ")
+	if iPath < 0 || iFreed < 0 || iPath > iFreed {
+		t.Fatalf("preview must precede the summary:\n%s", out)
 	}
 	if _, err := os.Lstat(art); !os.IsNotExist(err) {
-		t.Fatalf("artifact should be deleted, stat err = %v", err)
+		t.Fatalf("artifact should be trashed away, stat err = %v", err)
 	}
 }
 
-func TestPurgeYesDeletesAndJournals(t *testing.T) {
+// TestPurgeAliasYesTrashesAndJournals: the artifact lands in the Trash with a
+// trash-contract journal record, so it is restorable (item 3: trashed, never
+// "purged").
+func TestPurgeAliasYesTrashesAndJournals(t *testing.T) {
 	root := t.TempDir()
-	art := makeOldArtifact(t, root, "node_modules")
+	art := makeOldArtifact(t, root, "__pycache__")
 	env := purgeEnv(t, root)
+	stubOwnerTools(t)
 	te := newTestApp(t, env)
 	if code := te.run("purge", "--yes"); code != ExitOK {
 		t.Fatalf("exit code = %d: %s", code, te.errOut.String())
 	}
 	if _, err := os.Lstat(art); !os.IsNotExist(err) {
-		t.Fatalf("artifact should be deleted, stat err = %v", err)
+		t.Fatalf("artifact should be moved away, stat err = %v", err)
+	}
+	entries, err := trash.New(filepath.Join(env["XDG_DATA_HOME"], "Trash"), os.Getuid()).List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var inTrash bool
+	for _, e := range entries {
+		if e.Path == art {
+			inTrash = true
+		}
+	}
+	if !inTrash {
+		t.Fatalf("artifact must be restorable from the Trash: %+v", entries)
 	}
 	records, err := journal.Read(filepath.Join(env["XDG_STATE_HOME"], "burrow", "operations.jsonl"))
 	if err != nil {
@@ -127,36 +189,38 @@ func TestPurgeYesDeletesAndJournals(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatalf("no purge journal record for %s: %+v", art, records)
+		t.Fatalf("no trash journal record for %s: %+v", art, records)
 	}
 }
 
-func TestPurgeSymlinkedRoot(t *testing.T) {
+func TestPurgeAliasSymlinkedRoot(t *testing.T) {
 	base := t.TempDir()
 	real := filepath.Join(base, "real")
 	if err := os.MkdirAll(real, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	art := makeOldArtifact(t, real, "node_modules")
+	art := makeOldArtifact(t, real, "__pycache__")
 	link := filepath.Join(base, "link")
 	if err := os.Symlink(real, link); err != nil {
 		t.Fatal(err)
 	}
 
+	stubOwnerTools(t)
 	te := newTestApp(t, purgeEnv(t, link))
 	if code := te.run("purge", "--yes"); code != ExitOK {
 		t.Fatalf("exit code = %d: %s", code, te.errOut.String())
 	}
 	if _, err := os.Lstat(art); !os.IsNotExist(err) {
-		t.Fatalf("artifact under a symlinked root should be purged, stat err = %v", err)
+		t.Fatalf("artifact under a symlinked root should be trashed, stat err = %v", err)
 	}
 }
 
-func TestPurgeWarnsOnMissingRoot(t *testing.T) {
+func TestPurgeAliasWarnsOnMissingRoot(t *testing.T) {
 	root := t.TempDir()
 	makeOldArtifact(t, root, "node_modules")
 	missing := filepath.Join(t.TempDir(), "nope")
 	env := purgeEnv(t, missing+","+root)
+	stubOwnerTools(t)
 	te := newTestApp(t, env)
 	if code := te.run("purge", "--dry-run"); code != ExitOK {
 		t.Fatalf("exit code = %d: %s", code, te.errOut.String())
@@ -166,7 +230,55 @@ func TestPurgeWarnsOnMissingRoot(t *testing.T) {
 	}
 }
 
-func TestPurgeJSON(t *testing.T) {
+// TestPurgeAliasAgeFlag keeps --age working: it overrides the whole policy, so
+// a recently-active artifact becomes a candidate.
+func TestPurgeAliasAgeFlag(t *testing.T) {
+	root := t.TempDir()
+	art := makeOldArtifact(t, root, "node_modules")
+	if err := os.Chtimes(art, time.Now(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	env := purgeEnv(t, root)
+	stubOwnerTools(t)
+
+	te := newTestApp(t, env)
+	if code := te.run("purge", "--dry-run", "--json"); code != ExitOK {
+		t.Fatalf("exit code = %d: %s", code, te.errOut.String())
+	}
+	if strings.Contains(te.out.String(), `"path": "`+art+`"`) {
+		t.Fatalf("a recently-active artifact must be kept by default:\n%s", te.out.String())
+	}
+
+	te = newTestApp(t, env)
+	if code := te.run("purge", "--dry-run", "--json", "--age", "0s"); code != ExitOK {
+		t.Fatalf("exit code = %d: %s", code, te.errOut.String())
+	}
+	if !strings.Contains(te.out.String(), `"path": "`+art+`"`) {
+		t.Fatalf("--age must override the age policy:\n%s", te.out.String())
+	}
+}
+
+// TestPurgeAliasCuratedDefault: expensive-to-rebuild artifacts (node_modules)
+// are shown but not pre-selected, so --yes alone does not trash them — the
+// preview TUI is where they get chosen. Free/cheap artifacts go by default.
+func TestPurgeAliasCuratedDefault(t *testing.T) {
+	root := t.TempDir()
+	modules := makeOldArtifact(t, root, "node_modules")
+	cache := makeOldArtifact(t, root, "__pycache__")
+	stubOwnerTools(t)
+	te := newTestApp(t, purgeEnv(t, root))
+	if code := te.run("purge", "--yes"); code != ExitOK {
+		t.Fatalf("exit code = %d: %s", code, te.errOut.String())
+	}
+	if _, err := os.Lstat(modules); err != nil {
+		t.Fatalf("node_modules must not be pre-selected: %v", err)
+	}
+	if _, err := os.Lstat(cache); !os.IsNotExist(err) {
+		t.Fatalf("__pycache__ should be trashed by default, stat err = %v", err)
+	}
+}
+
+func TestPurgeAliasJSON(t *testing.T) {
 	root := t.TempDir()
 	makeOldArtifact(t, root, "node_modules")
 	te := newTestApp(t, purgeEnv(t, root))
@@ -174,14 +286,14 @@ func TestPurgeJSON(t *testing.T) {
 		t.Fatalf("exit code = %d: %s", code, te.errOut.String())
 	}
 	out := te.out.String()
-	for _, want := range []string{`"candidates"`, `"node_modules"`, `"dry_run": true`} {
+	for _, want := range []string{`"items"`, `"node_modules"`, `"dry_run": true`} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("json output missing %q: %s", want, out)
 		}
 	}
 }
 
-func TestPurgeKeepsTrackedArtifact(t *testing.T) {
+func TestPurgeAliasKeepsTrackedArtifact(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
 	}
@@ -207,6 +319,7 @@ func TestPurgeKeepsTrackedArtifact(t *testing.T) {
 	runGit("add", "build/keep.txt")
 	makeOldArtifact(t, root, "build")
 
+	stubOwnerTools(t)
 	te := newTestApp(t, purgeEnv(t, root))
 	if code := te.run("purge", "--yes"); code != ExitOK {
 		t.Fatalf("exit code = %d: %s", code, te.errOut.String())

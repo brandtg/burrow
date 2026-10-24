@@ -3,7 +3,6 @@ package dev_test
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -364,55 +363,6 @@ func TestMiscTrashItems(t *testing.T) {
 	}
 }
 
-func TestPycacheGitProtection(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git not available")
-	}
-	env := testEnv(t, false)
-	useTestbin(t, env)
-	repo := filepath.Join(env.Home, "Projects", "repo")
-	tracked := filepath.Join(repo, "tracked", "__pycache__")
-	untracked := filepath.Join(repo, "untracked", "__pycache__")
-	mkdirs(t, tracked, untracked)
-	if err := os.WriteFile(filepath.Join(tracked, "a.pyc"), []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(untracked, "b.pyc"), []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	run := func(args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", args...)
-		cmd.Dir = repo
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v: %s", args, err, out)
-		}
-	}
-	run("init", "-q")
-	run("add", "tracked/__pycache__/a.pyc")
-
-	byID := discover(t, env)
-	var trackedID string
-	for id, tg := range byID {
-		if strings.HasPrefix(id, "dev.pycache.") && tg.Path == tracked {
-			trackedID = id
-		}
-	}
-	if trackedID == "" {
-		t.Fatalf("tracked __pycache__ not discovered: %v", keys(byID))
-	}
-	sum := runOnly(t, env, "dev.pycache")
-	if sum.GuardStops < 1 {
-		t.Fatalf("expected the tracked __pycache__ to be guard-stopped, got %+v", sum)
-	}
-	if _, err := os.Stat(tracked); err != nil {
-		t.Fatalf("tracked __pycache__ must survive: %v", err)
-	}
-	if _, err := os.Stat(untracked); !os.IsNotExist(err) {
-		t.Fatalf("untracked __pycache__ should be trashed: %v", err)
-	}
-}
-
 func keys(m map[string]engine.Target) []string {
 	var out []string
 	for k := range m {
@@ -496,33 +446,6 @@ func TestFixtureKeepDiscard(t *testing.T) {
 	for _, p := range mustBeGone {
 		if _, err := os.Stat(p); !os.IsNotExist(err) {
 			t.Fatalf("discarded path %s still present: %v", p, err)
-		}
-	}
-}
-
-func TestPycacheGroupsByProject(t *testing.T) {
-	env := testEnv(t, true)
-	mkdirs(t,
-		filepath.Join(env.Home, "Projects", "alpha", "pkg", "__pycache__"),
-		filepath.Join(env.Home, "Projects", "beta", "src", "__pycache__"),
-	)
-	byID := discover(t, env)
-	groups := map[string]string{}
-	for id, tg := range byID {
-		if !strings.HasPrefix(id, "dev.pycache.") {
-			continue
-		}
-		if tg.Group == "" || tg.GroupTitle == "" {
-			t.Fatalf("%s has no presentation group: %+v", id, tg)
-		}
-		groups[id] = tg.Group
-	}
-	if len(groups) != 2 {
-		t.Fatalf("expected 2 pycache targets, got %v", keys(byID))
-	}
-	for id, g := range groups {
-		if !strings.HasSuffix(g, string(filepath.Separator)+"alpha") && !strings.HasSuffix(g, string(filepath.Separator)+"beta") {
-			t.Fatalf("%s grouped under %q, want alpha or beta", id, g)
 		}
 	}
 }

@@ -81,7 +81,6 @@ func (*Category) Discover(ctx context.Context, env *engine.Env) ([]engine.Target
 	out = append(out, corepackItem(env)...)
 	out = append(out, miseItem(ctx, env)...)
 	out = append(out, frontendCacheItems(env)...)
-	out = append(out, pycacheItems(env)...)
 	out = append(out, dockerBuildxItem(env)...)
 	out = append(out, cloudCLIItems(env)...)
 	out = append(out, ghItem(env)...)
@@ -375,44 +374,6 @@ func frontendCacheItems(env *engine.Env) []engine.Target {
 	return out
 }
 
-func pycacheItems(env *engine.Env) []engine.Target {
-	if env.Cfg == nil {
-		return nil
-	}
-	var roots []string
-	for _, p := range env.Cfg.Purge.Paths {
-		roots = append(roots, config.ExpandHome(p, env.Home))
-	}
-	if len(roots) == 0 {
-		return nil
-	}
-	allowed := append(append([]string(nil), roots...), env.Home)
-	var out []engine.Target
-	seen := map[string]bool{}
-	for _, root := range roots {
-		for _, dir := range findDirs(root, "__pycache__", 6) {
-			if seen[dir] {
-				continue
-			}
-			seen[dir] = true
-			groupID, groupTitle := pycacheGroup(root, dir)
-			t, err := catalog.NewTrashTarget(env, catalog.TrashTargetOptions{
-				ID: "dev.pycache." + relID(root, dir), Category: ID, Display: "Python bytecode cache",
-				Path: dir, Roots: allowed, Risk: engine.RiskLow, DefaultOn: true,
-				Evidence:   []string{"__pycache__ holds regenerable bytecode"},
-				Group:      groupID,
-				GroupTitle: groupTitle,
-			})
-			if err != nil {
-				continue
-			}
-			t.Guard = gitTrackedGuard{path: dir}
-			out = append(out, t)
-		}
-	}
-	return out
-}
-
 func dockerBuildxItem(env *engine.Env) []engine.Target {
 	return trashIfExists(env, "dev.docker-buildx", "Docker buildx cache", filepath.Join(env.Home, ".docker", "buildx", "cache"), engine.RiskLow, true, "buildx cache is regenerable")
 }
@@ -444,68 +405,4 @@ func envVar(name, fallback string) string {
 		return v
 	}
 	return fallback
-}
-
-// findDirs returns directories named name at or below root, bounded by depth.
-// It does not descend into .git or node_modules: neither can hold a project's
-// own __pycache__, and both can be very large.
-func findDirs(root, name string, depth int) []string {
-	if !catalog.DirExists(root) {
-		return nil
-	}
-	var out []string
-	var walk func(dir string, d int)
-	walk = func(dir string, d int) {
-		if d > depth {
-			return
-		}
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			return
-		}
-		for _, de := range entries {
-			if !de.IsDir() {
-				continue
-			}
-			child := filepath.Join(dir, de.Name())
-			if de.Name() == name {
-				out = append(out, child)
-				continue
-			}
-			if de.Name() == ".git" || de.Name() == "node_modules" {
-				continue
-			}
-			walk(child, d+1)
-		}
-	}
-	walk(root, 0)
-	return out
-}
-
-// pycacheGroup buckets a __pycache__ directory by the top-level project under
-// its purge root, so the preview shows a handful of project rows instead of one
-// row per directory. It is presentation-only; each directory keeps its own
-// target, git guard, and path validation.
-func pycacheGroup(root, dir string) (id, title string) {
-	rel, err := filepath.Rel(root, dir)
-	if err != nil {
-		return root, filepath.Base(root)
-	}
-	parts := strings.Split(rel, string(filepath.Separator))
-	if len(parts) >= 2 && parts[0] != "" && parts[0] != "." && parts[0] != ".." {
-		return filepath.Join(root, parts[0]), parts[0]
-	}
-	return root, filepath.Base(root)
-}
-
-func relID(root, dir string) string {
-	rel, err := filepath.Rel(root, dir)
-	if err != nil {
-		return filepath.Base(filepath.Dir(dir))
-	}
-	rel = strings.TrimSuffix(rel, string(filepath.Separator))
-	if rel == "" || rel == "." {
-		return filepath.Base(dir)
-	}
-	return strings.ReplaceAll(rel, string(filepath.Separator), "-")
 }

@@ -21,6 +21,8 @@ type GlobalFlags struct {
 	DryRun   bool
 	Yes      bool
 	JSON     bool
+	Plain    bool
+	NoOwner  bool
 	Only     []string
 	Exclude  []string
 	MinSize  string
@@ -86,8 +88,10 @@ func (a *App) Root() *cobra.Command {
 		Short:         i18n.T(i18n.AppTagline),
 		SilenceUsage:  true,
 		SilenceErrors: true,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmd.Help()
+		// Bare `burrow` IS the product: the full clean flow (scan ->
+		// grouped preview -> confirm). `burrow clean` runs the same flow.
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return a.runClean(cleanFlags{})
 		},
 	}
 	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
@@ -98,6 +102,8 @@ func (a *App) Root() *cobra.Command {
 	pf.BoolVar(&a.Flags.DryRun, "dry-run", false, "never mutate; print the plan and exit")
 	pf.BoolVarP(&a.Flags.Yes, "yes", "y", false, "skip the interactive confirm")
 	pf.BoolVar(&a.Flags.JSON, "json", false, "machine-readable output")
+	pf.BoolVar(&a.Flags.Plain, "plain", false, "non-interactive plain-text output instead of the TUI")
+	pf.BoolVar(&a.Flags.NoOwner, "no-owner", false, "skip all owner-command/system acts")
 	pf.StringSliceVar(&a.Flags.Only, "only", nil, "comma list of categories or item ids to include")
 	pf.StringSliceVar(&a.Flags.Exclude, "exclude", nil, "comma list of categories or item ids to exclude")
 	pf.StringVar(&a.Flags.MinSize, "min-size", "0", "only act on items >= size (e.g. 10M, 1G)")

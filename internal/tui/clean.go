@@ -11,6 +11,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/brandtg/burrow/internal/catalog/projects"
 	"github.com/brandtg/burrow/internal/config"
 	"github.com/brandtg/burrow/internal/engine"
 	"github.com/brandtg/burrow/internal/whitelist"
@@ -334,7 +335,10 @@ func NewCleanModel(cfg CleanConfig) *CleanModel {
 			m.collapsedCat[m.cats[i].ID] = true
 		}
 		for j := range m.cats[i].Groups {
-			if len(m.cats[i].Groups[j].Items) > collapseThreshold {
+			// Project artifact groups always start collapsed: one row per
+			// project (name + total artifact size), expandable — a monorepo is
+			// one row, not thirty.
+			if m.cats[i].ID == projects.ID || len(m.cats[i].Groups[j].Items) > collapseThreshold {
 				m.collapsedGrp[groupKey(m.cats[i].ID, m.cats[i].Groups[j].ID)] = true
 			}
 		}

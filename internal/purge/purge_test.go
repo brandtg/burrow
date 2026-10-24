@@ -9,10 +9,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/brandtg/burrow/internal/journal"
-	"github.com/brandtg/burrow/internal/safe"
-	"github.com/brandtg/burrow/internal/trash"
 )
 
 func TestMatchArtifact(t *testing.T) {
@@ -323,112 +319,6 @@ func TestDiscoverGenericNameRequiresMarker(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].Kept() {
 		t.Fatalf("build dir with a project marker should be purgeable: %+v", got)
-	}
-}
-
-func TestExecutorDeleteAndJournal(t *testing.T) {
-	root := t.TempDir()
-	art := makeArtifact(t, root, "node_modules", time.Now().Add(-30*24*time.Hour))
-	arts, err := Discover(context.Background(), Options{Roots: []string{root}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(arts) != 1 {
-		t.Fatalf("expected 1 artifact, got %d", len(arts))
-	}
-	journalPath := filepath.Join(t.TempDir(), "operations.jsonl")
-	w, err := journal.NewWriter(journalPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	exec := &Executor{
-		Trash:   trash.New(filepath.Join(t.TempDir(), "Trash"), os.Getuid()),
-		Journal: w,
-		Command: "purge",
-	}
-	freed, err := exec.Delete(&arts[0], false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if freed <= 0 {
-		t.Fatalf("expected freed bytes > 0, got %d", freed)
-	}
-	if _, err := os.Lstat(art); !os.IsNotExist(err) {
-		t.Fatalf("artifact should be deleted, stat err = %v", err)
-	}
-	if err := exec.EndRun(freed); err != nil {
-		t.Fatal(err)
-	}
-	records, err := journal.Read(journalPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var found bool
-	for _, r := range records {
-		if r.Action == journal.ActionTrash {
-			found = true
-			if r.Recovery != journal.RecoveryTrash {
-				t.Fatalf("recovery = %q, want trash", r.Recovery)
-			}
-			if r.Status != journal.StatusOK {
-				t.Fatalf("status = %q, want ok", r.Status)
-			}
-		}
-	}
-	if !found {
-		t.Fatal("no purge record in journal")
-	}
-}
-
-func TestExecutorDryRunDoesNotDelete(t *testing.T) {
-	root := t.TempDir()
-	art := makeArtifact(t, root, "node_modules", time.Now().Add(-30*24*time.Hour))
-	arts, err := Discover(context.Background(), Options{Roots: []string{root}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	exec := &Executor{Trash: trash.New(filepath.Join(t.TempDir(), "Trash"), os.Getuid()), Command: "purge"}
-	if _, err := exec.Delete(&arts[0], true); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Lstat(art); err != nil {
-		t.Fatalf("dry-run must not delete: %v", err)
-	}
-}
-
-// TestExecutorIdentityGuard pins the TOCTOU defense: an artifact whose on-disk
-// identity no longer matches the discovery snapshot must be skipped, not
-// trashed.
-func TestExecutorIdentityGuard(t *testing.T) {
-	root := t.TempDir()
-	art := makeArtifact(t, root, "node_modules", time.Now())
-	snap, err := safe.TakeSnapshot(art)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Replace the artifact with a different directory. Rename the original
-	// away rather than deleting it so its inode stays allocated and the
-	// replacement cannot reuse it; ext4 reuses freed inodes.
-	if err := os.Rename(art, art+".moved"); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(art, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	arts, err := Discover(context.Background(), Options{Roots: []string{root}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(arts) != 1 {
-		t.Fatalf("expected 1 artifact, got %d", len(arts))
-	}
-	arts[0].Snapshot = snap
-	exec := &Executor{Validator: safe.NewValidator(os.Getuid()), Trash: trash.New(filepath.Join(t.TempDir(), "Trash"), os.Getuid())}
-	if _, err := exec.Delete(&arts[0], false); err == nil {
-		t.Fatal("expected a guard-stop for a changed identity")
-	}
-	if _, err := os.Lstat(art); err != nil {
-		t.Fatalf("guard-stopped artifact must be left in place: %v", err)
 	}
 }
 
