@@ -51,8 +51,8 @@ On a terminal, the flow opens a preview TUI grouped by category, with a
 sub-group level where it helps (Projects are one collapsed row per project).
 Each row shows its size, recovery contract (`[trash]`/`[owner]`), a `(root)`
 marker, regeneration cost (`free`/`cheap`/`expensive`/`data`, plus `,active`
-when the cache was used recently), and risk. Unselected rows state why — for
-example `# dev caches are not pre-selected by default`.
+when the cache was used recently), and risk. Whether a row starts selected
+follows its category defaults; toggle anything before confirming.
 
 Keys: `space` toggles a row/group/category, `a` selects every auto-selectable
 row, `n` clears, `/` filters, `→`/`←` expand and collapse, `k` keeps

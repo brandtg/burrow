@@ -219,8 +219,32 @@ func TestDiscoverWarnsOnMissingRoot(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("expected the good root to still be scanned, got %d artifacts", len(got))
 	}
+	// A missing root is silent (stock configs ship optional roots that may
+	// not exist); only an unreadable root warns.
+	if len(warnings) != 0 {
+		t.Fatalf("expected no warning for the missing root, got %v", warnings)
+	}
+}
+
+func TestDiscoverWarnsOnUnreadableRoot(t *testing.T) {
+	root := t.TempDir()
+	unreadable := filepath.Join(t.TempDir(), "locked")
+	if err := os.Mkdir(unreadable, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(unreadable, 0o700) })
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: unreadable-dir check is meaningless")
+	}
+	var warnings []string
+	if _, err := Discover(context.Background(), Options{
+		Roots: []string{unreadable, root},
+		Warn:  func(msg string) { warnings = append(warnings, msg) },
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if len(warnings) != 1 {
-		t.Fatalf("expected 1 warning for the missing root, got %v", warnings)
+		t.Fatalf("expected 1 warning for the unreadable root, got %v", warnings)
 	}
 }
 

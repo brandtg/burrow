@@ -74,7 +74,11 @@ func Discover(ctx context.Context, opts Options) ([]Artifact, error) {
 	for _, root := range opts.Roots {
 		arts, err := scanRoot(ctx, root, opts, git)
 		if err != nil {
-			if opts.Warn != nil {
+			// A root that does not exist can never contribute; the stock
+			// config ships several optional roots, so their absence is not
+			// a condition worth alarming the user about. A root that exists
+			// but cannot be read still warns.
+			if !errors.Is(err, fs.ErrNotExist) && opts.Warn != nil {
 				opts.Warn(fmt.Sprintf("skipping root %s: %v", root, err))
 			}
 			continue
@@ -104,6 +108,11 @@ func scanRoot(ctx context.Context, root string, opts Options, git *gitCache) ([]
 	var out []Artifact
 	walkErr := filepath.WalkDir(resolved, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
+			if p == resolved {
+				// The root itself is unreadable — surface it so Discover
+				// can warn; child errors stay silent.
+				return err
+			}
 			if d != nil && d.IsDir() {
 				return filepath.SkipDir
 			}

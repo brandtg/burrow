@@ -225,8 +225,9 @@ func TestPurgeAliasWarnsOnMissingRoot(t *testing.T) {
 	if code := te.run("purge", "--dry-run"); code != ExitOK {
 		t.Fatalf("exit code = %d: %s", code, te.errOut.String())
 	}
-	if !strings.Contains(te.errOut.String(), "skipping root") {
-		t.Fatalf("expected a skipped-root warning, stderr = %q", te.errOut.String())
+	// A missing root is silent; it must not produce a warning.
+	if strings.Contains(te.errOut.String(), "skipping root") {
+		t.Fatalf("missing root must not warn, stderr = %q", te.errOut.String())
 	}
 }
 

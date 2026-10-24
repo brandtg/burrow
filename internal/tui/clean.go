@@ -41,6 +41,7 @@ func RenderPreview(w io.Writer, plan *engine.Plan, platform string, color bool) 
 	if platform != "" {
 		fmt.Fprintln(w, platform)
 	}
+	cw := planItemWidths(plan)
 	unknown := 0
 	for _, g := range plan.GroupedTree() {
 		fmt.Fprintf(w, "\u25b8 %s  %s / %d items\n", g.Title, config.FormatBytes(g.Bytes), len(g.Items))
@@ -67,7 +68,7 @@ func RenderPreview(w io.Writer, plan *engine.Plan, platform string, color bool) 
 				if ig.ID != "" {
 					indent = "    "
 				}
-				fmt.Fprintf(w, "%s%s\n", indent, itemLine(it, color))
+				fmt.Fprintf(w, "%s%s\n", indent, itemLine(it, cw, color))
 				shown++
 			}
 			if extra := len(ig.Items) - shown; extra > 0 {
@@ -186,7 +187,71 @@ func reviewLine(it *engine.PlannedItem) string {
 	return fmt.Sprintf("%s: (no path)", it.Target.ID)
 }
 
-func itemLine(it *engine.PlannedItem, color bool) string {
+// colWidths carries the per-column paddings so item rows align vertically.
+// Widths are computed once from every item in the plan, not per row.
+type colWidths struct {
+	display int
+	size    int
+	tag     int
+	regen   int
+}
+
+func itemWidths(items []*engine.PlannedItem) colWidths {
+	var cw colWidths
+	for _, it := range items {
+		if n := displayWidth(it.Target.Display); n > cw.display {
+			cw.display = n
+		}
+		if n := len(sizeField(it.Target)); n > cw.size {
+			cw.size = n
+		}
+		if n := len(tagField(it.Target)); n > cw.tag {
+			cw.tag = n
+		}
+		if n := len(regenField(it.Target)); n > cw.regen {
+			cw.regen = n
+		}
+	}
+	return cw
+}
+
+// displayWidth is the rune count of a display name (display names are plain
+// text; no ANSI escapes reach the Target).
+func displayWidth(s string) int {
+	n := 0
+	for range s {
+		n++
+	}
+	return n
+}
+
+func sizeField(t engine.Target) string {
+	if !t.SizeKnown {
+		return "unknown"
+	}
+	return config.FormatBytes(t.SizeBytes)
+}
+
+func tagField(t engine.Target) string {
+	tag := "[trash]"
+	if t.Recovery == engine.RecoveryOwner {
+		tag = "[owner]"
+	}
+	if t.NeedsRoot {
+		tag += " (root)"
+	}
+	return tag
+}
+
+func regenField(t engine.Target) string {
+	regen := t.Regen.String()
+	if t.Gated {
+		regen += ",active"
+	}
+	return regen
+}
+
+func itemLine(it *engine.PlannedItem, cw colWidths, color bool) string {
 	check := "[ ]"
 	switch {
 	case it.Kept:
@@ -194,29 +259,17 @@ func itemLine(it *engine.PlannedItem, color bool) string {
 	case it.Selected:
 		check = "[x]"
 	}
-	rec := "[owner]"
-	if it.Target.Recovery == engine.RecoveryTrash {
-		rec = "[trash]"
-	}
-	root := ""
-	if it.Target.NeedsRoot {
-		root = " (root)"
-	}
-	size := "unknown (owner-reported)"
-	if it.Target.SizeKnown {
-		size = config.FormatBytes(it.Target.SizeBytes)
-	}
-	regen := it.Target.Regen.String()
-	if it.Target.Gated {
-		regen += ",active"
-	}
-	line := fmt.Sprintf("%s %-26s %10s  %s%s %-9s %s", check, it.Target.Display, size, rec, root, regen, riskLabel(it.Target.Risk, color))
-	// Unselected rows state why, so a left-on item is a decision, not a
-	// surprise (for example "dev caches are not pre-selected by default").
-	if !it.Selected && len(it.Target.Evidence) > 0 {
-		line += "  # " + it.Target.Evidence[0]
-	}
+	line := fmt.Sprintf("%s %-*s  %*s  %-*s %-*s %s",
+		check, cw.display, it.Target.Display,
+		cw.size, sizeField(it.Target),
+		cw.tag, tagField(it.Target),
+		cw.regen, regenField(it.Target),
+		riskLabel(it.Target.Risk, color))
 	return line
+}
+
+func planItemWidths(plan *engine.Plan) colWidths {
+	return itemWidths(plan.Items)
 }
 
 func riskLabel(r engine.Risk, color bool) string {
@@ -313,6 +366,8 @@ type CleanModel struct {
 	help   help.Model
 	keys   cleanKeyMap
 	styles styles
+
+	widths colWidths
 }
 
 // NewCleanModel builds the clean model from a plan.
@@ -327,6 +382,7 @@ func NewCleanModel(cfg CleanConfig) *CleanModel {
 		dryRun:       cfg.DryRun,
 		whitelist:    cfg.Whitelist,
 		cats:         cfg.Plan.GroupedTree(),
+		widths:       planItemWidths(cfg.Plan),
 		collapsedCat: map[string]bool{},
 		collapsedGrp: map[string]bool{},
 		filter:       filter,
@@ -796,7 +852,7 @@ func (m *CleanModel) row(r cleanRow, cursor bool) string {
 		if r.group != nil && r.group.ID == "" {
 			indent = "  "
 		}
-		line = marker + " " + indent + itemLine(r.item, m.color)
+		line = marker + " " + indent + itemLine(r.item, m.widths, m.color)
 	}
 	if cursor {
 		return m.styles.cursor.Render(line)

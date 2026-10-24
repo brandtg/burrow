@@ -205,14 +205,11 @@ func TestDiscoverWarnsOnMissingRoot(t *testing.T) {
 	if len(targets) != 1 {
 		t.Fatalf("the good root must still be scanned, got %+v", targets)
 	}
-	var warned bool
+	// A missing root is silent; it can never contribute anything.
 	for _, w := range cat.Warnings() {
 		if strings.Contains(w, missing) {
-			warned = true
+			t.Fatalf("missing root must not warn, got %v", cat.Warnings())
 		}
-	}
-	if !warned {
-		t.Fatalf("expected a warning naming the missing root, got %v", cat.Warnings())
 	}
 }
 
