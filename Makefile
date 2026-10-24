@@ -76,10 +76,6 @@ doctor: ## Check that the external gate tools are installed.
 setup-tools: ## Install the external gate tools at the CI-pinned versions.
 	scripts/dev-tools.sh --install
 
-.PHONY: docs
-docs: ## Generate the man pages into docs/man (review the diff).
-	$(GO) run ./cmd/burrow docs --dir docs/man
-
 .PHONY: verify-static
 verify-static: build ## Verify the built binary has no dynamic loader deps.
 	@if command -v ldd >/dev/null 2>&1; then \

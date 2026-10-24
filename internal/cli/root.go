@@ -3,16 +3,13 @@
 package cli
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"os"
 
 	"github.com/brandtg/burrow/internal/distro"
 	"github.com/brandtg/burrow/internal/engine"
-	"github.com/brandtg/burrow/internal/i18n"
 	"github.com/brandtg/burrow/internal/journal"
-	"github.com/brandtg/burrow/internal/metrics"
 	"github.com/spf13/cobra"
 )
 
@@ -51,10 +48,6 @@ type App struct {
 	Distro  *distro.Info
 	Adapter distro.Adapter
 
-	// CollectMetrics overrides the status snapshot source for tests and the
-	// command-level golden. It defaults to metrics.Collect.
-	CollectMetrics func(context.Context, string) (metrics.Snapshot, error)
-
 	env    *engine.Env
 	envErr error
 }
@@ -85,7 +78,7 @@ func (a *App) Env() (*engine.Env, error) {
 func (a *App) Root() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "burrow",
-		Short:         i18n.T(i18n.AppTagline),
+		Short:         "a prescriptive Linux disk-space and cleanup tool",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		// Bare `burrow` IS the product: the full clean flow (scan ->
@@ -121,8 +114,6 @@ func (a *App) Root() *cobra.Command {
 		a.newAnalyzeCmd(),
 		a.newCleanCmd(),
 		a.newPurgeCmd(),
-		a.newStatusCmd(),
-		a.newDocsCmd(root),
 	)
 	return root
 }

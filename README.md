@@ -14,7 +14,7 @@ It is an **orchestrator with a safety contract**, not a path-deleter.
 
 > Status: v0.1 complete. Plans 01–07 have landed: the safety core and engine,
 > analyze, clean (`system`/`dev`/`user-cache`/`downloads`/`containers`/
-> `desktop-pkgs`), purge, the thin `status` snapshot, the Fedora (dnf) adapter,
+> `desktop-pkgs`), purge, the Fedora (dnf) adapter,
 > `--json` everywhere, shell completion, generated man pages, and
 > checksum-verified release packaging. See [Development](#development) to build
 > and test, and [Packaging and release](#packaging-and-release) to cut a release.
@@ -105,14 +105,13 @@ Press `k` in the preview to whitelist a path and keep it for good.
 ## Command surface
 
 ```
-burrow analyze [path...]      # interactive disk explorer (read-only except 'd' trash)
-burrow clean                  # categorized cleaner (preview -> confirm -> execute)
-burrow purge                  # rebuildable project artifacts (node_modules, target, ...)
-burrow status                 # one-shot system snapshot (thin)
+burrow                        # the product: scan -> one grouped review -> confirm
+burrow analyze [path...]      # read-only disk explorer
+burrow clean                  # alias for the no-arg flow
+burrow purge                  # deprecated alias for: burrow clean --only projects
 burrow history                # read the operation journal; --restore <run_id>
 burrow config                 # print effective config + resolved paths
 burrow completion <shell>     # shell completion (bash/zsh/fish)
-burrow docs                   # generate man pages into docs/man
 burrow version
 ```
 
@@ -317,9 +316,7 @@ internal/journal/   append-only JSONL operation journal + history reader
 internal/whitelist/ whitelist load/match
 internal/config/    TOML load + precedence + defaults
 internal/scan/      gdu adapter (wraps pkg/analyze + pkg/fs) + our item model
-internal/tui/       Bubble Tea models (analyze, clean preview, purge)
-internal/metrics/   gopsutil wrappers (status; thin)
-internal/i18n/      message catalog (EN only in v0.1; keys so it is translatable)
+internal/tui/       Bubble Tea models (analyze, clean preview)
 ```
 
 The pipeline invariant: steps from discovery through planning are pure and
@@ -333,9 +330,7 @@ preview.
   (MIT), wrapped behind `internal/scan`. See `AGENTS.md` for the integration
   caveats.
 - **TUI:** Bubble Tea + Lipgloss + Bubbles.
-- **CLI:** spf13/cobra (shell completion + `cobra/doc` man-page generation).
-- **Status metrics:** [`github.com/shirou/gopsutil/v4`](https://github.com/shirou/gopsutil),
-  wrapped behind `internal/metrics` (thin, read-only).
+- **CLI:** spf13/cobra (shell completion).
 - **Config:** TOML; whitelist is a separate newline-delimited file.
 - **Trash:** native freedesktop Trash Spec implementation, no runtime dependency.
 - **Packaging:** goreleaser (`CGO_ENABLED=0`, linux amd64/arm64, checksums, native
@@ -461,12 +456,10 @@ non-negotiable safety rules are in `AGENTS.md`.
 ### Man pages and completion
 
 ```sh
-make docs                        # regenerate docs/man (review the diff)
 make run ARGS="completion bash"  # bash/zsh/fish completion scripts
 ```
 
-Man pages are generated from the cobra command tree; never hand-edit them. The
-gate regenerates them into a temp dir and fails if the committed pages are stale.
+The man pages in `docs/man/` are frozen; they are no longer regenerated.
 
 ## Packaging and release
 

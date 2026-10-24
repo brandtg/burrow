@@ -6,14 +6,13 @@ command** (permanent but re-downloadable). Nothing mutates before the preview,
 and any uncertainty skips the item and records why.
 
 ```
-burrow analyze [path...]      # interactive disk explorer (read-only except 'd' trash)
-burrow clean                  # categorized cleaner (preview -> confirm -> execute)
-burrow purge                  # rebuildable project artifacts
-burrow status                 # one-shot system snapshot (thin)
+burrow                        # the product: scan -> one grouped review -> confirm
+burrow analyze [path...]      # read-only disk explorer
+burrow clean                  # alias for the no-arg flow
+burrow purge                  # deprecated alias for: burrow clean --only projects
 burrow history                # read the operation journal; --restore <run_id>
 burrow config                 # effective config + resolved paths
 burrow completion <shell>     # bash|zsh|fish completion
-burrow docs                   # generate man pages into docs/man
 burrow version
 ```
 
@@ -115,9 +114,10 @@ re-downloadable; they are reported but never restorable.
 
 ## Analyze
 
-`burrow analyze [path]` opens an interactive tree (arrow keys; `d`/`D` trash the
-selected/highlighted entry; `--no-delete` makes it read-only). When stdout is not
-a terminal, or with `--json`, it emits a stable document:
+`burrow analyze [path]` opens an interactive read-only tree (arrow keys to
+navigate). It never deletes anything; the only deletion path in burrow is the
+clean flow's review screen. When stdout is not a terminal, or with `--json`, it
+emits a stable document:
 
 ```json
 {"path":"...","total_size":N,"total_files":N,
@@ -127,7 +127,7 @@ a terminal, or with `--json`, it emits a stable document:
 ```
 
 Flags: `-a/--apparent`, `-x/--one-file-system`, `--cross-mounts`, `-H/--no-hidden`,
-`--depth <n>`, `-t/--top <n>`, `--no-delete`. `--json` accepts a single path.
+`--depth <n>`, `-t/--top <n>`. `--json` accepts a single path.
 
 When a directory cannot be read (for example due to permissions), the scan is
 partial: the interactive UI shows a `partial scan` warning, unreadable entries
@@ -165,12 +165,6 @@ burrow purge --dry-run
 burrow purge --age 30d --yes
 burrow purge --paths
 ```
-
-## Status
-
-`burrow status` prints a one-shot CPU/memory/disk/network/process snapshot. It is
-thin and read-only (no daemon, no monitoring), and `--json` emits a stable
-schema. `--path <dir>` selects the filesystem to report disk usage for.
 
 ## Config
 

@@ -3,126 +3,12 @@ package tui
 import (
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/brandtg/burrow/internal/journal"
-	"github.com/brandtg/burrow/internal/safe"
 	"github.com/brandtg/burrow/internal/scan"
-	"github.com/brandtg/burrow/internal/trash"
+	tea "github.com/charmbracelet/bubbletea"
 )
-
-func TestTrashExecIdentitySwapGuardStop(t *testing.T) {
-	base := t.TempDir()
-	victim := filepath.Join(base, "victim")
-	if err := os.WriteFile(victim, []byte("original"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	snap, err := safe.TakeSnapshot(victim)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Swap the path for a different inode between selection and execution.
-	// Rename the original away rather than deleting it so its inode stays
-	// allocated and the replacement cannot reuse it; ext4 reuses freed inodes.
-	if err := os.Rename(victim, victim+".moved"); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(victim, []byte("replacement"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	exec := &TrashExec{
-		Trash:     trash.New(filepath.Join(base, "Trash"), os.Getuid()),
-		Validator: safe.NewValidator(os.Getuid()),
-	}
-	err = exec.MoveToTrash(snap, 8, victim)
-	if err == nil {
-		t.Fatal("expected a guard-stop for a swapped path")
-	}
-	var gs *safe.GuardStopError
-	if !errors.As(err, &gs) {
-		t.Fatalf("want guard-stop, got %T: %v", err, err)
-	}
-	if _, err := os.Stat(victim); err != nil {
-		t.Fatalf("swapped path should be left alone: %v", err)
-	}
-}
-
-func TestTrashExecJournalAndRestore(t *testing.T) {
-	base := t.TempDir()
-	trashDir := filepath.Join(base, "data", "Trash")
-	victim := filepath.Join(base, "victim")
-	if err := os.WriteFile(victim, []byte("hello"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	journalPath := filepath.Join(base, "state", "operations.jsonl")
-	jw, err := journal.NewWriter(journalPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	exec := &TrashExec{
-		Trash:     trash.New(trashDir, os.Getuid()),
-		Validator: safe.NewValidator(os.Getuid()),
-		Journal:   jw,
-		Command:   "analyze",
-	}
-	snap, err := safe.TakeSnapshot(victim)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := exec.MoveToTrash(snap, 5, victim); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(victim); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("victim should be gone, stat err = %v", err)
-	}
-
-	records, err := journal.Read(journalPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var ok int
-	for _, r := range records {
-		if r.Action == journal.ActionTrash && r.Status == journal.StatusOK && r.Path == victim {
-			ok++
-		}
-	}
-	if ok != 1 {
-		t.Fatalf("expected one ok trash record, got %d (%+v)", ok, records)
-	}
-
-	tr := trash.New(trashDir, os.Getuid())
-	entries, err := tr.List()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != 1 || entries[0].Path != victim {
-		t.Fatalf("trash entries = %+v", entries)
-	}
-	if err := tr.Restore(entries[0]); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(victim); err != nil {
-		t.Fatalf("restore did not bring the item back: %v", err)
-	}
-}
-
-func TestTrashExecRefusesProtectedRoot(t *testing.T) {
-	exec := &TrashExec{
-		Trash:     trash.New(filepath.Join(t.TempDir(), "Trash"), os.Getuid()),
-		Validator: safe.NewValidator(os.Getuid()),
-	}
-	snap, err := safe.TakeSnapshot("/etc")
-	if err != nil {
-		t.Skipf("cannot snapshot /etc: %v", err)
-	}
-	if err := exec.MoveToTrash(snap, 0, "/etc"); err == nil {
-		t.Fatal("expected protected path to be refused")
-	}
-}
 
 func TestParentCursorFollowsSort(t *testing.T) {
 	root := &scan.Node{
@@ -134,7 +20,7 @@ func TestParentCursorFollowsSort(t *testing.T) {
 				Children: []*scan.Node{{Name: "a1", Path: "/root/alpha/a1", Size: 1, SizeKnown: true}}},
 		},
 	}
-	m := NewAnalyzeModel(AnalyzeConfig{Root: root, Color: false, UID: os.Getuid()})
+	m := NewAnalyzeModel(AnalyzeConfig{Root: root, Color: false})
 	// Name sort flips the order relative to the stored (size-sorted) children,
 	// so indexing p.Children would put the cursor on the wrong row.
 	m.setSort(SortByName)
@@ -155,38 +41,6 @@ func TestParentCursorFollowsSort(t *testing.T) {
 	}
 }
 
-func TestRemoveNodeSubtractsSubtreeItemCount(t *testing.T) {
-	root := &scan.Node{Name: "root", Path: "/root", IsDir: true, SizeKnown: true, ItemCount: 5, Size: 110}
-	zulu := &scan.Node{Name: "zulu", Path: "/root/zulu", IsDir: true, SizeKnown: true, ItemCount: 2, Size: 100}
-	root.Children = []*scan.Node{zulu}
-	m := NewAnalyzeModel(AnalyzeConfig{Root: root, Color: false, UID: os.Getuid()})
-	m.removeNode(zulu)
-	if root.ItemCount != 3 {
-		t.Fatalf("root ItemCount = %d, want 3 (subtract the whole subtree)", root.ItemCount)
-	}
-	if len(root.Children) != 0 {
-		t.Fatalf("root still has %d children", len(root.Children))
-	}
-	if root.Size != 10 {
-		t.Fatalf("root Size = %d, want 10", root.Size)
-	}
-}
-
-func TestNoDeleteDisablesTrashKeys(t *testing.T) {
-	root := &scan.Node{
-		Name: "root", Path: "/root", IsDir: true, SizeKnown: true,
-		Children: []*scan.Node{{Name: "a", Path: "/root/a", IsDir: false, Size: 10, SizeKnown: true}},
-	}
-	m := NewAnalyzeModel(AnalyzeConfig{Root: root, Color: false, NoDelete: true, UID: os.Getuid()})
-	m.beginDelete(false)
-	if m.confirm {
-		t.Fatal("delete confirmation should be disabled under --no-delete")
-	}
-	if m.status == "" {
-		t.Fatal("expected a status message explaining the disabled keys")
-	}
-}
-
 func TestAnalyzeBackgroundLoadShowsProgress(t *testing.T) {
 	root := &scan.Node{
 		Name: "root", Path: "/root", IsDir: true, SizeKnown: true,
@@ -194,7 +48,7 @@ func TestAnalyzeBackgroundLoadShowsProgress(t *testing.T) {
 	}
 	m := NewAnalyzeModel(AnalyzeConfig{
 		Load:  func(context.Context, func(scan.Progress)) (*scan.Node, error) { return root, nil },
-		Color: false, UID: os.Getuid(),
+		Color: false,
 	})
 	if m.root != nil {
 		t.Fatal("model should start without a tree when Load is set")
@@ -219,7 +73,7 @@ func TestAnalyzeBackgroundLoadShowsProgress(t *testing.T) {
 func TestAnalyzeBackgroundLoadError(t *testing.T) {
 	m := NewAnalyzeModel(AnalyzeConfig{
 		Load:  func(context.Context, func(scan.Progress)) (*scan.Node, error) { return nil, nil },
-		Color: false, UID: os.Getuid(),
+		Color: false,
 	})
 	m.loading = true
 	m.Update(loadDoneMsg{err: errors.New("boom")})
@@ -238,23 +92,19 @@ func TestAnalyzeHeaderWarnsOnPartialScan(t *testing.T) {
 			{Name: "locked", Path: "/root/locked", IsDir: true, SizeKnown: false},
 		},
 	}
-	m := NewAnalyzeModel(AnalyzeConfig{Root: root, Color: false, UID: os.Getuid()})
+	m := NewAnalyzeModel(AnalyzeConfig{Root: root, Color: false})
 	if m.unknown != 1 {
 		t.Fatalf("unknown = %d, want 1", m.unknown)
 	}
 	if got := m.header(); !strings.Contains(got, "partial scan") {
 		t.Fatalf("header missing partial-scan banner: %q", got)
 	}
-	m.removeNode(root.Children[0])
-	if m.unknown != 0 {
-		t.Fatalf("unknown after removing the unreadable node = %d, want 0", m.unknown)
-	}
 
 	complete := &scan.Node{
 		Name: "root", Path: "/root", IsDir: true, SizeKnown: true,
 		Children: []*scan.Node{{Name: "a", Path: "/root/a", Size: 1, SizeKnown: true}},
 	}
-	mc := NewAnalyzeModel(AnalyzeConfig{Root: complete, Color: false, UID: os.Getuid()})
+	mc := NewAnalyzeModel(AnalyzeConfig{Root: complete, Color: false})
 	if got := mc.header(); strings.Contains(got, "partial scan") {
 		t.Fatalf("complete scan should not warn: %q", got)
 	}
@@ -268,7 +118,7 @@ func TestAnalyzeHeaderWarnsOnSkippedMounts(t *testing.T) {
 			Path: "/root/other", Source: "/dev/sdb1", Fstype: "ext4",
 		}},
 	}
-	m := NewAnalyzeModel(AnalyzeConfig{Root: root, Color: false, UID: os.Getuid()})
+	m := NewAnalyzeModel(AnalyzeConfig{Root: root, Color: false})
 	if got := m.header(); !strings.Contains(got, "skipped 1 mount") || !strings.Contains(got, "/root/other") {
 		t.Fatalf("header missing skipped-mount warning: %q", got)
 	}
@@ -276,62 +126,13 @@ func TestAnalyzeHeaderWarnsOnSkippedMounts(t *testing.T) {
 		Name: "root", Path: "/root", IsDir: true, SizeKnown: true,
 		Children: []*scan.Node{{Name: "a", Path: "/root/a", Size: 1, SizeKnown: true}},
 	}
-	mc := NewAnalyzeModel(AnalyzeConfig{Root: complete, Color: false, UID: os.Getuid()})
+	mc := NewAnalyzeModel(AnalyzeConfig{Root: complete, Color: false})
 	if got := mc.header(); strings.Contains(got, "skipped") {
 		t.Fatalf("complete scan should not warn about mounts: %q", got)
 	}
 }
 
-func TestSkippedSelectionDoesNotShadowCursor(t *testing.T) {
-	base := t.TempDir()
-	real := filepath.Join(base, "real")
-	if err := os.WriteFile(real, []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	link := filepath.Join(base, "link")
-	if err := os.Symlink(real, link); err != nil {
-		t.Fatal(err)
-	}
-
-	linkNode := &scan.Node{Name: "link", Path: link, Size: 1, SizeKnown: true}
-	realNode := &scan.Node{Name: "real", Path: real, Size: 1, SizeKnown: true}
-	root := &scan.Node{
-		Name: "root", Path: base, IsDir: true, SizeKnown: true,
-		Children: []*scan.Node{linkNode, realNode},
-	}
-	m := NewAnalyzeModel(AnalyzeConfig{
-		Root: root, Color: false, UID: os.Getuid(),
-		Validator: safe.NewValidator(os.Getuid()),
-	})
-
-	// Selecting the symlink and deleting it must fail closed (symlinks are
-	// rejected) and clear the selection so it cannot shadow the cursor later.
-	m.selectedNodes[link] = linkNode
-	m.selected[link] = true
-	m.beginDelete(false)
-	if m.confirm {
-		t.Fatal("a symlink selection should not be trashed")
-	}
-	if len(m.selectedNodes) != 0 || len(m.selected) != 0 {
-		t.Fatalf("skipped selection should be cleared, got %v", m.selected)
-	}
-
-	// The next delete must act on the cursor row, not the stale selection.
-	for i, e := range m.entries {
-		if e.Path == real {
-			m.cursor = i
-		}
-	}
-	m.beginDelete(false)
-	if !m.confirm {
-		t.Fatalf("cursor item was shadowed by a stale selection: status=%q", m.status)
-	}
-	if len(m.pending) != 1 || m.pending[0].node.Path != real {
-		t.Fatalf("pending targets = %+v, want the cursor item %s", m.pending, real)
-	}
-}
-
-func TestAnalyzeModelNavigationAndSelection(t *testing.T) {
+func TestAnalyzeNavigation(t *testing.T) {
 	root := &scan.Node{
 		Name: "root", Path: "/root", IsDir: true, SizeKnown: true,
 		Children: []*scan.Node{
@@ -340,17 +141,13 @@ func TestAnalyzeModelNavigationAndSelection(t *testing.T) {
 				Children: []*scan.Node{{Name: "c", Path: "/root/b/c", IsDir: false, Size: 5, SizeKnown: true}}},
 		},
 	}
-	m := NewAnalyzeModel(AnalyzeConfig{Root: root, Color: false, UID: os.Getuid()})
+	m := NewAnalyzeModel(AnalyzeConfig{Root: root, Color: false})
 	if len(m.entries) != 2 {
 		t.Fatalf("entries = %d, want 2", len(m.entries))
 	}
 	// Sorted by size desc: b (20) then a (10).
 	if m.entries[0].Name != "b" {
 		t.Fatalf("first entry = %s, want b", m.entries[0].Name)
-	}
-	m.toggleSelect()
-	if !m.selected["/root/b"] {
-		t.Fatal("space did not select the cursor row")
 	}
 	m.enter()
 	if m.dir.Path != "/root/b" {
@@ -362,5 +159,31 @@ func TestAnalyzeModelNavigationAndSelection(t *testing.T) {
 	m.parent()
 	if m.dir.Path != "/root" {
 		t.Fatalf("parent moved to %s, want /root", m.dir.Path)
+	}
+}
+
+// TestAnalyzeKeysAreReadOnly asserts the explorer exposes no delete or
+// selection keys: d, D, space, and a must not change the model's state.
+func TestAnalyzeKeysAreReadOnly(t *testing.T) {
+	root := &scan.Node{
+		Name: "root", Path: "/root", IsDir: true, SizeKnown: true,
+		Children: []*scan.Node{{Name: "a", Path: "/root/a", Size: 10, SizeKnown: true}},
+	}
+	m := NewAnalyzeModel(AnalyzeConfig{Root: root, Color: false})
+	keys := []tea.Msg{
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")},
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("D")},
+		tea.KeyMsg{Type: tea.KeySpace},
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")},
+	}
+	for _, k := range keys {
+		updated, _ := m.Update(k)
+		mm := updated.(*AnalyzeModel)
+		if got := mm.footer(); strings.Contains(got, "trash") || strings.Contains(got, "confirm") {
+			t.Fatalf("key %v touched a delete affordance: %q", k, got)
+		}
+		if view := mm.View(); strings.Contains(view, "[y]") {
+			t.Fatalf("key %v opened a delete confirmation: %q", k, view)
+		}
 	}
 }
