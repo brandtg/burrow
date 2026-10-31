@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -40,6 +39,10 @@ type Plan struct {
 	Command  string
 	Items    []*PlannedItem
 	Warnings []string
+
+	// hooksApplied records that ApplyHooks ran, so a second call neither
+	// re-reconciles nor duplicates category warnings.
+	hooksApplied bool
 }
 
 // Totals summarizes a set of items.
@@ -81,6 +84,13 @@ type Options struct {
 	DiscoverTimeout time.Duration
 	// NoOwner leaves owner-contract items unselected (still shown).
 	NoOwner bool
+	// Progress, when non-nil, is called once per category as its discovery
+	// completes, in the same stable category order the plan is built in, with
+	// the category id and the number of targets discovered for it (0 when
+	// discovery failed). It is never called from the discovery goroutines, so
+	// the call order is deterministic. It is informational only: it may report
+	// progress, but it must not block the pipeline, mutate the plan, or panic.
+	Progress func(categoryID string, targets int)
 }
 
 // Selected returns the items marked for execution.
@@ -110,10 +120,6 @@ func TotalsOf(items []*PlannedItem) Totals {
 
 // SelectedTotals sums the selected items.
 func (p *Plan) SelectedTotals() Totals { return TotalsOf(p.Selected()) }
-
-// GroupedByCategory returns items grouped by category, preserving plan order.
-// It is GroupedTree without the sub-group detail.
-func (p *Plan) GroupedByCategory() []CategoryGroup { return p.GroupedTree() }
 
 // GroupedTree returns items as category -> optional group -> item, preserving
 // plan order at every level. The grouping is presentation-only; it never
@@ -164,7 +170,9 @@ func (p *Plan) GroupedTree() []CategoryGroup {
 }
 
 // Build runs steps 2-5: discover (parallel, per-category timeout), measure,
-// filter, and plan. It never mutates the filesystem (invariant I1).
+// filter, and plan. Discovery is limited to categories --only can match, so a
+// narrow selector does not pay for scanning unrelated roots. It never mutates
+// the filesystem (invariant I1).
 func Build(ctx context.Context, env *Env, opts Options) (*Plan, error) {
 	if opts.Command == "" {
 		opts.Command = "clean"
@@ -174,15 +182,17 @@ func Build(ctx context.Context, env *Env, opts Options) (*Plan, error) {
 	}
 	plan := &Plan{RunID: journal.NewRunID(), Command: opts.Command}
 
+	cats, scoped := discoverableCategories(opts)
+
 	type discovered struct {
 		cat     Category
 		targets []Target
 		err     error
 	}
-	results := make(map[string]discovered, len(opts.Categories))
-	ch := make(chan discovered, len(opts.Categories))
+	results := make(map[string]discovered, len(cats))
+	ch := make(chan discovered, len(cats))
 	var wg sync.WaitGroup
-	for _, cat := range opts.Categories {
+	for _, cat := range cats {
 		if !categoryIncluded(cat.ID(), opts.Exclude) {
 			continue
 		}
@@ -202,13 +212,16 @@ func Build(ctx context.Context, env *Env, opts Options) (*Plan, error) {
 	}
 
 	// Step 2/3/4/5 in category order for a stable plan.
-	for _, cat := range opts.Categories {
+	for _, cat := range cats {
 		if !categoryIncluded(cat.ID(), opts.Exclude) {
 			continue
 		}
 		d, ok := results[cat.ID()]
 		if !ok {
 			continue
+		}
+		if opts.Progress != nil {
+			opts.Progress(cat.ID(), len(d.targets))
 		}
 		if d.err != nil {
 			plan.Warnings = append(plan.Warnings, fmt.Sprintf("%s: discovery failed: %v", cat.ID(), d.err))
@@ -241,7 +254,75 @@ func Build(ctx context.Context, env *Env, opts Options) (*Plan, error) {
 			plan.Items = append(plan.Items, item)
 		}
 	}
+	if len(opts.Only) > 0 && !scoped && len(plan.Items) == 0 {
+		plan.Warnings = append(plan.Warnings, fmt.Sprintf("no category matched --only %s", strings.Join(opts.Only, ", ")))
+	}
 	return plan, nil
+}
+
+// ApplyHooks runs the optional category hooks against plan: every Reconciler
+// reconciles the plan, then every Warner's warnings are appended to
+// plan.Warnings. Reconciliation always runs (it must be idempotent, and the
+// CLI calls ApplyHooks again after the interactive selection so a superset item
+// can supersede items the user picked); warnings are appended only once.
+func ApplyHooks(cats []Category, plan *Plan) {
+	if plan == nil {
+		return
+	}
+	for _, c := range cats {
+		if rec, ok := c.(Reconciler); ok {
+			rec.Reconcile(plan)
+		}
+	}
+	if plan.hooksApplied {
+		return
+	}
+	plan.hooksApplied = true
+	for _, c := range cats {
+		if w, ok := c.(Warner); ok {
+			plan.Warnings = append(plan.Warnings, w.Warnings()...)
+		}
+	}
+}
+
+// discoverableCategories narrows the category list to the ones --only can
+// match. A selector's category is everything before its first dot, and a bare
+// selector is itself a category id. Item-level narrowing stays in includeTarget.
+//
+// scoped is false when discovery had to cover every category: no selector
+// prefix matched a category id, yet an item id does not always share its
+// category's prefix (desktop-pkgs items are flatpak.*/snap.*), so skipping
+// discovery could silently drop a real match.
+func discoverableCategories(opts Options) (cats []Category, scoped bool) {
+	if len(opts.Only) == 0 {
+		return opts.Categories, true
+	}
+	known := make(map[string]bool, len(opts.Categories))
+	for _, c := range opts.Categories {
+		known[c.ID()] = true
+	}
+	prefixes := make(map[string]bool, len(opts.Only))
+	unknown := false
+	for _, s := range opts.Only {
+		cat, _, _ := strings.Cut(s, ".")
+		if cat == "" {
+			continue
+		}
+		prefixes[cat] = true
+		if !known[cat] {
+			unknown = true
+		}
+	}
+	if unknown || len(prefixes) == 0 {
+		return opts.Categories, false
+	}
+	var matched []Category
+	for _, c := range opts.Categories {
+		if prefixes[c.ID()] {
+			matched = append(matched, c)
+		}
+	}
+	return matched, true
 }
 
 // categoryIncluded reports whether a category survives --exclude at the
@@ -324,7 +405,26 @@ func (s *Summary) Executed() []*PlannedItem {
 // Execute runs step 7 (execute), step 8 (journal), and gathers step 9 data.
 // A tripped guard skips the item with a reason and never aborts the run. A
 // cancelled context stops gracefully; already-completed items stay completed.
+//
+// Execute is ExecuteWithProgress without a per-item callback.
 func Execute(ctx context.Context, env *Env, plan *Plan, jw *journal.Writer) *Summary {
+	return ExecuteWithProgress(ctx, env, plan, jw, nil)
+}
+
+// ExecuteWithProgress is Execute with a per-item progress callback.
+//
+// progress, when non-nil, is called once for every planned item the run
+// attempts — selected and not kept — after the item has finished, including
+// items that were skipped, guard-stopped, timed out, failed, or interrupted.
+// It fires after the item's journal record is appended and before the next
+// item starts, so the item's Status, Reason, Freed, and Argv are final. The
+// Result is the action's own result (zero for items that never ran, such as a
+// guard stop or a dry run).
+//
+// The callback is for reporting only: it runs on the execute goroutine, so it
+// must not block the pipeline, start its own long work, mutate the plan or
+// environment, or panic. Execute's behavior is unchanged when progress is nil.
+func ExecuteWithProgress(ctx context.Context, env *Env, plan *Plan, jw *journal.Writer, progress func(*PlannedItem, Result)) *Summary {
 	sum := &Summary{RunID: plan.RunID, Command: plan.Command, Plan: plan}
 	if jw != nil {
 		sum.JournalPath = jw.Path()
@@ -345,8 +445,11 @@ func Execute(ctx context.Context, env *Env, plan *Plan, jw *journal.Writer) *Sum
 			sum.Interrupted = true
 			break
 		}
-		executeItem(ctx, env, it, sum)
+		res := executeItem(ctx, env, it, sum)
 		appendRecord(jw, plan, it)
+		if progress != nil {
+			progress(it, res)
+		}
 	}
 	sum.DFAfter = FreeBytes("/")
 	if ctx.Err() != nil {
@@ -365,7 +468,10 @@ func Execute(ctx context.Context, env *Env, plan *Plan, jw *journal.Writer) *Sum
 	return sum
 }
 
-func executeItem(ctx context.Context, env *Env, it *PlannedItem, sum *Summary) {
+// executeItem runs one planned item and returns the action's result (zero when
+// the item never ran, e.g. a guard stop). A cancellation mid-item is recorded
+// as an interrupt (skipped, reason "interrupted"), never as a failure.
+func executeItem(ctx context.Context, env *Env, it *PlannedItem, sum *Summary) Result {
 	if it.Target.Guard != nil {
 		if err := it.Target.Guard.Check(ctx, env); err != nil {
 			it.Status = StatusSkipped
@@ -373,7 +479,7 @@ func executeItem(ctx context.Context, env *Env, it *PlannedItem, sum *Summary) {
 			it.GuardStop = true
 			sum.Skipped++
 			sum.GuardStops++
-			return
+			return Result{}
 		}
 	}
 	res, err := it.Target.Action.Run(ctx, env.DryRun)
@@ -397,7 +503,7 @@ func executeItem(ctx context.Context, env *Env, it *PlannedItem, sum *Summary) {
 			it.Status = StatusSkipped
 			it.Reason = "interrupted"
 			sum.Skipped++
-			return
+			return res
 		}
 		var gs *safe.GuardStopError
 		switch {
@@ -419,6 +525,7 @@ func executeItem(ctx context.Context, env *Env, it *PlannedItem, sum *Summary) {
 			sum.Failed++
 		}
 	}
+	return res
 }
 
 // estimateFreed prefers the bytes an action reports; otherwise it uses the
@@ -474,16 +581,4 @@ func FreeBytes(path string) uint64 {
 		return 0
 	}
 	return st.Bavail * uint64(st.Bsize)
-}
-
-// SortItemsBySize orders items largest-first, unknown sizes last. It is used by
-// the preview so the biggest wins are visible first.
-func SortItemsBySize(items []*PlannedItem) {
-	sort.SliceStable(items, func(i, j int) bool {
-		a, b := items[i].Target, items[j].Target
-		if a.SizeKnown != b.SizeKnown {
-			return a.SizeKnown
-		}
-		return a.SizeBytes > b.SizeBytes
-	})
 }
