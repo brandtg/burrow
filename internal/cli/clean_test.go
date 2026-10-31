@@ -108,8 +108,11 @@ func TestCleanRequiresConfirmation(t *testing.T) {
 	useTestbin(t)
 	te := newTestApp(t, cleanTestEnv(t))
 	te.app.Adapter = aptAdapter()
-	if code := te.run("clean", "--only", "system.pkg-cache"); code != ExitUsage {
-		t.Fatalf("exit = %d, want %d", code, ExitUsage)
+	if code := te.run("clean", "--only", "system.pkg-cache"); code != ExitOK {
+		t.Fatalf("exit = %d, want %d", code, ExitOK)
+	}
+	if !strings.Contains(te.out.String(), "re-run with --yes to execute") {
+		t.Fatalf("expected the re-run hint, got %q", te.out.String())
 	}
 }
 
@@ -228,14 +231,17 @@ func TestCleanPlainDryRunPrintsPreview(t *testing.T) {
 		t.Fatalf("exit = %d: %s", code, te.errOut.String())
 	}
 	out := te.out.String()
-	if !strings.Contains(out, "package cache") || !strings.Contains(out, "these exact commands will run") {
-		t.Fatalf("plain dry-run should print preview + review:\n%s", out)
+	if !strings.Contains(out, "package cache") || !strings.Contains(out, "nothing was changed (dry run)") {
+		t.Fatalf("plain dry-run should print the preview and stop:\n%s", out)
+	}
+	if strings.Contains(out, "will run") {
+		t.Fatalf("plan-only output must not claim commands will run:\n%s", out)
 	}
 }
 
 // TestBareBurrowIsTheCleanFlow pins the product shape: no subcommand runs the
-// full clean flow. On a non-TTY it refuses to execute without --yes, so a bare
-// invocation can never mutate anything.
+// full clean flow. On a non-TTY it prints the preview and stops with a re-run
+// hint, so a bare invocation can never mutate anything and exits 0.
 func TestBareBurrowIsTheCleanFlow(t *testing.T) {
 	useTestbin(t)
 	env := cleanTestEnv(t)
@@ -244,11 +250,11 @@ func TestBareBurrowIsTheCleanFlow(t *testing.T) {
 	env["BURROW_PURGE_PATHS"] = t.TempDir()
 	te := newTestApp(t, env)
 	te.app.Adapter = aptAdapter()
-	if code := te.run(); code != ExitUsage {
-		t.Fatalf("exit = %d, want %d: %s", code, ExitUsage, te.errOut.String())
+	if code := te.run(); code != ExitOK {
+		t.Fatalf("exit = %d, want %d: %s", code, ExitOK, te.errOut.String())
 	}
-	if !strings.Contains(te.errOut.String(), "refusing to execute without confirmation") {
-		t.Fatalf("expected the clean-flow refusal, got %q", te.errOut.String())
+	if !strings.Contains(te.out.String(), "re-run with --yes to execute") {
+		t.Fatalf("expected the re-run hint, got %q", te.out.String())
 	}
 }
 

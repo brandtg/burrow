@@ -5,10 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
+	"time"
 
 	"github.com/brandtg/burrow/internal/catalog"
 	"github.com/brandtg/burrow/internal/catalog/containers"
@@ -80,6 +83,9 @@ func (a *App) runClean(f cleanFlags) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	progress := newScanProgress(a.ErrOut, !a.Flags.JSON)
+	defer progress.stop()
+
 	plan, err := engine.Build(ctx, env, engine.Options{
 		Command:    "clean",
 		Categories: cats,
@@ -87,28 +93,43 @@ func (a *App) runClean(f cleanFlags) error {
 		Exclude:    a.Flags.Exclude,
 		MinSize:    minSize,
 		NoOwner:    a.Flags.NoOwner,
+		Progress:   progress.category,
 	})
 	if err != nil {
 		return err
 	}
-	a.reconcile(cats, plan)
-	mergeCategoryWarnings(cats, plan)
-	for _, w := range plan.Warnings {
-		fmt.Fprintf(a.ErrOut, "warning: %s\n", w)
-	}
+	// The scan is over: clear the progress line before anything is written to
+	// stdout or before the alternate screen opens.
+	progress.stop()
+	engine.ApplyHooks(cats, plan)
+	// Warnings are buffered. Printed before the alternate screen they are
+	// invisible until the TUI exits, so they are flushed afterwards instead.
+	warnings := plan.Warnings
 
 	platform := a.platformHeader(env)
 	color := a.colorEnabled(env)
+	jsonOut := a.Flags.JSON
+	tty := readerIsTerminal(a.In) && isTerminal(a.Out)
 
-	if a.Flags.JSON && env.DryRun {
-		return a.cleanJSON(plan, nil, true)
+	// --dry-run is the stronger intent: --yes cannot turn it into an
+	// execution, so say so rather than silently dropping the flag.
+	if env.DryRun && a.Flags.Yes {
+		a.printNote(jsonOut, "note: --dry-run wins; --yes ignored")
 	}
 
 	// The TUI is the default view on a terminal, including --dry-run (where it
-	// is read-only). --plain, --json, --yes, or a non-TTY stdout select the
-	// non-interactive path.
-	interactive := isTerminal(a.Out) && !a.Flags.JSON && !a.Flags.Plain && !a.Flags.Yes
-	if interactive {
+	// is read-only). --plain, --json, --yes, or a non-TTY stdin/stdout select
+	// the non-interactive path.
+	interactive := tty && !jsonOut && !a.Flags.Plain && !a.Flags.Yes
+	switch {
+	case jsonOut:
+		a.printWarnings(warnings)
+		if env.DryRun || !a.Flags.Yes {
+			// A scripted run that cannot execute prints the plan and stops.
+			// Nothing was changed, so dry_run is true.
+			return a.cleanJSON(plan, nil, true)
+		}
+	case interactive:
 		confirmed, aborted, err := tui.RunClean(tui.CleanConfig{
 			Plan:      plan,
 			Platform:  platform,
@@ -116,6 +137,7 @@ func (a *App) runClean(f cleanFlags) error {
 			DryRun:    env.DryRun,
 			Whitelist: a.whitelistManager(env),
 		})
+		a.printWarnings(warnings)
 		if err != nil {
 			return err
 		}
@@ -126,58 +148,145 @@ func (a *App) runClean(f cleanFlags) error {
 			// The read-only TUI showed the plan; nothing may run.
 			return nil
 		}
-	} else if !a.Flags.JSON {
+	default:
+		a.printWarnings(warnings)
 		tui.RenderPreview(a.Out, plan, platform, color)
-		tui.RenderReview(a.Out, plan)
+		if env.DryRun || !a.Flags.Yes {
+			if env.DryRun {
+				fmt.Fprintln(a.Out, "nothing was changed (dry run).")
+			} else {
+				fmt.Fprintln(a.Out, "nothing was changed; re-run with --yes to execute")
+			}
+			return nil
+		}
+		// --yes executes: the preview was just shown, so go straight to the
+		// one-line handoff and the per-item progress below.
+		fmt.Fprintf(a.Out, "executing %d items\u2026\n", len(plan.Selected()))
 	}
 
-	if env.DryRun {
-		return nil
-	}
-	if !interactive && !a.Flags.Yes {
-		return &ExitError{Code: ExitUsage, Err: fmt.Errorf("refusing to execute without confirmation; pass --yes or --dry-run")}
-	}
 	// Reconcile again after an interactive selection: a category may need to
 	// drop items the user selected that a superset item now covers.
-	a.reconcile(cats, plan)
+	engine.ApplyHooks(cats, plan)
 
 	jw, jerr := journal.NewWriter(env.Paths.Journal)
 	if jerr != nil {
 		fmt.Fprintf(a.ErrOut, "warning: journal unavailable: %v\n", jerr)
 		jw = nil
 	}
-	sum := engine.Execute(ctx, env, plan, jw)
+	sum := engine.ExecuteWithProgress(ctx, env, plan, jw, a.itemProgress)
 
-	if a.Flags.JSON {
+	if jsonOut {
 		if err := a.cleanJSON(plan, sum, false); err != nil {
 			return err
 		}
 		return cleanExit(sum)
 	}
 	tui.RenderSummary(a.Out, sum, color)
-	return cleanExit(sum)
+	err = cleanExit(sum)
+	if err != nil && ExitCode(err) == ExitGuard {
+		fmt.Fprintf(a.Out, "note: %d items were skipped by a safety guard; nothing unsafe ran\n", sum.GuardStops)
+	}
+	return err
 }
 
-// reconcile lets categories drop redundant items (for example a superset prune
-// superseding its parts) after discovery and again after an interactive
-// selection. It is idempotent.
-func (a *App) reconcile(cats []engine.Category, plan *engine.Plan) {
-	for _, c := range cats {
-		if rec, ok := c.(catalog.Reconciler); ok {
-			rec.Reconcile(plan)
-		}
+// printWarnings flushes the buffered discovery warnings to stderr.
+func (a *App) printWarnings(warnings []string) {
+	for _, w := range warnings {
+		fmt.Fprintf(a.ErrOut, "warning: %s\n", w)
 	}
 }
 
-// mergeCategoryWarnings pulls a category's non-fatal discovery notes (for
-// example a configured project root that does not exist) into the plan's
-// warning list so they surface on stderr.
-func mergeCategoryWarnings(cats []engine.Category, plan *engine.Plan) {
-	for _, c := range cats {
-		if w, ok := c.(catalog.Warner); ok {
-			plan.Warnings = append(plan.Warnings, w.Warnings()...)
-		}
+// printNote writes an invocation notice. --json keeps stdout a single clean
+// document, so the notice moves to stderr there.
+func (a *App) printNote(jsonOut bool, note string) {
+	if jsonOut {
+		fmt.Fprintln(a.ErrOut, note)
+		return
 	}
+	fmt.Fprintln(a.Out, note)
+}
+
+// itemProgress prints one line per item as it completes during execution.
+// Under --json stdout must stay a single document, so there is no progress.
+func (a *App) itemProgress(it *engine.PlannedItem, _ engine.Result) {
+	if a.Flags.JSON {
+		return
+	}
+	status := "ok"
+	switch it.Status {
+	case engine.StatusSkipped, engine.StatusDryRun:
+		status = "skip"
+	case engine.StatusFailed:
+		status = "fail"
+	}
+	line := fmt.Sprintf("  %s %s (%s)", status, it.Target.Display, it.Target.Recovery.String())
+	if it.Reason != "" {
+		line += " \u2014 " + it.Reason
+	}
+	fmt.Fprintln(a.ErrOut, line)
+}
+
+// scanProgress is the dependency-free stderr reporter shown while engine.Build
+// runs. It is inert unless stderr is a terminal, so piped and --json runs stay
+// silent and scriptable.
+type scanProgress struct {
+	w       io.Writer
+	enabled bool
+	start   time.Time
+	mu      sync.Mutex
+	stopCh  chan struct{}
+	doneCh  chan struct{}
+	once    sync.Once
+}
+
+func newScanProgress(w io.Writer, enabled bool) *scanProgress {
+	p := &scanProgress{w: w, enabled: enabled && isTerminal(w), start: time.Now()}
+	if !p.enabled {
+		return p
+	}
+	p.stopCh = make(chan struct{})
+	p.doneCh = make(chan struct{})
+	go func() {
+		defer close(p.doneCh)
+		tick := time.NewTicker(100 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			select {
+			case <-p.stopCh:
+				return
+			case <-tick.C:
+				p.mu.Lock()
+				fmt.Fprintf(p.w, "\rscanning\u2026 %.1fs", time.Since(p.start).Seconds())
+				p.mu.Unlock()
+			}
+		}
+	}()
+	return p
+}
+
+// category is the engine.Options.Progress callback: one line per category as
+// its discovery lands.
+func (p *scanProgress) category(id string, targets int) {
+	if p == nil || !p.enabled {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	fmt.Fprintf(p.w, "\r\033[K  %s: %d items\n", id, targets)
+}
+
+// stop halts the ticker and clears the line it drew. It is idempotent.
+func (p *scanProgress) stop() {
+	if p == nil || !p.enabled {
+		return
+	}
+	p.once.Do(func() {
+		close(p.stopCh)
+		<-p.doneCh
+		p.mu.Lock()
+		fmt.Fprint(p.w, "\r\033[K")
+		p.mu.Unlock()
+	})
 }
 
 // whitelistManager loads the whitelist for the interactive keep key. A load
@@ -201,7 +310,7 @@ func (a *App) runWhitelist(env *engine.Env) error {
 	if err := mgr.Load(); err != nil {
 		return err
 	}
-	if !isTerminal(a.Out) || !readerIsTerminal(a.In) {
+	if !(readerIsTerminal(a.In) && isTerminal(a.Out)) {
 		return a.printWhitelistEntries(mgr.Entries())
 	}
 	return a.interactiveWhitelist(mgr)

@@ -118,8 +118,11 @@ func TestPurgeAliasRequiresYesWhenNotTTY(t *testing.T) {
 	art := makeOldArtifact(t, root, "node_modules")
 	stubOwnerTools(t)
 	te := newTestApp(t, purgeEnv(t, root))
-	if code := te.run("purge"); code != ExitUsage {
-		t.Fatalf("exit code = %d, want %d: %s", code, ExitUsage, te.errOut.String())
+	if code := te.run("purge"); code != ExitOK {
+		t.Fatalf("exit code = %d, want %d: %s", code, ExitOK, te.errOut.String())
+	}
+	if !strings.Contains(te.out.String(), "re-run with --yes to execute") {
+		t.Fatalf("expected the re-run hint, got %q", te.out.String())
 	}
 	if _, err := os.Lstat(art); err != nil {
 		t.Fatalf("refused run must not trash: %v", err)
