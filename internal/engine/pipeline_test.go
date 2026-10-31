@@ -135,6 +135,24 @@ func TestBuildFilterSelectAndTotals(t *testing.T) {
 	if tot := plan.SelectedTotals(); tot.Count != 1 || tot.Bytes != 100 {
 		t.Fatalf("unexpected totals %+v", tot)
 	}
+	if len(plan.Scanned) != 1 || plan.Scanned[0].ID != "fake" {
+		t.Fatalf("Scanned should record the category, got %+v", plan.Scanned)
+	}
+}
+
+func TestBuildScannedIncludesEmptyCategories(t *testing.T) {
+	env := testEnv(t, true)
+	empty := fakeCategory{id: "empty"}
+	plan, err := engine.Build(context.Background(), env, engine.Options{Categories: []engine.Category{empty}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Items) != 0 {
+		t.Fatalf("expected no items, got %d", len(plan.Items))
+	}
+	if len(plan.Scanned) != 1 || plan.Scanned[0].Title != "EMPTY" {
+		t.Fatalf("Scanned should include the empty category, got %+v", plan.Scanned)
+	}
 }
 
 func TestBuildNoOwner(t *testing.T) {

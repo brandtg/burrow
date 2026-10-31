@@ -21,9 +21,10 @@ burrow docs --dir <dir>       # regenerate man pages (for packagers)
 burrow version
 ```
 
-Global flags: `--dry-run`, `-y/--yes`, `--json`, `--plain`, `--only`,
-`--exclude`, `--min-size`, `--no-owner`, `--color`/`--no-color`, `--config`,
-`--log-level`, `-v`, `--quiet`. `--all` exists only on the `clean` subcommand.
+Global flags: `--dry-run`, `-y/--yes`, `--json`, `--plain`, `--color`/`--no-color`,
+`--config`. The selection flags `--only`, `--exclude`, `--min-size`, `--no-owner`,
+and `--age` belong to `clean` (and the deprecated `purge` alias) — `analyze` and
+`history` do not accept them. `--all` exists only on the `clean` subcommand.
 Exit codes: `0` success, `1` error, `2` usage, `3` partial failure, `75` a
 safety guard stopped an action, `124` a subprocess timed out, `130`
 interrupted.

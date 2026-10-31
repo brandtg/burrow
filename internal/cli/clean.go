@@ -310,7 +310,7 @@ func (a *App) runWhitelist(env *engine.Env) error {
 	if err := mgr.Load(); err != nil {
 		return err
 	}
-	if !(readerIsTerminal(a.In) && isTerminal(a.Out)) {
+	if !readerIsTerminal(a.In) || !isTerminal(a.Out) {
 		return a.printWhitelistEntries(mgr.Entries())
 	}
 	return a.interactiveWhitelist(mgr)

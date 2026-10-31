@@ -300,11 +300,15 @@ owner's own command output, re-fetchable by definition.
 
 `burrow analyze [path...]` is read-only: navigate with the arrow keys, see
 sizes and the largest entries. It has no delete keys; the review flow is the
-only way anything is removed. On a non-TTY, or with `--json`, it prints a
-stable document (`path`, `total_size`, `entries`, `largest`,
-`scan_status`, `skipped_mounts`). By default it stays on the path's backing
-store; `--cross-mounts` descends into mounted filesystems, `-x` forces the
-boundary on. Reflink extents count once.
+only way anything is removed. On a non-TTY, with `--plain`, or with `--json`,
+it prints a stable document (`path`, `total_size`, `entries`, `largest`,
+`scan_status`, `scan_status_reason`, `skipped_mounts`). By default it stays on
+the path's backing store; `--cross-mounts` descends into mounted filesystems,
+`-x` forces the boundary on, and passing both is a usage error. A scan that
+cannot finish names why (`scan_status_reason`); `--scan-timeout` raises the
+per-root deadline (default 90s). Rows inside a directory the clean flow can
+reclaim are marked `[R]` with the matching `burrow clean --only` selector.
+Reflink extents count once.
 
 ## Architecture
 

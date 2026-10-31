@@ -14,6 +14,10 @@ a prescriptive Linux disk-space and cleanup tool
 
 
 .SH OPTIONS
+\fB--age\fP=""
+	only artifacts with no activity in this window (default 7d)
+
+.PP
 \fB--color\fP="auto"
 	terminal color policy: auto|always|never
 
@@ -38,10 +42,6 @@ a prescriptive Linux disk-space and cleanup tool
 	machine-readable output
 
 .PP
-\fB--log-level\fP="info"
-	trace|debug|info|warn|error
-
-.PP
 \fB--min-size\fP="0"
 	only act on items >= size (e.g. 10M, 1G)
 
@@ -62,17 +62,9 @@ a prescriptive Linux disk-space and cleanup tool
 	non-interactive plain-text output instead of the TUI
 
 .PP
-\fB--quiet\fP[=false]
-	only print errors
-
-.PP
-\fB-v\fP, \fB--verbose\fP[=false]
-	shorthand for --log-level debug
-
-.PP
 \fB-y\fP, \fB--yes\fP[=false]
 	skip the interactive confirm
 
 
 .SH SEE ALSO
-\fBburrow-analyze(1)\fP, \fBburrow-clean(1)\fP, \fBburrow-completion(1)\fP, \fBburrow-config(1)\fP, \fBburrow-docs(1)\fP, \fBburrow-history(1)\fP, \fBburrow-purge(1)\fP, \fBburrow-version(1)\fP
+\fBburrow-analyze(1)\fP, \fBburrow-clean(1)\fP, \fBburrow-config(1)\fP, \fBburrow-history(1)\fP, \fBburrow-version(1)\fP

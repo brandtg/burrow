@@ -61,6 +61,27 @@ func TestRenderPreviewGolden(t *testing.T) {
 	}
 }
 
+func TestRenderPreviewShowsEmptyCategories(t *testing.T) {
+	plan := samplePlan()
+	plan.Scanned = []engine.CategoryRef{
+		{ID: "system", Title: "System"},
+		{ID: "containers", Title: "Containers"},
+	}
+	var buf bytes.Buffer
+	RenderPreview(&buf, plan, "", false)
+	out := buf.String()
+	if !strings.Contains(out, "▸ Containers  nothing found") {
+		t.Fatalf("empty category should render as nothing found:\n%s", out)
+	}
+	if strings.Contains(out, "▸ System  nothing found") {
+		t.Fatalf("category with items must not be marked empty:\n%s", out)
+	}
+	if !strings.HasPrefix(strings.TrimSpace(strings.SplitN(out, "\n", 2)[0]), "Reclaimable now:") ||
+		(!strings.HasPrefix(out, "Reclaimable now:") && !strings.Contains(out, "\nReclaimable now:")) {
+		t.Fatalf("the reclaimable total should lead the preview:\n%s", out)
+	}
+}
+
 func TestRenderReviewListsExactArgv(t *testing.T) {
 	var buf bytes.Buffer
 	RenderReview(&buf, samplePlan())

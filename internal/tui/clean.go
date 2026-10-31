@@ -36,12 +36,15 @@ const reviewItemCap = 20
 // group starts collapsed in the TUI.
 const collapseThreshold = 20
 
-// RenderPreview writes the grouped preview table. Large groups are capped so a
-// category with hundreds of similar entries does not swamp the output.
+// RenderPreview writes the grouped preview table. The reclaimable total leads
+// (one honest number, details below); large groups are capped so a category
+// with hundreds of similar entries does not swamp the output.
 func RenderPreview(w io.Writer, plan *engine.Plan, platform string, color bool) {
 	if platform != "" {
 		fmt.Fprintln(w, platform)
 	}
+	t := plan.SelectedTotals()
+	fmt.Fprintf(w, "Reclaimable now: %s across %d items\n", config.FormatBytes(t.Bytes), t.Count)
 	cw := planItemWidths(plan)
 	unknown := 0
 	for _, g := range plan.GroupedTree() {
@@ -77,8 +80,18 @@ func RenderPreview(w io.Writer, plan *engine.Plan, platform string, color bool) 
 			}
 		}
 	}
-	t := plan.SelectedTotals()
-	fmt.Fprintf(w, "Selected: %s across %d items\n", config.FormatBytes(t.Bytes), t.Count)
+	// Never-empty categories: a category that was scanned but found nothing
+	// is visible as "nothing found" instead of vanishing, so "nothing
+	// found", "not applicable", and "not scanned" stay distinguishable.
+	withItems := map[string]bool{}
+	for _, g := range plan.GroupedTree() {
+		withItems[g.ID] = true
+	}
+	for _, ref := range plan.Scanned {
+		if !withItems[ref.ID] {
+			fmt.Fprintf(w, "\u25b8 %s  nothing found\n", ref.Title)
+		}
+	}
 	if unknown > 0 {
 		fmt.Fprintf(w, "%d item(s) report size after the owner command runs (unknown now)\n", unknown)
 	}

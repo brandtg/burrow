@@ -40,9 +40,21 @@ type Plan struct {
 	Items    []*PlannedItem
 	Warnings []string
 
+	// Scanned lists every category that was part of the run, in stable
+	// category order, including categories whose discovery found nothing.
+	// Presentation layers use it so a category with zero items is visible as
+	// "nothing found" rather than silently absent.
+	Scanned []CategoryRef
+
 	// hooksApplied records that ApplyHooks ran, so a second call neither
 	// re-reconciles nor duplicates category warnings.
 	hooksApplied bool
+}
+
+// CategoryRef identifies a category in the plan without importing it.
+type CategoryRef struct {
+	ID    string
+	Title string
 }
 
 // Totals summarizes a set of items.
@@ -183,6 +195,9 @@ func Build(ctx context.Context, env *Env, opts Options) (*Plan, error) {
 	plan := &Plan{RunID: journal.NewRunID(), Command: opts.Command}
 
 	cats, scoped := discoverableCategories(opts)
+	for _, cat := range cats {
+		plan.Scanned = append(plan.Scanned, CategoryRef{ID: cat.ID(), Title: cat.Title()})
+	}
 
 	type discovered struct {
 		cat     Category
