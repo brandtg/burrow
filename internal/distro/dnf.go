@@ -25,13 +25,6 @@ func (dnfAdapter) System() SystemSpec {
 	}
 }
 
-func (dnfAdapter) PackageCacheAction() owner.OwnerCommand { return owner.DnfPackageCache() }
-func (dnfAdapter) OrphansAction() owner.OwnerCommand      { return owner.DnfOrphans() }
-func (dnfAdapter) OldKernelsAction() owner.OwnerCommand   { return owner.DnfOldKernels() }
-func (dnfAdapter) ResidualConfigAction([]string) (owner.OwnerCommand, error) {
-	return owner.OwnerCommand{}, errNoResidualConfig("dnf")
-}
-
 // parseDnfOrphans counts the package names emitted by `dnf repoquery
 // --unneeded --qf %{name}`. dnf does not report a freed-size estimate, so the
 // size stays unknown rather than being shown as zero.

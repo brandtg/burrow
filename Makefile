@@ -93,6 +93,20 @@ verify-static: build ## Verify the built binary has no dynamic loader deps.
 gate: ## Run the canonical gate (scripts/check.sh).
 	./scripts/check.sh
 
+.PHONY: gate-strict
+gate-strict: ## Run the gate, failing if lint/vuln tools are missing.
+	BURROW_REQUIRE_TOOLS=1 ./scripts/check.sh
+
+.PHONY: safety-gate
+safety-gate: ## Run the static "no direct destructive sink" gate.
+	$(GO) run ./scripts/safety-gate .
+
+.PHONY: docs
+docs: ## Regenerate the man pages into docs/man.
+	# No LDFLAGS on purpose: unstamp gives byte-reproducible pages, which is
+	# what scripts/check.sh diffs against.
+	$(GO) run ./cmd/burrow docs --dir docs/man --format man
+
 .PHONY: check
 check: gate ## Alias for gate.
 

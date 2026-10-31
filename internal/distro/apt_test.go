@@ -84,20 +84,20 @@ func TestLockHeldViaProcLocks(t *testing.T) {
 	}
 }
 
-func TestAptAdapterCommands(t *testing.T) {
-	a := For(Info{ID: "ubuntu"})
-	cache := a.PackageCacheAction()
+func TestAptAdapterSystemSpec(t *testing.T) {
+	spec := For(Info{ID: "ubuntu"}).System()
+	cache := spec.PackageCache
 	if cache.Argv[0] != "apt-get" || cache.Argv[1] != "clean" || !cache.NeedsRoot {
 		t.Fatalf("package cache command = %+v", cache)
 	}
-	res, err := a.ResidualConfigAction([]string{"bash", "zsh"})
+	res, err := spec.ResidualConfig([]string{"bash", "zsh"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(res.Argv) != 4 || res.Argv[0] != "dpkg" || res.Argv[1] != "--purge" {
 		t.Fatalf("residual command = %v", res.Argv)
 	}
-	if _, err := a.ResidualConfigAction([]string{"--help"}); err == nil {
+	if _, err := spec.ResidualConfig([]string{"--help"}); err == nil {
 		t.Fatal("a leading-dash package name must be rejected")
 	}
 }

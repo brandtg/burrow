@@ -1,7 +1,9 @@
 // Package action holds the two Action implementations: TrashAction (move to the
 // freedesktop Trash) and OwnerCommandAction (run an allow-listed owner
 // command). Both re-validate at execution time and are
-// idempotent. Recoverable by default; there is no permanent-delete primitive.
+// idempotent. Trash is the only recoverable delete path; emptying the Trash is
+// the one permanent mutation, and it must never be journaled as a recoverable
+// action.
 //
 // Provenance: the recovery-contract split (trash vs owner) and the review-then-
 // act discipline are behavioral ports of Mole's cleanup UX, reimplemented
@@ -104,8 +106,12 @@ func (a *TrashAction) Describe() string {
 func (a *TrashAction) Recovery() engine.Recovery { return engine.RecoveryTrash }
 
 // Run re-validates the path and identity, then moves the item. A path that is
-// already absent is treated as done (idempotent).
+// already absent is treated as done (idempotent). The context is honored before
+// starting and through the cross-device copy fallback.
 func (a *TrashAction) Run(ctx context.Context, dryRun bool) (engine.Result, error) {
+	if err := ctx.Err(); err != nil {
+		return skip(err.Error()), err
+	}
 	if a.Validator != nil {
 		if err := a.Validator.Validate(a.Path); err != nil {
 			return skip(err.Error()), safe.GuardStop("%s", err.Error())
@@ -132,7 +138,7 @@ func (a *TrashAction) Run(ctx context.Context, dryRun bool) (engine.Result, erro
 	if a.Trash == nil {
 		return skip("trash is unavailable"), safe.GuardStop("%s", "trash is unavailable")
 	}
-	entry, err := a.Trash.Put(a.Path)
+	entry, err := a.Trash.PutContext(ctx, a.Path)
 	if err != nil {
 		if entry.Name != "" {
 			return engine.Result{Status: engine.StatusOK, Bytes: a.Size, Reason: err.Error()}, nil

@@ -10,6 +10,7 @@
 package trash
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -89,6 +90,13 @@ func (t *Trash) dirFor(path string) (string, error) {
 // Put moves path into the trash and returns its entry. The original path is
 // recorded percent-encoded in the .trashinfo file.
 func (t *Trash) Put(path string) (Entry, error) {
+	return t.PutContext(context.Background(), path)
+}
+
+// PutContext is Put with cancellation: a cancelled or expired context aborts the
+// cross-device copy fallback before the source is removed, so the item is never
+// half-trashed (fail closed, invariant I5).
+func (t *Trash) PutContext(ctx context.Context, path string) (Entry, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return Entry{}, err
@@ -120,7 +128,7 @@ func (t *Trash) Put(path string) (Entry, error) {
 	}
 
 	dest := filepath.Join(filesDir, name)
-	if err := move(abs, dest, fi); err != nil {
+	if err := move(ctx, abs, dest, fi); err != nil {
 		if errors.Is(err, errSourceNotRemoved) {
 			// The item is fully in the trash; keep the .trashinfo so the entry
 			// stays consistent and restorable. The source removal failed, so
@@ -191,7 +199,7 @@ func (t *Trash) Restore(e Entry) error {
 	if err := os.MkdirAll(filepath.Dir(e.Path), 0o700); err != nil {
 		return err
 	}
-	if err := move(filesPath, e.Path, fi); err != nil {
+	if err := move(context.Background(), filesPath, e.Path, fi); err != nil {
 		return err
 	}
 	_ = os.Remove(e.InfoPath)
@@ -237,19 +245,36 @@ func uniqueName(filesDir, infoDir, base string) string {
 	}
 }
 
+// crossDeviceTimeout bounds the cross-device copy-then-remove fallback so a
+// multi-GB copy cannot run uncancellable forever. It matches the owner clean
+// command timeout (owner.TimeoutOwnerClean); trash does not depend on owner.
+var crossDeviceTimeout = 10 * time.Minute
+
+// rename is indirected so tests can force the EXDEV fallback without a second
+// filesystem.
+var rename = os.Rename
+
 // move renames src to dst. If src and dst are on different devices it falls
 // back to a recursive copy followed by removal of the source. The copy is
 // performed into a temporary name in the destination directory and renamed
-// into place, so a partial copy is never visible as a trash entry.
-func move(src, dst string, fi os.FileInfo) error {
-	if err := os.Rename(src, dst); err == nil {
+// into place, so a partial copy is never visible as a trash entry. The
+// fallback honors ctx, checks it per copied chunk, and is bounded by
+// crossDeviceTimeout; on cancellation or timeout the partial destination is
+// removed and the source is left in place.
+func move(ctx context.Context, src, dst string, fi os.FileInfo) error {
+	if err := rename(src, dst); err == nil {
 		return nil
 	} else if !errors.Is(err, syscall.EXDEV) {
 		return err
 	}
+	ctx, cancel := context.WithTimeout(ctx, crossDeviceTimeout)
+	defer cancel()
 	tmp := dst + ".burrow-partial"
-	if err := copyRecursive(src, tmp, fi); err != nil {
+	if err := copyRecursive(ctx, src, tmp, fi); err != nil {
 		_ = os.RemoveAll(tmp)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return fmt.Errorf("trash: cross-device copy of %s aborted: %w", src, context.Cause(ctx))
+		}
 		return err
 	}
 	if err := os.Rename(tmp, dst); err != nil {
@@ -267,7 +292,10 @@ func move(src, dst string, fi os.FileInfo) error {
 // items get fresh mtimes. That is acceptable for trash semantics (the content
 // and structure are preserved) and avoids depending on platform-specific
 // xattr/chown support.
-func copyRecursive(src, dst string, fi os.FileInfo) error {
+func copyRecursive(ctx context.Context, src, dst string, fi os.FileInfo) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	switch {
 	case fi.Mode()&os.ModeSymlink != 0:
 		target, err := os.Readlink(src)
@@ -288,17 +316,19 @@ func copyRecursive(src, dst string, fi os.FileInfo) error {
 			if err != nil {
 				return err
 			}
-			if err := copyRecursive(filepath.Join(src, de.Name()), filepath.Join(dst, de.Name()), childInfo); err != nil {
+			if err := copyRecursive(ctx, filepath.Join(src, de.Name()), filepath.Join(dst, de.Name()), childInfo); err != nil {
 				return err
 			}
 		}
 		return nil
 	default:
-		return copyFile(src, dst, fi.Mode().Perm())
+		return copyFile(ctx, src, dst, fi.Mode().Perm())
 	}
 }
 
-func copyFile(src, dst string, perm os.FileMode) error {
+// copyFile copies one file, checking ctx around every chunk so a large file is
+// as cancellable as a large tree.
+func copyFile(ctx context.Context, src, dst string, perm os.FileMode) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
@@ -308,9 +338,26 @@ func copyFile(src, dst string, perm os.FileMode) error {
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		return err
+	buf := make([]byte, 32*1024)
+	for {
+		if err := ctx.Err(); err != nil {
+			out.Close()
+			return err
+		}
+		n, rerr := in.Read(buf)
+		if n > 0 {
+			if _, werr := out.Write(buf[:n]); werr != nil {
+				out.Close()
+				return werr
+			}
+		}
+		if rerr == io.EOF {
+			break
+		}
+		if rerr != nil {
+			out.Close()
+			return rerr
+		}
 	}
 	return out.Close()
 }

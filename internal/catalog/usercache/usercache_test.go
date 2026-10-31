@@ -129,7 +129,7 @@ func TestTrashIsDefaultOffAndHighRisk(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected user-cache.trash: %v", keys(got))
 	}
-	if item.Recovery != engine.RecoveryOwner || item.DefaultOn || item.Risk != engine.RiskHigh {
+	if item.Recovery != engine.RecoveryDelete || item.DefaultOn || item.Risk != engine.RiskHigh {
 		t.Fatalf("trash contract wrong: recovery=%v default=%v risk=%v", item.Recovery, item.DefaultOn, item.Risk)
 	}
 	plan, err := engine.Build(context.Background(), env, engine.Options{
