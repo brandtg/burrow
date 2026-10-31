@@ -50,6 +50,9 @@ When stdout is not a terminal (or --json is set), analyze behaves like
 --json and never waits for input. --json accepts a single path.`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validateMountFlags(cmd); err != nil {
+				return err
+			}
 			env, err := a.Env()
 			if err != nil {
 				return err
@@ -78,10 +81,17 @@ When stdout is not a terminal (or --json is set), analyze behaves like
 	f.DurationVar(&opts.scanTimeout, "scan-timeout", 90*time.Second, "per-root scan deadline")
 	f.IntVar(&opts.depth, "depth", 0, "non-interactive depth (with --json); 0 = unlimited")
 	f.IntVarP(&opts.top, "top", "t", 10, "non-interactive top-N largest entries (with --json)")
-	// Two flags, one bool: the explicit form wins over the config default,
-	// and asking for both directions is a usage error.
-	cmd.MarkFlagsMutuallyExclusive("one-file-system", "cross-mounts")
 	return cmd
+}
+
+// validateMountFlags rejects contradictory mount-boundary flags with a usage
+// error. The explicit form wins over the config default, but asking for both
+// directions has no resolution.
+func validateMountFlags(cmd *cobra.Command) error {
+	if cmd.Flags().Changed("one-file-system") && cmd.Flags().Changed("cross-mounts") {
+		return &ExitError{Code: ExitUsage, Err: errors.New("--one-file-system and --cross-mounts are mutually exclusive")}
+	}
+	return nil
 }
 
 func (a *App) runAnalyze(env *engine.Env, args []string, opts analyzeOptions) error {
