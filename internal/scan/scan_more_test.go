@@ -18,7 +18,7 @@ func TestScanProgressCallback(t *testing.T) {
 		}
 	}
 	var calls int
-	if _, err := scan.Analyze(context.Background(), root, scan.Options{
+	if _, err := scan.Default().Scan(context.Background(), root, scan.Options{
 		Progress: func(scan.Progress) { calls++ },
 	}); err != nil {
 		t.Fatal(err)
@@ -39,7 +39,7 @@ func TestHardlinksNotDoubleCounted(t *testing.T) {
 		t.Skipf("hardlinks unsupported here: %v", err)
 	}
 
-	n, err := scan.Analyze(context.Background(), root, scan.Options{})
+	n, err := scan.Default().Scan(context.Background(), root, scan.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestPartialUnreadableSubtree(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
 
-	n, err := scan.Analyze(context.Background(), root, scan.Options{})
+	n, err := scan.Default().Scan(context.Background(), root, scan.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestUnknownCountZeroWhenComplete(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "f"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	n, err := scan.Analyze(context.Background(), root, scan.Options{})
+	n, err := scan.Default().Scan(context.Background(), root, scan.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestSingleFileScan(t *testing.T) {
 	if err := os.WriteFile(f, make([]byte, 1234), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	n, err := scan.Analyze(context.Background(), f, scan.Options{})
+	n, err := scan.Default().Scan(context.Background(), f, scan.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func TestDepthLimit(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(deep, "c"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	n, err := scan.Analyze(context.Background(), root, scan.Options{Depth: 1})
+	n, err := scan.Default().Scan(context.Background(), root, scan.Options{Depth: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +142,7 @@ func TestNoHidden(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "visible"), []byte("v"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	n, err := scan.Analyze(context.Background(), root, scan.Options{NoHidden: true})
+	n, err := scan.Default().Scan(context.Background(), root, scan.Options{NoHidden: true})
 	if err != nil {
 		t.Fatal(err)
 	}

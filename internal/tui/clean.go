@@ -143,10 +143,19 @@ func reviewText(plan *engine.Plan, dryRun bool) string {
 	return b.String()
 }
 
-// RenderSummary writes the per-item results, totals, and journal path.
+// RenderSummary writes the per-item results, totals, and journal path. The
+// display column is width-aligned across the actual results (not a fixed
+// width) so one long display name cannot desync the table.
 func RenderSummary(w io.Writer, sum *engine.Summary, color bool) {
-	for _, it := range sum.Executed() {
-		fmt.Fprintf(w, "  %-28s %s%s\n", it.Target.Display, statusLabel(it, color), reasonSuffix(it))
+	items := sum.Executed()
+	width := 0
+	for _, it := range items {
+		if n := displayWidth(it.Target.Display); n > width {
+			width = n
+		}
+	}
+	for _, it := range items {
+		fmt.Fprintf(w, "  %-*s %s%s\n", width, it.Target.Display, statusLabel(it, color), reasonSuffix(it))
 	}
 	freed := "unknown"
 	if sum.FreedKnown || sum.Freed > 0 {
@@ -365,6 +374,9 @@ type CleanModel struct {
 	aborted   bool
 	status    string
 
+	// reviewOffset is the first visible line of the review screen's text.
+	reviewOffset int
+
 	help   help.Model
 	keys   cleanKeyMap
 	styles styles
@@ -471,6 +483,19 @@ func (m *CleanModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "q", "ctrl+c":
 			m.aborted = true
 			return m, tea.Quit
+		case "down", "j":
+			m.reviewOffset++
+		case "up", "k":
+			m.reviewOffset--
+		case "pgdown":
+			m.reviewOffset += m.reviewHeight()
+		case "pgup":
+			m.reviewOffset -= m.reviewHeight()
+		case "g", "home":
+			m.reviewOffset = 0
+		case "G", "end":
+			// Clamped against the line count when rendered.
+			m.reviewOffset = 1 << 30
 		}
 		return m, nil
 	}
@@ -512,6 +537,7 @@ func (m *CleanModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.filter.Focus()
 	case key.Matches(msg, m.keys.Review):
 		m.screen = 1
+		m.reviewOffset = 0
 	}
 	return m, nil
 }
@@ -969,10 +995,45 @@ func selectionMark(items []*engine.PlannedItem) string {
 }
 
 func (m *CleanModel) reviewView() string {
+	lines := strings.Split(reviewText(m.plan, m.dryRun), "\n")
+	height := m.reviewHeight()
+	m.clampReviewOffset(len(lines), height)
+	start, end := m.reviewOffset, m.reviewOffset+height
+	if end > len(lines) {
+		end = len(lines)
+	}
 	var b strings.Builder
-	b.WriteString(reviewText(m.plan, m.dryRun))
-	b.WriteString("\nenter confirm  esc back  q quit\n")
+	if m.platform != "" {
+		b.WriteString(m.styles.header.Render(m.platform) + "\n\n")
+	}
+	for _, l := range lines[start:end] {
+		b.WriteString(l + "\n")
+	}
+	foot := "enter confirm  esc back  q quit"
+	if height < len(lines) {
+		foot = fmt.Sprintf("%d\u2013%d of %d \u00b7 j/k scroll \u00b7 %s", start+1, end, len(lines), foot)
+	}
+	b.WriteString("\n" + m.styles.subtle.Render(foot))
 	return b.String()
+}
+
+// reviewHeight is the number of review lines that fit between the platform
+// header and the footer.
+func (m *CleanModel) reviewHeight() int {
+	h := m.height - 6
+	if h < 3 {
+		h = 3
+	}
+	return h
+}
+
+func (m *CleanModel) clampReviewOffset(n, height int) {
+	if m.reviewOffset > n-height {
+		m.reviewOffset = n - height
+	}
+	if m.reviewOffset < 0 {
+		m.reviewOffset = 0
+	}
 }
 
 func (m *CleanModel) footer() string {

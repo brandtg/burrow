@@ -24,7 +24,7 @@ func TestDUSizeFallback(t *testing.T) {
 func TestFallbackDirUnknownWhenDuFails(t *testing.T) {
 	// A path that does not exist yields an error from Lstat, proving fallback
 	// fails closed rather than reporting a bogus zero.
-	if _, err := fallback(context.Background(), filepath.Join(t.TempDir(), "nope")); err == nil {
+	if _, err := repair(context.Background(), filepath.Join(t.TempDir(), "nope")); err == nil {
 		t.Fatal("expected fallback on a missing path to fail")
 	}
 }

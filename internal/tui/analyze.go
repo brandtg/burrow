@@ -69,6 +69,10 @@ type AnalyzeConfig struct {
 	Color    bool
 
 	CategoryRoots []string
+	// RootSelectors maps a CategoryRoots entry to the --only selector that
+	// scopes a clean run to it. When a cursor path is inside a root and has
+	// a selector, the view names the exact `burrow clean --only <sel>`.
+	RootSelectors map[string]string
 }
 
 type progressMsg scan.Progress
@@ -493,6 +497,9 @@ func (m *AnalyzeModel) View() string {
 	b.WriteString("\n")
 	b.WriteString(m.list())
 	b.WriteString("\n")
+	if hint := m.reclaimHint(); hint != "" {
+		b.WriteString(m.styles.warn.Render(hint) + "\n")
+	}
 	b.WriteString(m.footer())
 	return b.String()
 }
@@ -786,6 +793,32 @@ func (m *AnalyzeModel) isCategoryRoot(path string) bool {
 		}
 	}
 	return false
+}
+
+// reclaimHint names the clean invocation for the cursor's location when it
+// sits inside a directory the clean flow can reclaim. Read-only: analyze
+// never offers a delete key, the hint only points at the clean flow.
+func (m *AnalyzeModel) reclaimHint() string {
+	if len(m.cfg.CategoryRoots) == 0 {
+		return ""
+	}
+	if m.cursor < 0 || m.cursor >= len(m.entries) {
+		return ""
+	}
+	path := m.entries[m.cursor].Path
+	best := ""
+	for _, root := range m.cfg.CategoryRoots {
+		if safe.WithinRoot(path, root) && len(root) > len(best) {
+			best = root
+		}
+	}
+	if best == "" {
+		return ""
+	}
+	if sel := m.cfg.RootSelectors[best]; sel != "" {
+		return fmt.Sprintf("reclaimable \u2014 run burrow clean --only %s", sel)
+	}
+	return "reclaimable \u2014 run burrow clean"
 }
 
 func (m *AnalyzeModel) footer() string {

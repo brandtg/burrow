@@ -33,7 +33,7 @@ func TestI1NoMutationBeforePreview(t *testing.T) {
 	before := digestTree(t, root)
 
 	// Discovery and planning are read-only.
-	if _, err := scan.Analyze(context.Background(), root, scan.Options{}); err != nil {
+	if _, err := scan.Default().Scan(context.Background(), root, scan.Options{}); err != nil {
 		t.Fatal(err)
 	}
 	target := filepath.Join(root, "a.txt")
