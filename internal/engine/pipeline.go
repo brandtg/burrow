@@ -84,6 +84,13 @@ type Options struct {
 	DiscoverTimeout time.Duration
 	// NoOwner leaves owner-contract items unselected (still shown).
 	NoOwner bool
+	// Progress, when non-nil, is called once per category as its discovery
+	// completes, in the same stable category order the plan is built in, with
+	// the category id and the number of targets discovered for it (0 when
+	// discovery failed). It is never called from the discovery goroutines, so
+	// the call order is deterministic. It is informational only: it may report
+	// progress, but it must not block the pipeline, mutate the plan, or panic.
+	Progress func(categoryID string, targets int)
 }
 
 // Selected returns the items marked for execution.
@@ -212,6 +219,9 @@ func Build(ctx context.Context, env *Env, opts Options) (*Plan, error) {
 		d, ok := results[cat.ID()]
 		if !ok {
 			continue
+		}
+		if opts.Progress != nil {
+			opts.Progress(cat.ID(), len(d.targets))
 		}
 		if d.err != nil {
 			plan.Warnings = append(plan.Warnings, fmt.Sprintf("%s: discovery failed: %v", cat.ID(), d.err))
@@ -395,7 +405,26 @@ func (s *Summary) Executed() []*PlannedItem {
 // Execute runs step 7 (execute), step 8 (journal), and gathers step 9 data.
 // A tripped guard skips the item with a reason and never aborts the run. A
 // cancelled context stops gracefully; already-completed items stay completed.
+//
+// Execute is ExecuteWithProgress without a per-item callback.
 func Execute(ctx context.Context, env *Env, plan *Plan, jw *journal.Writer) *Summary {
+	return ExecuteWithProgress(ctx, env, plan, jw, nil)
+}
+
+// ExecuteWithProgress is Execute with a per-item progress callback.
+//
+// progress, when non-nil, is called once for every planned item the run
+// attempts — selected and not kept — after the item has finished, including
+// items that were skipped, guard-stopped, timed out, failed, or interrupted.
+// It fires after the item's journal record is appended and before the next
+// item starts, so the item's Status, Reason, Freed, and Argv are final. The
+// Result is the action's own result (zero for items that never ran, such as a
+// guard stop or a dry run).
+//
+// The callback is for reporting only: it runs on the execute goroutine, so it
+// must not block the pipeline, start its own long work, mutate the plan or
+// environment, or panic. Execute's behavior is unchanged when progress is nil.
+func ExecuteWithProgress(ctx context.Context, env *Env, plan *Plan, jw *journal.Writer, progress func(*PlannedItem, Result)) *Summary {
 	sum := &Summary{RunID: plan.RunID, Command: plan.Command, Plan: plan}
 	if jw != nil {
 		sum.JournalPath = jw.Path()
@@ -416,8 +445,11 @@ func Execute(ctx context.Context, env *Env, plan *Plan, jw *journal.Writer) *Sum
 			sum.Interrupted = true
 			break
 		}
-		executeItem(ctx, env, it, sum)
+		res := executeItem(ctx, env, it, sum)
 		appendRecord(jw, plan, it)
+		if progress != nil {
+			progress(it, res)
+		}
 	}
 	sum.DFAfter = FreeBytes("/")
 	if ctx.Err() != nil {
@@ -436,7 +468,10 @@ func Execute(ctx context.Context, env *Env, plan *Plan, jw *journal.Writer) *Sum
 	return sum
 }
 
-func executeItem(ctx context.Context, env *Env, it *PlannedItem, sum *Summary) {
+// executeItem runs one planned item and returns the action's result (zero when
+// the item never ran, e.g. a guard stop). A cancellation mid-item is recorded
+// as an interrupt (skipped, reason "interrupted"), never as a failure.
+func executeItem(ctx context.Context, env *Env, it *PlannedItem, sum *Summary) Result {
 	if it.Target.Guard != nil {
 		if err := it.Target.Guard.Check(ctx, env); err != nil {
 			it.Status = StatusSkipped
@@ -444,7 +479,7 @@ func executeItem(ctx context.Context, env *Env, it *PlannedItem, sum *Summary) {
 			it.GuardStop = true
 			sum.Skipped++
 			sum.GuardStops++
-			return
+			return Result{}
 		}
 	}
 	res, err := it.Target.Action.Run(ctx, env.DryRun)
@@ -468,7 +503,7 @@ func executeItem(ctx context.Context, env *Env, it *PlannedItem, sum *Summary) {
 			it.Status = StatusSkipped
 			it.Reason = "interrupted"
 			sum.Skipped++
-			return
+			return res
 		}
 		var gs *safe.GuardStopError
 		switch {
@@ -490,6 +525,7 @@ func executeItem(ctx context.Context, env *Env, it *PlannedItem, sum *Summary) {
 			sum.Failed++
 		}
 	}
+	return res
 }
 
 // estimateFreed prefers the bytes an action reports; otherwise it uses the

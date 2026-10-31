@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/brandtg/burrow/internal/action"
 	"github.com/brandtg/burrow/internal/config"
@@ -65,13 +66,28 @@ func (g fakeGuard) Check(context.Context, *engine.Env) error { return g.err }
 type fakeCategory struct {
 	id      string
 	targets []engine.Target
+	err     error
 }
 
 func (c fakeCategory) ID() string          { return c.id }
 func (c fakeCategory) Title() string       { return strings.ToUpper(c.id) }
 func (c fakeCategory) PreviewNote() string { return "note-" + c.id }
 func (c fakeCategory) Discover(context.Context, *engine.Env) ([]engine.Target, error) {
+	if c.err != nil {
+		return nil, c.err
+	}
 	return c.targets, nil
+}
+
+// slowCategory delays discovery so completion order races the category order.
+type slowCategory struct {
+	fakeCategory
+	delay time.Duration
+}
+
+func (c slowCategory) Discover(ctx context.Context, env *engine.Env) ([]engine.Target, error) {
+	time.Sleep(c.delay)
+	return c.fakeCategory.Discover(ctx, env)
 }
 
 func target(id string, risk engine.Risk, on bool, path string) engine.Target {
@@ -550,5 +566,168 @@ func TestGroupedTreeBucketsByGroup(t *testing.T) {
 	}
 	if got := cats[1].Groups[0].ID; got != "" {
 		t.Fatalf("ungrouped category implicit group id = %q, want empty", got)
+	}
+}
+
+func TestBuildProgressFiresInCategoryOrder(t *testing.T) {
+	env := testEnv(t, true)
+	cats := []engine.Category{
+		slowCategory{fakeCategory{id: "a", targets: []engine.Target{
+			target("a.one", engine.RiskLow, true, ""),
+			target("a.two", engine.RiskLow, true, ""),
+		}}, 40 * time.Millisecond},
+		slowCategory{fakeCategory{id: "b", targets: []engine.Target{
+			target("b.one", engine.RiskLow, true, ""),
+		}}, 0},
+		fakeCategory{id: "c", err: errors.New("boom")},
+	}
+
+	type call struct {
+		id      string
+		targets int
+	}
+	var got []call
+	plan, err := engine.Build(context.Background(), env, engine.Options{
+		Categories: cats,
+		Progress: func(id string, n int) {
+			got = append(got, call{id, n})
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []call{{"a", 2}, {"b", 1}, {"c", 0}}
+	if len(got) != len(want) {
+		t.Fatalf("progress calls = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("progress call %d = %+v, want %+v (all: %v)", i, got[i], want[i], got)
+		}
+	}
+	if len(plan.Warnings) == 0 {
+		t.Fatal("failed discovery should still warn")
+	}
+}
+
+func TestBuildProgressNilIsSafe(t *testing.T) {
+	env := testEnv(t, true)
+	cat := fakeCategory{id: "fake", targets: []engine.Target{target("fake.one", engine.RiskLow, true, "")}}
+	if _, err := engine.Build(context.Background(), env, engine.Options{Categories: []engine.Category{cat}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExecuteWithProgressFiresOncePerAttemptedItem(t *testing.T) {
+	env := testEnv(t, false)
+	guarded := target("fake.guarded", engine.RiskLow, true, "")
+	guarded.Guard = fakeGuard{err: safe.GuardStop("owner busy")}
+	failed := target("fake.fail", engine.RiskLow, true, "")
+	failed.Action = fakeAction{recovery: engine.RecoveryOwner, run: func(context.Context, bool) (engine.Result, error) {
+		return engine.Result{Status: engine.StatusFailed}, errors.New("boom")
+	}}
+	off := target("fake.off", engine.RiskHigh, true, "")
+	cat := fakeCategory{id: "fake", targets: []engine.Target{
+		target("fake.ok1", engine.RiskLow, true, ""),
+		target("fake.ok2", engine.RiskLow, true, ""),
+		guarded,
+		failed,
+		off,
+	}}
+	plan, err := engine.Build(context.Background(), env, engine.Options{Categories: []engine.Category{cat}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	type seenItem struct {
+		id     string
+		status string
+		freed  int64
+	}
+	var seen []seenItem
+	sum := engine.ExecuteWithProgress(context.Background(), env, plan, nil, func(it *engine.PlannedItem, res engine.Result) {
+		seen = append(seen, seenItem{it.Target.ID, it.Status, it.Freed})
+	})
+
+	want := []seenItem{
+		{"fake.ok1", engine.StatusOK, 100},
+		{"fake.ok2", engine.StatusOK, 100},
+		{"fake.guarded", engine.StatusSkipped, 0},
+		{"fake.fail", engine.StatusFailed, 0},
+	}
+	if len(seen) != len(want) {
+		t.Fatalf("progress calls = %d (%v), want %d", len(seen), seen, len(want))
+	}
+	for i := range want {
+		if seen[i] != want[i] {
+			t.Fatalf("progress call %d = %+v, want %+v", i, seen[i], want[i])
+		}
+	}
+	if sum.OK != 2 || sum.Skipped != 1 || sum.Failed != 1 || sum.Freed != 200 {
+		t.Fatalf("unexpected summary %+v", sum)
+	}
+
+	// Execute with no callback must produce the same outcome.
+	plan2, err := engine.Build(context.Background(), env, engine.Options{Categories: []engine.Category{cat}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum2 := engine.Execute(context.Background(), env, plan2, nil)
+	if sum2.OK != sum.OK || sum2.Skipped != sum.Skipped || sum2.Failed != sum.Failed || sum2.Freed != sum.Freed {
+		t.Fatalf("Execute summary %+v differs from ExecuteWithProgress %+v", sum2, sum)
+	}
+}
+
+func TestExecuteWithProgressSkipsKeptAndUnselected(t *testing.T) {
+	env := testEnv(t, false)
+	cat := fakeCategory{id: "fake", targets: []engine.Target{
+		target("fake.kept", engine.RiskLow, true, ""),
+		target("fake.off", engine.RiskHigh, true, ""),
+	}}
+	plan, err := engine.Build(context.Background(), env, engine.Options{Categories: []engine.Category{cat}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.Items[0].Kept = true
+
+	calls := 0
+	sum := engine.ExecuteWithProgress(context.Background(), env, plan, nil, func(*engine.PlannedItem, engine.Result) {
+		calls++
+	})
+	if calls != 0 {
+		t.Fatalf("progress calls = %d, want 0", calls)
+	}
+	if sum.OK != 0 || sum.Skipped != 0 {
+		t.Fatalf("nothing should run: %+v", sum)
+	}
+}
+
+func TestExecuteProgressRecordsMidItemCancelAsInterrupt(t *testing.T) {
+	env := testEnv(t, false)
+	ctx, cancel := context.WithCancel(context.Background())
+	tgt := target("fake.cancel", engine.RiskLow, true, "")
+	tgt.Action = fakeAction{recovery: engine.RecoveryOwner, run: func(ctx context.Context, _ bool) (engine.Result, error) {
+		cancel()
+		return engine.Result{}, ctx.Err()
+	}}
+	cat := fakeCategory{id: "fake", targets: []engine.Target{tgt}}
+	plan, err := engine.Build(context.Background(), env, engine.Options{Categories: []engine.Category{cat}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	calls := 0
+	sum := engine.ExecuteWithProgress(ctx, env, plan, nil, func(*engine.PlannedItem, engine.Result) {
+		calls++
+	})
+	if calls != 1 {
+		t.Fatalf("progress calls = %d, want 1", calls)
+	}
+	if !sum.Interrupted || sum.Failed != 0 || sum.Skipped != 1 {
+		t.Fatalf("mid-item cancel must be an interrupt, not a failure: %+v", sum)
+	}
+	if it := plan.Items[0]; it.Status != engine.StatusSkipped || it.Reason != "interrupted" {
+		t.Fatalf("item = %+v, want skipped/interrupted", it)
 	}
 }
