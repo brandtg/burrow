@@ -13,14 +13,83 @@ it in one grouped preview, and runs exactly what you confirm. The scan engine
 is hardlink- and reflink-aware, so a shared inode or a `cp --reflink` copy
 counts once.
 
+## What it looks like
+
+Sample from a real `burrow --dry-run --plain --only dev` run. On a terminal
+the same rows render as one grouped, filterable screen with checkboxes;
+`--plain` is the non-TTY renderer.
+
+```text
+Fedora Linux 44 (KDE Plasma Desktop Edition) · dnf · 2.4 TiB free
+▸ Developer caches  163.9 GiB / 17 items
+  [ ] npm cache              49.9 GiB  [owner] cheap            low
+  [ ] yarn cache              1.7 GiB  [trash] free             low
+  [ ] bun cache             114.0 MiB  [trash] cheap            low
+  [ ] Go module cache         6.6 GiB  [owner] expensive,active low
+  [ ] Go build cache        322.0 MiB  [owner] free,active      low
+  [ ] Cargo registry cache  110.8 MiB  [trash] expensive        low
+  [ ] rustup downloads            0 B  [trash] expensive        low
+  [ ] pip cache              15.9 GiB  [owner] cheap            low
+  [ ] uv cache               78.4 GiB  [owner] cheap,active     low
+  [ ] Poetry artifacts        4.8 GiB  [trash] cheap,active     low
+  [ ] Poetry cache            4.8 GiB  [trash] cheap            low
+  [ ] corepack cache          unknown  [owner] cheap            low
+    … +5 more (use --json for the full list)
+Selected: 0 B across 0 items
+```
+
+Each row shows the item's size, its recovery contract (`[trash]` recoverable /
+`[owner]` permanent), regeneration cost (`free`/`cheap`/`expensive`, plus
+`,active` when recently used), and risk. Nothing is selected in a dev run
+until you ask — see below.
+
+## Install
+
+`install.sh` in the repo root installs the static binary from a GitHub release,
+with no `curl | sh` pattern:
+
+```sh
+BURROW_VERSION=0.1.0 bash install.sh   # latest release when BURROW_VERSION is unset
+```
+
+It downloads the tarball for your linux amd64/arm64 machine plus the release's
+`checksums.txt`, verifies SHA-256, and aborts before touching the destination
+on any download failure or mismatch. `BURROW_BINDIR` picks the install
+directory (default `/usr/local/bin`).
+
+Releases also ship `.deb`, `.rpm`, `.apk`, and Arch packages; the native
+packages install the man page as well. Where no release is published yet,
+build from source: `go build -o bin/burrow ./cmd/burrow`.
+
+First contact:
+
+```sh
+burrow                 # the product: scan -> grouped preview -> confirm
+burrow analyze ~       # where did the space go (read-only)
+burrow history         # what past runs did; --restore --run <id> undoes one
+burrow config          # effective config + every resolved path
+```
+
+Set your project roots first if you want the Projects category (step 1 of
+using it): `[projects] paths = [...]` in `$XDG_CONFIG_HOME/burrow/config.toml`
+— the older `[purge]` section name is still read — or `BURROW_PROJECT_PATHS`
+for a one-off. Until you do, discovery only walks the built-in defaults
+(`~/Projects`, `~/src`, `~/dev`, `~/code`, `~/work`).
+
+System mutations (package caches, journald, old kernels, orphans) ship for
+apt and dnf distros; pacman/zypper/apk are detected but have no mutating
+commands yet.
+
 ## The recovery story
 
 Everything burrow touches by hand is recoverable; everything an owner command
-does is permanent by nature and re-downloadable by definition. There is no
-third category and no permanent-delete primitive in the binary.
+does is permanent by nature and re-downloadable by definition. The Trash is
+the only delete path in the binary; the single deliberate permanent mutation —
+emptying that Trash — is a normal catalog row, labeled and default off.
 
 - **Hand-deletes go to the Trash.** Caches, downloads, build artifacts — moved
-  to the freedesktop Trash with a proper `.trashinfo` entry. A wrong guess
+  to the invoking user's freedesktop Trash (`$XDG_DATA_HOME/Trash`, by default
+  `~/.local/share/Trash`) with a proper `.trashinfo` entry. A wrong guess
   costs disk space, not data. `burrow history --restore --run <id>` puts a
   run's trash items back.
 - **Owner commands stay owner commands.** `dnf clean all`,
@@ -28,7 +97,9 @@ third category and no permanent-delete primitive in the binary.
   `npm cache clean --force` — burrow runs the exact argv from its catalog,
   nothing else. These are not restorable, and the review screen says so.
 - **The Trash itself is the last step, not a surprise.** Emptying it is a
-  normal catalog row (`user-cache.trash`), default off, shown with its size.
+  normal catalog row (`user-cache.trash`), default off, marked high-risk, and
+  shown with its size. It is the one mutation that cannot be undone:
+  `history --restore` will not bring those files back.
 
 ## The four safety rules
 
@@ -70,10 +141,11 @@ burrow version
   High-risk rows (autoremove, volume prunes) are shown but never auto-selected.
 - **Projects** — rebuildable build artifacts (`node_modules`, `target`,
   virtualenvs, `__pycache__`, ...) under the configured project roots, one
-  row per project, collapsed by default. The policy is small: git-tracked
+  row per project, collapsed by default. Set your roots first
+  (`[projects] paths`, see Config). The policy is small: git-tracked
   files are kept, git state that cannot be determined is kept, a repo
-  committed within `[purge] active_within` (default 30d) is kept, and an
-  artifact untouched for `[purge] max_age` (default 7d) is a candidate.
+  committed within `[projects] active_within` (default 30d) is kept, and an
+  artifact untouched for `[projects] max_age` (default 7d) is a candidate.
 - **Developer caches** — language and toolchain caches (npm, pnpm, yarn, bun,
   go, cargo, pip, uv, conda, nix, ...). Owner command when the tool exists;
   otherwise the documented cache root is trashed. Never pre-selected by
@@ -89,9 +161,10 @@ burrow version
   leftover user-data dirs (trashed only when the app is not installed).
 
 Selection flags: `--only`, `--exclude`, `--min-size`, `--no-owner`, plus
-`--all` to include every category. In the preview, `space` toggles rows,
-`a`/`n` select the auto-selectable set or none, `/` filters, `→`/`←` expand
-and collapse, and `k` whitelists.
+`--all` on the `clean` subcommand (`burrow clean --all`) to include every
+category — it is not a flag on the bare command. In the preview, `space`
+toggles rows, `a`/`n` select the auto-selectable set or none, `/` filters,
+`→`/`←` expand and collapse, and `K` whitelists (lowercase `k` is vim-up).
 
 ## Dev caches are never pre-selected
 
@@ -139,12 +212,18 @@ idle window is left alone.
 Exit codes: `0` ok, `1` error, `2` usage, `3` partial failure, `75` a safety
 guard stopped an item, `124` a subprocess timeout, `130` interrupted.
 
+JSON output has three shapes: `clean`, `analyze`, and `config` print one
+pretty-printed document; `history --json` prints JSONL — one compact record
+per line, the shape meant for streaming (`jq`, `while read`); `version --json`
+prints a single line.
+
 ## Whitelist
 
-`k` in the preview adds the row's path (or the whole group/category) to
-`$XDG_CONFIG_HOME/burrow/whitelist` — comments and blank lines preserved — and
-clears its selection. Whitelisted paths protect themselves and their parent
-from the app-cache sweep on every future run. Manage the file directly:
+`K` in the preview adds the row's path (or the whole group/category) to
+`$XDG_CONFIG_HOME/burrow/whitelist` — comments and blank lines preserved —
+and clears its selection. It mutates nothing on the spot; the undo for actual
+deletes is `history --restore`. Whitelisted paths protect themselves and their
+parent from the app-cache sweep on every future run. Manage the file directly:
 
 ```sh
 burrow clean --whitelist          # interactive add/remove loop on a terminal
@@ -155,8 +234,9 @@ burrow clean --whitelist --json   # print entries as JSON
 
 Config lives at `$XDG_CONFIG_HOME/burrow/config.toml`; precedence is CLI flag
 > `BURROW_*` env > file > default. `burrow config` prints the effective values
-plus every resolved path; `--json` prints the same as JSON. The full set of
-keys:
+plus every resolved path; `--json` prints the same as one pretty JSON
+document. The trash burrow writes to is resolved from XDG (`$XDG_DATA_HOME/Trash`),
+not configured. The full set of keys:
 
 ```toml
 [general]
@@ -166,15 +246,11 @@ log_level = "info"
 [clean]
 default_categories = ["projects","dev","user-cache","desktop-pkgs","downloads"]
 journald_max_size = "500M"
-journald_max_age = ""           # either size or age; exactly one
+journald_max_age = ""           # by age instead of size; if both are set, size wins
 min_size = "0"
 protected_paths = ["/etc","/usr","/var/lib"]
 
-[trash]
-backend = "native"              # native|external
-external_command = ""
-
-[purge]                         # the Projects category
+[projects]                      # deprecated alias: [purge]
 paths = ["~/Projects","~/src","~/dev","~/code","~/work"]
 max_age = "7d"                  # untouched-for-this-long is a candidate
 active_within = "30d"           # a repo committed within this window is kept
@@ -199,10 +275,10 @@ old_min_size = "100M"
 ```
 
 Matching `BURROW_*` environment variables exist for the common keys
-(`BURROW_PURGE_PATHS`, `BURROW_PURGE_MAX_AGE`, `BURROW_PURGE_ACTIVE_WITHIN`,
+(`BURROW_PROJECT_PATHS`, `BURROW_PURGE_MAX_AGE`, `BURROW_PURGE_ACTIVE_WITHIN`,
 `BURROW_DEV_MAX_AGE`, `BURROW_DEV_PRESELECT`, `BURROW_USER_CACHE_MAX_AGE`,
 `BURROW_USER_CACHE_SWEEP_UNKNOWN`, `BURROW_MIN_SIZE`,
-`BURROW_PROTECTED_PATHS`, `BURROW_TRASH_BACKEND`, `BURROW_COLOR`,
+`BURROW_PROTECTED_PATHS`, `BURROW_COLOR`,
 `BURROW_LOG_LEVEL`, `BURROW_ANALYZE_ONE_FILE_SYSTEM`).
 
 ## Journal and undo
