@@ -34,6 +34,7 @@ const (
 const (
 	ActionTrash    = "trash"
 	ActionOwner    = "owner"
+	ActionDelete   = "delete"
 	ActionRunStart = "run_start"
 	ActionRunEnd   = "run_end"
 )
@@ -42,8 +43,9 @@ const (
 // that applied to each mutation (invariant I2). They are strings here to keep
 // the journal schema self-describing and free of engine imports.
 const (
-	RecoveryTrash = "trash"
-	RecoveryOwner = "owner"
+	RecoveryTrash  = "trash"
+	RecoveryOwner  = "owner"
+	RecoveryDelete = "delete"
 )
 
 // Version is stamped at build time with -ldflags.

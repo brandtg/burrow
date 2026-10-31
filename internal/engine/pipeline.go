@@ -546,9 +546,13 @@ func appendRecord(jw *journal.Writer, plan *Plan, it *PlannedItem) {
 	}
 	action := journal.ActionOwner
 	recovery := journal.RecoveryOwner
-	if it.Target.Recovery == RecoveryTrash {
+	switch it.Target.Recovery {
+	case RecoveryTrash:
 		action = journal.ActionTrash
 		recovery = journal.RecoveryTrash
+	case RecoveryDelete:
+		action = journal.ActionDelete
+		recovery = journal.RecoveryDelete
 	}
 	status := journal.StatusOK
 	switch it.Status {

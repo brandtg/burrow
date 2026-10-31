@@ -157,7 +157,7 @@ func TestEmptyTrashAction(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := &action.EmptyTrashAction{Trash: tr, Path: tr.Home()}
-	if a.Recovery() != engine.RecoveryOwner {
+	if a.Recovery() != engine.RecoveryDelete {
 		t.Fatalf("recovery = %v", a.Recovery())
 	}
 	if _, err := a.Run(context.Background(), true); err != nil {
