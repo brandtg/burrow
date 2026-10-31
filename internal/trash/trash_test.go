@@ -1,9 +1,15 @@
 package trash
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func newTestTrash(t *testing.T) (*Trash, string) {
@@ -213,5 +219,126 @@ func TestEmpty(t *testing.T) {
 	entries, _ := tr.List()
 	if len(entries) != 0 {
 		t.Fatalf("expected empty, got %d", len(entries))
+	}
+}
+
+// forceCrossDevice makes the first rename attempt fail with EXDEV so move
+// takes the copy-then-remove fallback without needing a second filesystem.
+// The tmp-to-destination rename uses os.Rename directly and still succeeds.
+func forceCrossDevice(t *testing.T) {
+	t.Helper()
+	orig := rename
+	t.Cleanup(func() { rename = orig })
+	rename = func(src, dst string) error {
+		if strings.HasSuffix(dst, ".burrow-partial") {
+			return os.Rename(src, dst)
+		}
+		return fmt.Errorf("renaming %q to %q: %w", src, dst, syscall.EXDEV)
+	}
+}
+
+func TestCrossDeviceFallbackCopiesAndCleansUp(t *testing.T) {
+	forceCrossDevice(t)
+	src := filepath.Join(t.TempDir(), "big")
+	writeFile(t, src, strings.Repeat("p", 128*1024)) // several copy chunks
+	dst := filepath.Join(t.TempDir(), "Trash", "files", "big")
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Lstat(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := move(context.Background(), src, dst, fi); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(src); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("source still present: %v", err)
+	}
+	if _, err := os.Stat(dst); err != nil {
+		t.Fatalf("destination missing: %v", err)
+	}
+	if _, err := os.Lstat(dst + ".burrow-partial"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("partial destination left behind")
+	}
+}
+
+func TestCrossDeviceFallbackCancelledAborts(t *testing.T) {
+	forceCrossDevice(t)
+	src := filepath.Join(t.TempDir(), "big")
+	writeFile(t, src, strings.Repeat("q", 128*1024))
+	dst := filepath.Join(t.TempDir(), "Trash", "files", "big")
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Lstat(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err = move(ctx, src, dst, fi)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+	if _, err := os.Lstat(src); err != nil {
+		t.Fatalf("cancelled move must leave the source untouched: %v", err)
+	}
+	if _, err := os.Lstat(dst); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("cancelled move left a trash entry behind")
+	}
+	if _, err := os.Lstat(dst + ".burrow-partial"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("cancelled move left a partial destination behind")
+	}
+}
+
+func TestCrossDeviceFallbackTimesOut(t *testing.T) {
+	forceCrossDevice(t)
+	orig := crossDeviceTimeout
+	t.Cleanup(func() { crossDeviceTimeout = orig })
+	crossDeviceTimeout = time.Nanosecond
+
+	src := filepath.Join(t.TempDir(), "big")
+	writeFile(t, src, "payload")
+	dst := filepath.Join(t.TempDir(), "Trash", "files", "big")
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Lstat(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = move(context.Background(), src, dst, fi)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected DeadlineExceeded, got %v", err)
+	}
+	if _, err := os.Lstat(src); err != nil {
+		t.Fatalf("timed-out move must leave the source untouched: %v", err)
+	}
+	if _, err := os.Lstat(dst + ".burrow-partial"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("timed-out move left a partial destination behind")
+	}
+}
+
+func TestPutContextCancelledLeavesSource(t *testing.T) {
+	forceCrossDevice(t)
+	src := filepath.Join(t.TempDir(), "big")
+	writeFile(t, src, "payload")
+	tr, _ := newTestTrash(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := tr.PutContext(ctx, src); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+	if _, err := os.Lstat(src); err != nil {
+		t.Fatalf("source was removed despite cancellation: %v", err)
+	}
+	entries, _ := tr.List()
+	if len(entries) != 0 {
+		t.Fatalf("cancelled Put left %d trash entries", len(entries))
 	}
 }

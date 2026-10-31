@@ -37,14 +37,14 @@ func TestWriterReadRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runID, err := w.StartRun("clean")
-	if err != nil {
+	runID := NewRunID()
+	if err := w.Append(Record{RunID: runID, Command: "clean", Action: ActionRunStart, Status: StatusStart}); err != nil {
 		t.Fatal(err)
 	}
 	if err := w.Append(Record{RunID: runID, Command: "clean", Item: "dev.npm", Action: ActionOwner, Status: StatusOK, Bytes: 42}); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.EndRun(runID, "clean", 42); err != nil {
+	if err := w.Append(Record{RunID: runID, Command: "clean", Action: ActionRunEnd, Status: StatusEnd, Bytes: 42}); err != nil {
 		t.Fatal(err)
 	}
 

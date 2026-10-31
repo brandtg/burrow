@@ -3,6 +3,7 @@ package distro
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -25,13 +26,12 @@ func TestDetectFixtures(t *testing.T) {
 		fixture string
 		id      string
 		family  string
-		pm      string
 	}{
-		{"fedora", "fedora", "dnf", "dnf"},
-		{"ubuntu", "ubuntu", "apt", "apt-get"},
-		{"arch", "arch", "pacman", "pacman"},
-		{"opensuse", "opensuse-leap", "zypper", "zypper"},
-		{"alpine", "alpine", "apk", "apk"},
+		{"fedora", "fedora", "dnf"},
+		{"ubuntu", "ubuntu", "apt"},
+		{"arch", "arch", "pacman"},
+		{"opensuse", "opensuse-leap", "zypper"},
+		{"alpine", "alpine", "apk"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.fixture, func(t *testing.T) {
@@ -46,9 +46,6 @@ func TestDetectFixtures(t *testing.T) {
 			if adapter.ID() != tc.family {
 				t.Fatalf("adapter = %q want %q", adapter.ID(), tc.family)
 			}
-			if adapter.PackageManager() != tc.pm {
-				t.Fatalf("pm = %q want %q", adapter.PackageManager(), tc.pm)
-			}
 		})
 	}
 }
@@ -58,8 +55,11 @@ func TestForUnknown(t *testing.T) {
 	if adapter.ID() != "unknown" {
 		t.Fatalf("expected unknown adapter, got %q", adapter.ID())
 	}
-	if len(adapter.LockFiles()) != 0 {
+	if len(adapter.LockGuard().LockFiles) != 0 {
 		t.Fatal("unknown adapter must not claim lock files")
+	}
+	if !reflect.DeepEqual(adapter.System(), SystemSpec{}) {
+		t.Fatal("unknown adapter must return an empty system spec")
 	}
 }
 

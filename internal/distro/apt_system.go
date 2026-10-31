@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/brandtg/burrow/internal/config"
 	"github.com/brandtg/burrow/internal/owner"
 )
 
@@ -49,6 +50,7 @@ func parseAptRemovals(out string) int {
 }
 
 // parseAptFreed extracts the estimated freed bytes from `apt-get -s` output.
+// The size itself is parsed by the one shared human-size parser in config.
 func parseAptFreed(out string) (int64, bool) {
 	const marker = "After this operation, "
 	for _, line := range strings.Split(out, "\n") {
@@ -60,20 +62,22 @@ func parseAptFreed(out string) (int64, bool) {
 		if len(fields) < 2 {
 			continue
 		}
-		n, err := strconv.ParseFloat(strings.Trim(fields[0], ","), 64)
+		var suffix string
+		switch strings.ToLower(strings.Trim(fields[1], ",")) {
+		case "kb", "kib":
+			suffix = "K"
+		case "mb", "mib":
+			suffix = "M"
+		case "gb", "gib":
+			suffix = "G"
+		default:
+			suffix = "B"
+		}
+		n, err := config.ParseBytes(strings.Trim(fields[0], ",") + suffix)
 		if err != nil {
 			continue
 		}
-		mult := int64(1)
-		switch strings.ToLower(strings.Trim(fields[1], ",")) {
-		case "kb", "kib":
-			mult = 1 << 10
-		case "mb", "mib":
-			mult = 1 << 20
-		case "gb", "gib":
-			mult = 1 << 30
-		}
-		return int64(n * float64(mult)), true
+		return n, true
 	}
 	return 0, false
 }

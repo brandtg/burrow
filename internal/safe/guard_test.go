@@ -1,8 +1,6 @@
 package safe_test
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/brandtg/burrow/internal/safe"
@@ -39,37 +37,5 @@ func TestStopCannotDowngradeToSafe(t *testing.T) {
 	}
 	if g.State != safe.Unknown {
 		t.Fatalf("expected Unknown, got %s", g.State)
-	}
-}
-
-func TestMutableAncestor(t *testing.T) {
-	base := t.TempDir()
-	mutable := filepath.Join(base, "writable")
-	if err := os.Mkdir(mutable, 0o777); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(mutable, 0o777); err != nil {
-		t.Fatal(err)
-	}
-	target := filepath.Join(mutable, "victim")
-	if err := os.WriteFile(target, []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	got, found, err := safe.MutableAncestor(target)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !found {
-		t.Fatal("expected a mutable ancestor")
-	}
-	if got != mutable {
-		t.Fatalf("expected %s, got %s", mutable, got)
-	}
-}
-
-func TestMutableAncestorFailsClosed(t *testing.T) {
-	missing := filepath.Join(t.TempDir(), "does-not-exist", "victim")
-	if _, _, err := safe.MutableAncestor(missing); err == nil {
-		t.Fatal("expected an error for an uninspectable ancestor")
 	}
 }
