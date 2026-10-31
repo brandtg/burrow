@@ -1,4 +1,4 @@
-package purge
+package projects
 
 import (
 	"bytes"

@@ -91,6 +91,38 @@ func TestDnfOldKernelsHiddenWithoutPackageCleanup(t *testing.T) {
 	}
 }
 
+func TestDiscoverWarnsWhenJournaldSizeAndAgeBothSet(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	env := stubEnv(t, true)
+	env.Cfg.Clean.JournaldMaxSize = "500M"
+	env.Cfg.Clean.JournaldMaxAge = "7d"
+	cat := system.New()
+
+	if _, err := cat.Discover(context.Background(), env); err != nil {
+		t.Fatal(err)
+	}
+	warns := cat.Warnings()
+	if len(warns) != 1 || !strings.Contains(warns[0], "journald_max_size wins") {
+		t.Fatalf("warnings = %v, want the size-wins note", warns)
+	}
+
+	// A second discovery must not accumulate the same warning twice.
+	if _, err := cat.Discover(context.Background(), env); err != nil {
+		t.Fatal(err)
+	}
+	if got := cat.Warnings(); len(got) != 1 {
+		t.Fatalf("warnings after repeat = %v, want 1", got)
+	}
+
+	env.Cfg.Clean.JournaldMaxAge = ""
+	if _, err := cat.Discover(context.Background(), env); err != nil {
+		t.Fatal(err)
+	}
+	if got := cat.Warnings(); len(got) != 0 {
+		t.Fatalf("warnings after clearing age = %v, want none", got)
+	}
+}
+
 func TestDiscoverFindsDnfItems(t *testing.T) {
 	useTestbin(t)
 	env := stubEnvFor(t, true, distro.For(distro.Info{ID: "fedora"}))

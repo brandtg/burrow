@@ -37,7 +37,7 @@ func (*Category) Title() string { return "User cache" }
 
 // PreviewNote is the category guidance shown in the preview.
 func (*Category) PreviewNote() string {
-	return "XDG cache entries. Trashed, so recoverable; whitelisted paths and their parents are skipped."
+	return "XDG cache entries, one row per top-level cache. Only the curated cheap allowlist is pre-selected; expensive caches stay off. Trashed, so recoverable; whitelisted paths are skipped."
 }
 
 // protectedNames are top-level cache entries the generic sweep never touches.
@@ -120,7 +120,7 @@ func appCacheItems(env *engine.Env) []engine.Target {
 		if safe.WithinAnyRoot(path, devRoots) {
 			continue
 		}
-		if env.Whitelist != nil && env.Whitelist.Protected(path) {
+		if env.Whitelist != nil && env.Whitelist.Contains(path) {
 			continue
 		}
 

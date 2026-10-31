@@ -15,10 +15,10 @@ import (
 	"strings"
 
 	"github.com/brandtg/burrow/internal/action"
+	"github.com/brandtg/burrow/internal/catalog"
 	"github.com/brandtg/burrow/internal/engine"
 	"github.com/brandtg/burrow/internal/owner"
 	"github.com/brandtg/burrow/internal/safe"
-	"github.com/brandtg/burrow/internal/trash"
 )
 
 // ID is the category identifier.
@@ -42,7 +42,7 @@ func (*Category) Title() string { return "Desktop packages" }
 
 // PreviewNote is the category guidance shown in the preview.
 func (*Category) PreviewNote() string {
-	return "Flatpak and snap packages. Owner commands plus trashed user data for applications that are no longer installed."
+	return "Flatpak and snap packages, shown only when the runtime is installed. Owner commands plus trashed user data for applications that are no longer installed; user-data rows stay off."
 }
 
 // Discover enumerates desktop-package targets. Absence of flatpak/snap is
@@ -180,34 +180,21 @@ func newOwnerTarget(env *engine.Env, cmd owner.OwnerCommand, display string, ris
 // newUserdataTarget builds a validated, identity-snapshotted trash target whose
 // path is confined to root and owned by the invoking user.
 func newUserdataTarget(env *engine.Env, id, display, path, root string, guard engine.Guard) (engine.Target, error) {
-	protected := []string(nil)
-	if env.Cfg != nil {
-		protected = env.Cfg.Clean.ProtectedPaths
-	}
-	v := safe.NewValidator(env.UID(), protected...)
-	v.Roots = []string{root}
-	v.RequireRoot = true
-	if err := v.Validate(path); err != nil {
-		return engine.Target{}, err
-	}
-	snap, err := safe.TakeSnapshot(path)
-	if err != nil {
-		return engine.Target{}, err
-	}
-	tr := trash.New(env.Paths.TrashDir, env.UID())
-	return engine.Target{
+	t, err := catalog.NewTrashTarget(env, catalog.TrashTargetOptions{
 		ID:        id,
 		Category:  ID,
 		Display:   display,
 		Path:      path,
-		Action:    action.NewTrash(path, tr, snap, v),
-		Recovery:  engine.RecoveryTrash,
-		NeedsRoot: false,
-		Guard:     guard,
+		Roots:     []string{root},
 		Risk:      engine.RiskMed,
 		DefaultOn: false,
 		Evidence:  []string{"user data directory with no installed application"},
-	}, nil
+	})
+	if err != nil {
+		return engine.Target{}, err
+	}
+	t.Guard = guard
+	return t, nil
 }
 
 // appAbsentGuard re-checks, at execution time, that the application owning a
