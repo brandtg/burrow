@@ -10,7 +10,6 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/brandtg/burrow/internal/owner"
 	"github.com/brandtg/burrow/internal/safe"
 )
 
@@ -140,24 +139,7 @@ func processRunning(name string) (bool, error) {
 	return false, nil
 }
 
-// --- Adapter command methods. ---
-
-func (aptAdapter) PackageCacheAction() owner.OwnerCommand { return owner.AptPackageCache() }
-func (aptAdapter) OrphansAction() owner.OwnerCommand      { return owner.AptOrphans() }
-func (aptAdapter) OldKernelsAction() owner.OwnerCommand   { return owner.AptOldKernels() }
-func (aptAdapter) ResidualConfigAction(pkgs []string) (owner.OwnerCommand, error) {
-	return owner.AptResidualConfig(pkgs)
-}
 func (aptAdapter) LockGuard() LockProbe { return aptProbe() }
-
-// The remaining families are detection stubs: dnf is implemented and
-// pacman/zypper/apk remain data to add. Returning a zero
-// OwnerCommand and an empty SystemSpec makes the system catalog skip their
-// package items rather than guess an argv.
-
-func errNoResidualConfig(family string) error {
-	return fmt.Errorf("distro: residual-config is not implemented for %s", family)
-}
 
 func (dnfAdapter) LockGuard() LockProbe {
 	return LockProbe{
@@ -166,44 +148,20 @@ func (dnfAdapter) LockGuard() LockProbe {
 	}
 }
 
-func (pacmanAdapter) PackageCacheAction() owner.OwnerCommand { return owner.OwnerCommand{} }
-func (pacmanAdapter) OrphansAction() owner.OwnerCommand      { return owner.OwnerCommand{} }
-func (pacmanAdapter) OldKernelsAction() owner.OwnerCommand   { return owner.OwnerCommand{} }
-func (pacmanAdapter) ResidualConfigAction([]string) (owner.OwnerCommand, error) {
-	return owner.OwnerCommand{}, errNoResidualConfig("pacman")
-}
 func (pacmanAdapter) LockGuard() LockProbe {
 	return LockProbe{LockFiles: []string{"/var/lib/pacman/db.lck"}, Processes: []string{"pacman"}}
 }
 func (pacmanAdapter) System() SystemSpec { return SystemSpec{} }
 
-func (zypperAdapter) PackageCacheAction() owner.OwnerCommand { return owner.OwnerCommand{} }
-func (zypperAdapter) OrphansAction() owner.OwnerCommand      { return owner.OwnerCommand{} }
-func (zypperAdapter) OldKernelsAction() owner.OwnerCommand   { return owner.OwnerCommand{} }
-func (zypperAdapter) ResidualConfigAction([]string) (owner.OwnerCommand, error) {
-	return owner.OwnerCommand{}, errNoResidualConfig("zypper")
-}
 func (zypperAdapter) LockGuard() LockProbe {
 	return LockProbe{LockFiles: []string{"/var/run/zypp.pid"}, Processes: []string{"zypper"}}
 }
 func (zypperAdapter) System() SystemSpec { return SystemSpec{} }
 
-func (apkAdapter) PackageCacheAction() owner.OwnerCommand { return owner.OwnerCommand{} }
-func (apkAdapter) OrphansAction() owner.OwnerCommand      { return owner.OwnerCommand{} }
-func (apkAdapter) OldKernelsAction() owner.OwnerCommand   { return owner.OwnerCommand{} }
-func (apkAdapter) ResidualConfigAction([]string) (owner.OwnerCommand, error) {
-	return owner.OwnerCommand{}, errNoResidualConfig("apk")
-}
 func (apkAdapter) LockGuard() LockProbe {
 	return LockProbe{LockFiles: []string{"/lib/apk/db/lock"}, Processes: []string{"apk"}}
 }
 func (apkAdapter) System() SystemSpec { return SystemSpec{} }
 
-func (genericAdapter) PackageCacheAction() owner.OwnerCommand { return owner.OwnerCommand{} }
-func (genericAdapter) OrphansAction() owner.OwnerCommand      { return owner.OwnerCommand{} }
-func (genericAdapter) OldKernelsAction() owner.OwnerCommand   { return owner.OwnerCommand{} }
-func (genericAdapter) ResidualConfigAction([]string) (owner.OwnerCommand, error) {
-	return owner.OwnerCommand{}, errors.New("distro: no package manager detected")
-}
 func (genericAdapter) LockGuard() LockProbe { return LockProbe{} }
 func (genericAdapter) System() SystemSpec   { return SystemSpec{} }

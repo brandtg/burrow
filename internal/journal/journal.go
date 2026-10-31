@@ -160,28 +160,6 @@ func (w *Writer) fail(err error) {
 	}
 }
 
-// StartRun writes a run_start frame and returns the new run id.
-func (w *Writer) StartRun(command string) (string, error) {
-	id := NewRunID()
-	return id, w.Append(Record{
-		RunID:   id,
-		Command: command,
-		Action:  ActionRunStart,
-		Status:  StatusStart,
-	})
-}
-
-// EndRun writes a run_end frame.
-func (w *Writer) EndRun(runID, command string, freedBytes int64) error {
-	return w.Append(Record{
-		RunID:   runID,
-		Command: command,
-		Action:  ActionRunEnd,
-		Status:  StatusEnd,
-		Bytes:   freedBytes,
-	})
-}
-
 // Hostname returns the short hostname, or "" on failure.
 func Hostname() string {
 	h, err := os.Hostname()
