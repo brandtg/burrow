@@ -1,4 +1,4 @@
-// Package containers implements the `containers` cleanup category (spec §8.2):
+// Package containers implements the `containers` cleanup category:
 // docker and podman pruning. Every mutating action is an allow-listed owner
 // command (invariant I4); discovery and measurement are read-only. Volumes are
 // treated as data, not cache: the volume and system-wide prunes are high risk,
@@ -58,7 +58,7 @@ func (*Category) Discover(ctx context.Context, env *engine.Env) ([]engine.Target
 }
 
 // Reconcile drops docker sub-prunes that a broader selected prune already
-// covers, so a run never executes redundant prunes (plan 05 risk note):
+// covers, so a run never executes redundant prunes:
 // `docker system prune -a --volumes` supersedes every part, and
 // `docker image prune -a` supersedes the dangling-only prune.
 func (*Category) Reconcile(plan *engine.Plan) {

@@ -1,4 +1,4 @@
-// Package system implements the `system` cleanup category (spec §8.1): package
+// Package system implements the `system` cleanup category: package
 // manager caches, the systemd journal, logs, temp files, and core dumps.
 //
 // Debian/Ubuntu apt/dpkg is the exercised path. Every mutating command is an
@@ -123,7 +123,7 @@ func packageItems(ctx context.Context, env *engine.Env) []engine.Target {
 				allow[p] = true
 			}
 			// Defense in depth: the purge list must be a subset of the set we
-			// parsed from the package-manager output (I4 / plan 03 note).
+			// parsed from the package-manager output (invariant I4).
 			if len(pkgs) > 0 && owner.ValidatePackageSubset(pkgs, allow) == nil {
 				if cmd, err := spec.ResidualConfig(pkgs); err == nil {
 					out = append(out, engine.Target{

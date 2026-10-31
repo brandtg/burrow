@@ -1,5 +1,5 @@
-// Package desktoppkgs implements the `desktop-pkgs` cleanup category (spec
-// §8.3): flatpak and snap. Owner commands mutate package state; the two
+// Package desktoppkgs implements the `desktop-pkgs` cleanup category:
+// flatpak and snap. Owner commands mutate package state; the two
 // user-data items trash a directory only after proving the owning application
 // is not installed, and they skip when that cannot be proven (fail closed).
 //
@@ -119,7 +119,7 @@ func snapRevisionItems(ctx context.Context, env *engine.Env) []engine.Target {
 		targets = append(targets, engine.Target{
 			// Each revision is its own target, so the target id must be
 			// revision-specific even though the owner command's logical id is
-			// the shared "snap.old-revisions" (spec §6.2: Target.ID is unique).
+			// the shared "snap.old-revisions" (Target.ID is unique).
 			ID:        cmd.ID + "." + rev.name + "_" + rev.rev,
 			Category:  ID,
 			Display:   fmt.Sprintf("snap revision %s_%s", rev.name, rev.rev),

@@ -1,6 +1,5 @@
 // Package engine holds the run pipeline's shared contract: the resolved
-// environment and the Target/Action/Category/Guard types. Plan 01 ships the Env
-// and the type contract; the pipeline itself lands in Plan 03.
+// environment and the Target/Action/Category/Guard types.
 package engine
 
 import (
@@ -137,7 +136,7 @@ type Guard interface {
 	Check(ctx context.Context, env *Env) error
 }
 
-// Target is one concrete thing the tool might act on (spec §6.2).
+// Target is one concrete thing the tool might act on.
 //
 // Group and GroupTitle are presentation-only: they let a category that produces
 // many similar targets (for example one per project's __pycache__) collapse into

@@ -49,7 +49,7 @@ const (
 // Version is stamped at build time with -ldflags.
 var Version = "0.1.0-dev"
 
-// Record is one journal line (spec §12).
+// Record is one journal line.
 type Record struct {
 	TS            string   `json:"ts"`
 	RunID         string   `json:"run_id"`

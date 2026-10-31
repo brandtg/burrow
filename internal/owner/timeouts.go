@@ -2,7 +2,7 @@ package owner
 
 import "time"
 
-// Central timeout table (spec §7.7). Every external command takes its deadline
+// Central timeout table. Every external command takes its deadline
 // from here so behavior is uniform and reviewable.
 const (
 	TimeoutQuickDetect = 5 * time.Second

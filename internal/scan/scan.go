@@ -1,6 +1,6 @@
 // Package scan is the only place that imports gdu. All gdu usage is confined
 // here so the in-process analyzer can be swapped for the `gdu --json`
-// shell-out without touching the rest of the tree (spec D2 / risk table).
+// shell-out without touching the rest of the tree.
 package scan
 
 import (
@@ -28,7 +28,7 @@ import (
 // the pseudo-filesystems below are pruned as separate mounts anyway.
 var DefaultIgnore = []string{"/proc", "/dev", "/sys"}
 
-// Scan status values reported by Status and the --json schema (spec §10).
+// Scan status values reported by Status and the --json schema.
 const (
 	StatusComplete    = "complete"
 	StatusPartial     = "partial"
@@ -182,7 +182,7 @@ func (GDU) Scan(ctx context.Context, root string, opts Options) (*Node, error) {
 	}
 	// AnalyzeDir builds the tree but leaves size/usage aggregation to the
 	// caller. A shared, non-nil HardLinkedItems map makes shared inodes count
-	// once (spec §8.8).
+	// once.
 	item.UpdateStats(make(fs.HardLinkedItems))
 	tree := build(scanCtx, item, opts.Depth, opts.Depth <= 0)
 	// On reflink-capable filesystems, re-attribute on-disk sizes so shared
@@ -195,7 +195,7 @@ func (GDU) Scan(ctx context.Context, root string, opts Options) (*Node, error) {
 	return tree, nil
 }
 
-// Analyze is the Plan 01 entry point, retained for callers that do not need
+// Analyze is the original entry point, retained for callers that do not need
 // the Scanner interface.
 func Analyze(ctx context.Context, path string, opts Options) (*Node, error) {
 	return GDU{}.Scan(ctx, path, opts)

@@ -42,7 +42,7 @@ type Runner struct {
 	Log func(string)
 	// UserCredential, when set, makes a per-user command (elevate=false) run
 	// with the invoking user's credentials when the process is elevated
-	// (euid 0). This is how spec §7.6 is enforced: user state must never run
+	// (euid 0). This ensures user state never runs
 	// with inherited root credentials. It is ignored for elevated commands.
 	UserCredential *syscall.Credential
 	// UserEnv is the invoking user's HOME/XDG environment. It is overlaid on
@@ -144,8 +144,8 @@ func (r *Runner) Run(ctx context.Context, argv []string, timeout time.Duration, 
 	defer cancel()
 
 	// Resolve the binary to an absolute path before elevating, so sudo runs a
-	// known binary rather than resolving through its own secure_path
-	// (spec §7.6). Per-user commands additionally drop to the invoking user
+	// known binary rather than resolving through its own secure_path.
+	// Per-user commands additionally drop to the invoking user
 	// via SysProcAttr.Credential below.
 	execArgv := append([]string(nil), argv...)
 	resolved, err := resolveExecutable(execArgv[0], r.Env)

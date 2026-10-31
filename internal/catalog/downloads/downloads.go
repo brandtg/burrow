@@ -1,4 +1,4 @@
-// Package downloads implements the `downloads` cleanup category (spec §8.6):
+// Package downloads implements the `downloads` cleanup category:
 // the installer and stale-content sweep. Installer files are matched by
 // extension and age from the [downloads] config; the stale sweep lists large
 // old entries for the user to pick.

@@ -1,5 +1,5 @@
 // Package tui holds the Bubble Tea models. clean.go implements the preview and
-// review screens for `burrow clean` (spec §16).
+// review screens for `burrow clean`.
 //
 // Provenance: the categorized preview and the explicit review screen are
 // behavioral ports of Mole's cleanup UX, reimplemented clean-room. No Mole

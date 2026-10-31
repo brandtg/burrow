@@ -1,6 +1,6 @@
-// Package action holds the two Action implementations from spec §6.2:
-// TrashAction (move to the freedesktop Trash) and OwnerCommandAction (run an
-// allow-listed owner command). Both re-validate at execution time and are
+// Package action holds the two Action implementations: TrashAction (move to the
+// freedesktop Trash) and OwnerCommandAction (run an allow-listed owner
+// command). Both re-validate at execution time and are
 // idempotent. Recoverable by default; there is no permanent-delete primitive.
 //
 // Provenance: the recovery-contract split (trash vs owner) and the review-then-
@@ -119,7 +119,7 @@ func (a *TrashAction) Run(ctx context.Context, dryRun bool) (engine.Result, erro
 	}
 	if a.Snapshot == nil {
 		// Fail closed: without an identity snapshot the TOCTOU check cannot run,
-		// so a present path must not be mutated (spec §7.3, I5).
+		// so a present path must not be mutated (invariant I5).
 		return skip("no identity snapshot"), safe.GuardStop("%s", "no identity snapshot")
 	}
 	if ok, err := a.Snapshot.Matches(); err != nil || !ok {

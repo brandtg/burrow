@@ -93,8 +93,7 @@ func within(p, root string) bool {
 
 // physicalPath resolves symlinks in the parent directory only, leaving the
 // final component untouched. Only the deletion root itself must be a real,
-// non-symlink path; ancestors are allowed to be symlinks (spec §7.2, "at the
-// root").
+// non-symlink path; ancestors are allowed to be symlinks.
 func physicalPath(clean string) (string, error) {
 	parent, err := filepath.EvalSymlinks(filepath.Dir(clean))
 	if err != nil {
@@ -149,8 +148,7 @@ func ValidateForDeletion(path string) error {
 // ValidateForDeletion is the policy-bound form.
 func (v *Validator) ValidateForDeletion(path string) error { return v.Validate(path) }
 
-// Validate applies every rule in spec §7.2 and fails closed on the first
-// violation.
+// Validate applies every rule and fails closed on the first violation.
 func (v *Validator) Validate(path string) error {
 	if path == "" {
 		return violation(path, "path is empty")

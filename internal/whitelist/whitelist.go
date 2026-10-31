@@ -1,7 +1,7 @@
 // Package whitelist loads and matches burrow's path whitelist.
 //
 // A whitelisted path protects itself and its parent from the generic user-cache
-// sweep (spec §13.1). Matching is prefix-based on resolved physical paths.
+// sweep. Matching is prefix-based on resolved physical paths.
 //
 // Provenance: independent reimplementation of Mole's whitelist semantics.
 package whitelist

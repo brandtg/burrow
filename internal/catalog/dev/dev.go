@@ -1,11 +1,11 @@
-// Package dev implements the `dev` cleanup category (spec §8.4): language and
+// Package dev implements the `dev` cleanup category: language and
 // toolchain caches. It is the category that differentiates burrow from a
 // generic cleaner.
 //
 // Each item prefers its owner command and falls back to trashing a documented
 // cache root only when the owner command is unavailable. Owner caches are
 // per-user: they are resolved by asking the owner immediately before acting and
-// are never elevated (spec §7.6).
+// are never elevated.
 //
 // Provenance: this is a clean-room behavioral port of Mole's lib/clean/dev.sh
 // keep/discard reasoning (Cargo registry/src, Poetry virtualenvs, CPAN sources,
@@ -47,7 +47,7 @@ func (*Category) PreviewNote() string {
 	return "Language and toolchain caches, shown but not pre-selected by default. Owner commands where available; otherwise the documented cache root is trashed."
 }
 
-// Process guards (spec §7.5). A running owner means skip, fail closed.
+// Process guards. A running owner means skip, fail closed.
 var (
 	npmGuard   = catalog.ProcessGuard{Names: []string{"npm"}}
 	pnpmGuard  = catalog.ProcessGuard{Names: []string{"pnpm"}}

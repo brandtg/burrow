@@ -13,7 +13,7 @@ import (
 // Measure fills SizeBytes for targets that discovery left unknown. It is
 // read-only: directory trees are measured with `du -sk` under the size-probe
 // timeout, single files with a stat. A failure or timeout leaves the size
-// unknown rather than reporting a false zero (spec §8.8).
+// unknown rather than reporting a false zero.
 func Measure(ctx context.Context, env *Env, targets []Target) {
 	for i := range targets {
 		t := &targets[i]

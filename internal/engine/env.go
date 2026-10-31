@@ -91,7 +91,7 @@ func Resolve(opts ResolveOptions) (*Env, error) {
 	run := owner.New(opts.DryRun)
 	run.UserEnv = owner.Environment(dirs)
 	if elevated {
-		// Spec §7.6: per-user commands must run as the invoking user, never
+		// Per-user commands must run as the invoking user, never
 		// with inherited root credentials.
 		run.UserCredential = owner.Credential(u)
 	}

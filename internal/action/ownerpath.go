@@ -18,8 +18,8 @@ type PathResolver func(ctx context.Context, r *owner.Runner) (string, error)
 // OwnerPathAction is an OwnerCommandAction whose target path is reported by the
 // owner itself (for example `npm config get cache`). Because the path is
 // untrusted input, it is re-resolved immediately before the command runs and
-// the action refuses when the path changed or escaped its allowed parent
-// (spec §7.3). The command argv itself stays an exact catalog entry (I4).
+// the action refuses when the path changed or escaped its allowed parent.
+// The command argv itself stays an exact catalog entry (invariant I4).
 type OwnerPathAction struct {
 	Command      owner.OwnerCommand
 	Runner       *owner.Runner

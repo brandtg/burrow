@@ -13,7 +13,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// GlobalFlags are the flags shared by every command (spec §5.1).
+// GlobalFlags are the flags shared by every command.
 type GlobalFlags struct {
 	DryRun   bool
 	Yes      bool

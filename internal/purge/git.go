@@ -19,7 +19,7 @@ import (
 var ErrNoRepo = errors.New("purge: not a git repository")
 
 // DefaultGitTimeout bounds one git invocation, taken from the central timeout
-// table (spec §7.7 quick-detect budget).
+// table's quick-detect budget.
 const DefaultGitTimeout = owner.TimeoutQuickDetect
 
 // Git abstracts the git queries purge needs so tests can simulate tracked,
@@ -208,7 +208,7 @@ func (s trackedSet) trackedDir(rel string) bool {
 }
 
 // gitCache bounds git work to one top-level lookup and one tracked-set listing
-// per repository per run (spec §11 "one git ls-files per repo per run").
+// per repository per run.
 type gitCache struct {
 	git     Git
 	timeout time.Duration

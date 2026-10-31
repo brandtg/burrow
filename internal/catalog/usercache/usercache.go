@@ -1,4 +1,4 @@
-// Package usercache implements the `user-cache` cleanup category (spec §8.5):
+// Package usercache implements the `user-cache` cleanup category:
 // the XDG cache sweep. Every top-level entry under $XDG_CACHE_HOME that is not
 // owned by a dev item is its own row, so a user can keep specific caches; the
 // whitelist and the protected set also apply.

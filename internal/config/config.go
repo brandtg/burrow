@@ -13,7 +13,7 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-// Config is the full config.toml schema (spec §13.2).
+// Config is the full config.toml schema.
 type Config struct {
 	General   General   `toml:"general"`
 	Clean     Clean     `toml:"clean"`

@@ -22,7 +22,7 @@ type OwnerCommand struct {
 // Valid reports whether the command has an id and a non-empty argv.
 func (c OwnerCommand) Valid() bool { return c.ID != "" && len(c.Argv) > 0 }
 
-// --- Debian/Ubuntu (apt/dpkg) owner commands (spec §8.1, §21.1). ---
+// --- Debian/Ubuntu (apt/dpkg) owner commands. ---
 
 // AptPackageCache empties /var/cache/apt/archives.
 func AptPackageCache() OwnerCommand {
@@ -79,7 +79,7 @@ func AptResidualConfig(pkgs []string) (OwnerCommand, error) {
 	}, nil
 }
 
-// --- Fedora/RHEL (dnf/rpm) owner commands (spec §8.1, §21.1). ---
+// --- Fedora/RHEL (dnf/rpm) owner commands. ---
 
 // DnfPackageCache empties the dnf package cache.
 func DnfPackageCache() OwnerCommand {
@@ -156,14 +156,14 @@ func SystemdTmpfilesClean(id string) OwnerCommand {
 	}
 }
 
-// --- Per-user language/toolchain owner commands (spec §8.4, §21.1). ---
+// --- Per-user language/toolchain owner commands. ---
 //
 // These are inherently per-user and must never be elevated: they operate on the
 // invoking user's own cache. NeedsRoot is false and the runner resolves the
-// binary as that user (spec §7.6).
+// binary as that user.
 //
-// Provenance: the owner-command list is cross-checked against spec §21.1; the
-// keep/discard reasoning for each toolchain is a behavioral port of Mole's
+// Provenance: the keep/discard reasoning for each toolchain is a behavioral
+// port of Mole's
 // lib/clean/dev.sh, reimplemented clean-room.
 
 // NpmCacheClean clears the npm cache.
@@ -232,13 +232,13 @@ func MiseCacheClear() OwnerCommand {
 
 // GhClearCache clears the GitHub CLI cache. The runner sets the invoking user's
 // XDG_CACHE_HOME for per-user commands, so gh clears the same cache directory
-// that discovery resolved (spec §8.4's `XDG_CACHE_HOME=<parent>` intent) without
+// that discovery resolved, without
 // building a dynamic argv.
 func GhClearCache() OwnerCommand {
 	return OwnerCommand{ID: "dev.gh-cli", Argv: []string{"gh", "config", "clear-cache"}, Timeout: TimeoutOwnerClean}
 }
 
-// --- Containers: docker/podman owner commands (spec §8.2, §21.1). ---
+// --- Containers: docker/podman owner commands. ---
 //
 // Docker/podman are typically reachable as the invoking user (rootless or the
 // docker group), so these run without elevation. If the socket is root-only the
@@ -260,7 +260,7 @@ func DockerImagePruneAll() OwnerCommand {
 }
 
 // DockerVolumePrune removes unused volumes. Volumes can hold data, not just
-// cache; this is a high-risk action (plan 05 risk note).
+// cache; this is a high-risk action.
 func DockerVolumePrune() OwnerCommand {
 	return OwnerCommand{ID: "containers.docker-volumes", Argv: []string{"docker", "volume", "prune", "-f"}, Timeout: TimeoutOwnerClean}
 }
@@ -293,10 +293,10 @@ func PodmanInfoProbe() OwnerCommand {
 	return OwnerCommand{ID: "probe.podman.info", Argv: []string{"podman", "info"}, ReadOnly: true, Timeout: TimeoutQuickDetect}
 }
 
-// --- Desktop packages: flatpak/snap owner commands (spec §8.3, §21.1). ---
+// --- Desktop packages: flatpak/snap owner commands. ---
 
 // FlatpakUninstallUnused removes unused runtimes. It is per-user; it must never
-// run as root (spec §7.6).
+// run as root.
 func FlatpakUninstallUnused() OwnerCommand {
 	return OwnerCommand{ID: "flatpak.unused", Argv: []string{"flatpak", "uninstall", "--unused", "-y"}, Timeout: TimeoutOwnerClean}
 }
@@ -459,7 +459,7 @@ func ValidPackageName(s string) bool {
 
 // ValidatePackageSubset returns an error if any name in pkgs is absent from the
 // allow set. This is the check that keeps `dpkg --purge` bounded to packages
-// the tool itself parsed (I4 / plan 03 note).
+// the tool itself parsed (invariant I4).
 func ValidatePackageSubset(pkgs []string, allow map[string]bool) error {
 	var bad []string
 	for _, p := range pkgs {

@@ -17,7 +17,7 @@ import (
 	"golang.org/x/term"
 )
 
-// analyzeOptions are the analyze-specific flags (spec §5.3).
+// analyzeOptions are the analyze-specific flags.
 type analyzeOptions struct {
 	apparent    bool
 	oneFS       bool
@@ -50,7 +50,7 @@ When stdout is not a terminal (or --json is set), analyze behaves like
 			if err != nil {
 				return err
 			}
-			// Precedence (spec §13): an explicit --cross-mounts disables the
+			// Precedence: an explicit --cross-mounts disables the
 			// boundary, an explicit -x/--one-file-system enables it, otherwise
 			// the config value applies. The boundary is on by default so a
 			// scan of a path on one drive does not silently absorb other
@@ -163,7 +163,7 @@ type jsonSkippedMount struct {
 	Fstype string `json:"fstype,omitempty"`
 }
 
-// jsonReport is the stable --json schema (spec §10).
+// jsonReport is the stable --json schema.
 type jsonReport struct {
 	Path          string             `json:"path"`
 	TotalSize     int64              `json:"total_size"`

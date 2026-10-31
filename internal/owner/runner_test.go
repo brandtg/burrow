@@ -115,7 +115,7 @@ func TestUserDirsIgnoresRootXDGWhenElevated(t *testing.T) {
 	}
 }
 
-// TestPerUserCommandDropsRootCredential proves the spec §7.6 fix: when the
+// TestPerUserCommandDropsRootCredential proves that when the
 // process is elevated, a per-user command is given the invoking user's
 // credential, while an elevated command is not.
 func TestPerUserCommandDropsRootCredential(t *testing.T) {

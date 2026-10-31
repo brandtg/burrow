@@ -15,7 +15,7 @@ import (
 )
 
 // LockProbe names the resources whose activity means a package manager is
-// busy. It is data so Plan 07 can add dnf/pacman/zypper probes without
+// busy. It is data so dnf/pacman/zypper probes can be added without
 // reshaping the guard.
 type LockProbe struct {
 	LockFiles []string
@@ -34,7 +34,7 @@ func aptProbe() LockProbe {
 }
 
 // CheckLockProbe evaluates a LockProbe. It fails closed: a probe that cannot be
-// evaluated returns Unknown, which stops the action (spec §7.5).
+// evaluated returns Unknown, which stops the action.
 func CheckLockProbe(ctx context.Context, p LockProbe) safe.GuardResult {
 	for _, name := range p.Processes {
 		running, err := processRunning(name)
@@ -150,8 +150,8 @@ func (aptAdapter) ResidualConfigAction(pkgs []string) (owner.OwnerCommand, error
 }
 func (aptAdapter) LockGuard() LockProbe { return aptProbe() }
 
-// The remaining families are detection stubs until their plans land (Plan 07
-// lands dnf; pacman/zypper/apk remain data to add). Returning a zero
+// The remaining families are detection stubs: dnf is implemented and
+// pacman/zypper/apk remain data to add. Returning a zero
 // OwnerCommand and an empty SystemSpec makes the system catalog skip their
 // package items rather than guess an argv.
 

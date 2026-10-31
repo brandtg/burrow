@@ -23,7 +23,7 @@ import (
 	"github.com/brandtg/burrow/internal/safe"
 )
 
-// DefaultArtifactDirs is the pinned v0.1 artifact list (spec §11). It is
+// DefaultArtifactDirs is the pinned v0.1 artifact list. It is
 // extensible via [purge] artifact_dirs in config.
 var DefaultArtifactDirs = []string{
 	"node_modules",
