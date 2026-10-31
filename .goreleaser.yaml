@@ -55,8 +55,24 @@ nfpms:
           mode: 0644
 
 changelog:
-  disable: true
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^chore:'
+      - '^ci:'
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: Fixes
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: Others
+      order: 999
 
 release:
-  draft: true
+  # Draft releases have empty bodies and need a manual publish step; publish
+  # directly with a changelog grouped by conventional-commit type.
+  draft: false
   prerelease: auto

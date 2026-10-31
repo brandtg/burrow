@@ -48,6 +48,10 @@ jobs:
         run: echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - name: Run gate
         run: make gate
+      - name: golangci-lint
+        run: golangci-lint run ./...
+      - name: govulncheck
+        run: govulncheck ./...
 
   matrix:
     name: container matrix

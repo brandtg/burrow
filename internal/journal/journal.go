@@ -34,6 +34,7 @@ const (
 const (
 	ActionTrash    = "trash"
 	ActionOwner    = "owner"
+	ActionDelete   = "delete"
 	ActionRunStart = "run_start"
 	ActionRunEnd   = "run_end"
 )
@@ -42,8 +43,9 @@ const (
 // that applied to each mutation (invariant I2). They are strings here to keep
 // the journal schema self-describing and free of engine imports.
 const (
-	RecoveryTrash = "trash"
-	RecoveryOwner = "owner"
+	RecoveryTrash  = "trash"
+	RecoveryOwner  = "owner"
+	RecoveryDelete = "delete"
 )
 
 // Version is stamped at build time with -ldflags.
@@ -158,28 +160,6 @@ func (w *Writer) fail(err error) {
 	if w.OnError != nil {
 		w.OnError(err)
 	}
-}
-
-// StartRun writes a run_start frame and returns the new run id.
-func (w *Writer) StartRun(command string) (string, error) {
-	id := NewRunID()
-	return id, w.Append(Record{
-		RunID:   id,
-		Command: command,
-		Action:  ActionRunStart,
-		Status:  StatusStart,
-	})
-}
-
-// EndRun writes a run_end frame.
-func (w *Writer) EndRun(runID, command string, freedBytes int64) error {
-	return w.Append(Record{
-		RunID:   runID,
-		Command: command,
-		Action:  ActionRunEnd,
-		Status:  StatusEnd,
-		Bytes:   freedBytes,
-	})
 }
 
 // Hostname returns the short hostname, or "" on failure.

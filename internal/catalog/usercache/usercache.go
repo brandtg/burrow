@@ -191,7 +191,7 @@ func trashItem(env *engine.Env) []engine.Target {
 		Display:   "empty Trash",
 		Path:      dir,
 		Action:    &action.EmptyTrashAction{Trash: tr, Path: dir},
-		Recovery:  engine.RecoveryOwner,
+		Recovery:  engine.RecoveryDelete,
 		Risk:      engine.RiskHigh,
 		DefaultOn: false,
 		Evidence:  []string{"emptying the Trash is irreversible"},
