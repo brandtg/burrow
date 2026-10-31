@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 # scripts/check.sh — the canonical burrow gate.
 #
-# Runs: gofmt check, go vet, unit tests, and the static-binary check.
+# Runs: gofmt check, go vet, unit tests, the static sink gate, the static
+# -binary check, the man-page freshness check, plus golangci-lint and
+# govulncheck when installed (BURROW_REQUIRE_TOOLS=1 turns "missing tool"
+# into a failure).
 #
 # Env:
 #   BURROW_INTEGRATION=1     run the root-only integration script
 #   BURROW_MATRIX=1          run the container matrix
+#   BURROW_REQUIRE_TOOLS=1   fail if golangci-lint/govulncheck are missing
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -28,8 +32,45 @@ fi
 step "go vet"
 if go vet ./...; then ok "go vet"; else fail "go vet"; fi
 
+step "static sink gate"
+if go run ./scripts/safety-gate .; then ok "static sink gate"; else fail "static sink gate"; fi
+
 step "go test"
 if go test ./...; then ok "go test"; else fail "go test"; fi
+
+require_tools() { [[ "${BURROW_REQUIRE_TOOLS:-0}" == "1" ]]; }
+
+step "golangci-lint"
+if command -v golangci-lint >/dev/null 2>&1; then
+  if golangci-lint run ./...; then ok "golangci-lint"; else fail "golangci-lint"; fi
+elif require_tools; then
+  fail "golangci-lint not installed (BURROW_REQUIRE_TOOLS=1)"
+else
+  warn "golangci-lint not installed; skipping"
+fi
+
+step "govulncheck"
+if command -v govulncheck >/dev/null 2>&1; then
+  if govulncheck ./...; then ok "govulncheck"; else fail "govulncheck"; fi
+elif require_tools; then
+  fail "govulncheck not installed (BURROW_REQUIRE_TOOLS=1)"
+else
+  warn "govulncheck not installed; skipping"
+fi
+
+step "man page freshness"
+MAN_TMP="$(mktemp -d)"
+if go run ./cmd/burrow docs --dir "$MAN_TMP/man"; then
+  if diff -ru docs/man "$MAN_TMP/man" >"$MAN_TMP/diff" 2>&1; then
+    ok "man page freshness"
+  else
+    fail "docs/man is stale; run 'make docs' and commit:"
+    sed -n '1,40p' "$MAN_TMP/diff"
+  fi
+else
+  fail "man page generation failed"
+fi
+rm -rf "$MAN_TMP"
 
 step "static binary"
 STATIC_TMP="$(mktemp -d)"
