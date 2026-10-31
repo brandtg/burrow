@@ -26,38 +26,41 @@ func TestParseRejectsRelative(t *testing.T) {
 	}
 }
 
-func TestContainsPrefix(t *testing.T) {
-	set, _ := Parse(strings.NewReader("/home/u/.cache/keep\n"))
-	if !set.Contains("/home/u/.cache/keep") {
-		t.Fatal("expected exact match")
+func TestContainsBoundary(t *testing.T) {
+	set, err := Parse(strings.NewReader("/home/u/.cache/keep\n/home/ab\n"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !set.Contains("/home/u/.cache/keep/sub") {
-		t.Fatal("expected child match")
+	cases := []struct {
+		path string
+		want bool
+	}{
+		{"/home/u/.cache/keep", true},     // exact match
+		{"/home/u/.cache/keep/sub", true}, // descendant
+		{"/home/u/.cache/keep/deep/sub", true},
+		{"/home/u/.cache/keeper", false}, // sibling prefix
+		{"/home/u/.cache", false},        // parent is not protected
+		{"/home/ab", true},
+		{"/home/abc", false}, // sibling prefix must respect boundary
+		{"/home/u/.cache/other", false},
 	}
-	if set.Contains("/home/u/.cache/keeper") {
-		t.Fatal("prefix must respect path boundary")
-	}
-	if set.Contains("/home/u/.cache/other") {
-		t.Fatal("unexpected match")
-	}
-}
-
-func TestProtectedParent(t *testing.T) {
-	set, _ := Parse(strings.NewReader("/home/u/.cache/keep\n"))
-	if !set.Protected("/home/u/.cache") {
-		t.Fatal("expected parent of a whitelisted entry to be protected")
-	}
-	if !set.Protected("/home/u/.cache/keep") {
-		t.Fatal("expected entry itself protected")
-	}
-	if set.Protected("/home/u/.cache/other") {
-		t.Fatal("unrelated path must not be protected")
+	for _, c := range cases {
+		if got := set.Contains(c.path); got != c.want {
+			t.Errorf("Contains(%q) = %v, want %v", c.path, got, c.want)
+		}
 	}
 }
 
 func TestEmptySet(t *testing.T) {
 	var s *Set
-	if s.Contains("/x") || s.Protected("/x") || !s.Empty() {
+	if s.Contains("/x") || !s.Empty() {
 		t.Fatal("nil set must behave as empty")
+	}
+	set, err := Parse(strings.NewReader(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if set.Contains("/x") || !set.Empty() {
+		t.Fatal("parsed empty set must behave as empty")
 	}
 }

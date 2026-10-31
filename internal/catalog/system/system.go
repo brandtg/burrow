@@ -13,12 +13,11 @@ import (
 	"strings"
 
 	"github.com/brandtg/burrow/internal/action"
+	"github.com/brandtg/burrow/internal/catalog"
 	"github.com/brandtg/burrow/internal/config"
 	"github.com/brandtg/burrow/internal/distro"
 	"github.com/brandtg/burrow/internal/engine"
 	"github.com/brandtg/burrow/internal/owner"
-	"github.com/brandtg/burrow/internal/safe"
-	"github.com/brandtg/burrow/internal/trash"
 )
 
 // ID is the category identifier.
@@ -290,36 +289,19 @@ func coreDumpItems(env *engine.Env) []engine.Target {
 	return out
 }
 
-// newTrashTarget builds a validated, identity-snapshotted trash target.
+// newTrashTarget builds a validated, identity-snapshotted trash target confined
+// to root.
 func newTrashTarget(env *engine.Env, id, display, path, root string, risk engine.Risk, defaultOn bool) (engine.Target, error) {
-	protected := []string(nil)
-	if env.Cfg != nil {
-		protected = env.Cfg.Clean.ProtectedPaths
-	}
-	v := safe.NewValidator(env.UID(), protected...)
-	if root != "" {
-		v.Roots = []string{root}
-		v.RequireRoot = true
-	}
-	if err := v.Validate(path); err != nil {
-		return engine.Target{}, err
-	}
-	snap, err := safe.TakeSnapshot(path)
-	if err != nil {
-		return engine.Target{}, err
-	}
-	tr := trash.New(env.Paths.TrashDir, env.UID())
-	return engine.Target{
+	return catalog.NewTrashTarget(env, catalog.TrashTargetOptions{
 		ID:        id,
 		Category:  ID,
 		Display:   display,
 		Path:      path,
-		Action:    action.NewTrash(path, tr, snap, v),
-		Recovery:  engine.RecoveryTrash,
+		Roots:     []string{root},
 		Risk:      risk,
 		DefaultOn: defaultOn,
 		Evidence:  []string{"user-owned file"},
-	}, nil
+	})
 }
 
 func dirExists(path string) bool {

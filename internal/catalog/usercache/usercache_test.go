@@ -93,23 +93,40 @@ func TestAppCachesExcludeDevAndProtected(t *testing.T) {
 	}
 }
 
-func TestWhitelistProtectsParent(t *testing.T) {
+func TestWhitelistSkipsEntry(t *testing.T) {
 	env := testEnv(t)
 	mkdir(t,
-		filepath.Join(env.XDGCache, "keep", "sub"),
+		filepath.Join(env.XDGCache, "keep"),
 		filepath.Join(env.XDGCache, "other"),
 	)
-	wl, err := whitelist.Parse(strings.NewReader(filepath.Join(env.XDGCache, "keep", "sub") + "\n"))
+	wl, err := whitelist.Parse(strings.NewReader(filepath.Join(env.XDGCache, "keep") + "\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	env.Whitelist = wl
 	got := ids(t, env)
 	if _, ok := got["user-cache.app-caches.keep"]; ok {
-		t.Fatal("parent of a whitelisted entry must be protected")
+		t.Fatal("whitelisted cache entry must be skipped")
 	}
 	if _, ok := got["user-cache.app-caches.other"]; !ok {
 		t.Fatalf("unrelated cache should remain: %v", keys(got))
+	}
+}
+
+// TestWhitelistDescendantDoesNotProtectParent pins the single prefix rule: a
+// whitelisted descendant protects itself, not the top-level cache that contains
+// it.
+func TestWhitelistDescendantDoesNotProtectParent(t *testing.T) {
+	env := testEnv(t)
+	mkdir(t, filepath.Join(env.XDGCache, "keep", "sub"))
+	wl, err := whitelist.Parse(strings.NewReader(filepath.Join(env.XDGCache, "keep", "sub") + "\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.Whitelist = wl
+	got := ids(t, env)
+	if _, ok := got["user-cache.app-caches.keep"]; !ok {
+		t.Fatal("a descendant whitelist must not protect the parent cache row")
 	}
 }
 

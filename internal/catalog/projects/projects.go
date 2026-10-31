@@ -151,14 +151,7 @@ func evidence(a Artifact) []string {
 	if !a.AgeKnown {
 		return []string{"activity age unknown"}
 	}
-	age := time.Since(a.Mtime)
-	if age < 0 {
-		age = 0
-	}
-	if days := int(age.Hours() / 24); days > 0 {
-		return []string{fmt.Sprintf("last activity %dd ago", days)}
-	}
-	return []string{fmt.Sprintf("last activity %dh ago", int(age.Hours()))}
+	return []string{"last activity " + humanAge(time.Since(a.Mtime)) + " ago"}
 }
 
 // uniqueID builds a stable per-artifact id: projects.<rel-to-project>, with a

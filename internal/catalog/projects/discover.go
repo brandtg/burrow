@@ -9,9 +9,9 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
 
+	"github.com/brandtg/burrow/internal/disk"
 	"github.com/brandtg/burrow/internal/owner"
 )
 
@@ -264,9 +264,7 @@ func measure(ctx context.Context, root string, timeout time.Duration) (size int6
 		if ierr != nil {
 			return ierr
 		}
-		if st, sok := info.Sys().(*syscall.Stat_t); sok {
-			size += st.Blocks * 512
-		}
+		size += disk.Blocks512(info)
 		if mt := info.ModTime(); mt.After(newest) {
 			newest = mt
 		}

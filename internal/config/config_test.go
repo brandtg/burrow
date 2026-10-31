@@ -250,13 +250,23 @@ protected_paths = ["~/secret"]
 
 func TestParseBytes(t *testing.T) {
 	cases := map[string]int64{
-		"0":    0,
-		"10M":  10 << 20,
-		"1G":   1 << 30,
-		"512K": 512 << 10,
-		"1.5M": 1572864,
-		"1234": 1234,
-		"2GiB": 2 << 30,
+		"":       0,
+		"0":      0,
+		"512":    512,
+		"10M":    10 << 20,
+		"1G":     1 << 30,
+		"512K":   512 << 10,
+		"1.5M":   1572864,
+		"1234":   1234,
+		"2GiB":   2 << 30,
+		"1.5GiB": 3 << 29,
+		"2TiB":   2 << 40,
+		"1B":     1,
+		"0B":     0,
+		"1.2kB":  1200,
+		"800MB":  800 * 1000 * 1000,
+		"1.2GB":  1200 * 1000 * 1000,
+		"50MB":   50 * 1000 * 1000,
 	}
 	for in, want := range cases {
 		got, err := ParseBytes(in)
@@ -267,8 +277,10 @@ func TestParseBytes(t *testing.T) {
 			t.Fatalf("%s: got %d want %d", in, got, want)
 		}
 	}
-	if _, err := ParseBytes("bogus"); err == nil {
-		t.Fatal("expected error")
+	for _, in := range []string{"bogus", "N/A", "1.2XB"} {
+		if _, err := ParseBytes(in); err == nil {
+			t.Fatalf("%s: expected error", in)
+		}
 	}
 }
 

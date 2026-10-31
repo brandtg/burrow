@@ -4,9 +4,10 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
-	"syscall"
+
+	"github.com/brandtg/burrow/internal/config"
+	"github.com/brandtg/burrow/internal/disk"
 )
 
 // parseJournaldUsage extracts the size from `journalctl --disk-usage` output:
@@ -15,31 +16,14 @@ func parseJournaldUsage(out string) (int64, bool) {
 	fields := strings.Fields(out)
 	for i, f := range fields {
 		if f == "up" && i+1 < len(fields) {
-			return parseHumanSize(fields[i+1])
+			size, err := config.ParseBytes(fields[i+1])
+			if err != nil {
+				return 0, false
+			}
+			return size, true
 		}
 	}
 	return 0, false
-}
-
-// parseHumanSize parses values such as "512.0M" or "1.5G".
-func parseHumanSize(s string) (int64, bool) {
-	upper := strings.ToUpper(strings.TrimSpace(s))
-	mult := int64(1)
-	switch {
-	case strings.HasSuffix(upper, "K"):
-		mult, upper = 1<<10, strings.TrimSuffix(upper, "K")
-	case strings.HasSuffix(upper, "M"):
-		mult, upper = 1<<20, strings.TrimSuffix(upper, "M")
-	case strings.HasSuffix(upper, "G"):
-		mult, upper = 1<<30, strings.TrimSuffix(upper, "G")
-	case strings.HasSuffix(upper, "B"):
-		upper = strings.TrimSuffix(upper, "B")
-	}
-	n, err := strconv.ParseFloat(strings.TrimSpace(upper), 64)
-	if err != nil || n < 0 {
-		return 0, false
-	}
-	return int64(n * float64(mult)), true
 }
 
 // measureRotatedLogs sums the on-disk size of rotated log files under dir
@@ -69,7 +53,7 @@ func measureRotatedLogs(dir string) (int64, bool) {
 		}
 		if isRotatedLog(d.Name()) {
 			if info, infoErr := d.Info(); infoErr == nil {
-				total += fileDiskUsage(info)
+				total += disk.Blocks512(info)
 			}
 		}
 		return nil
@@ -85,11 +69,4 @@ func isRotatedLog(name string) bool {
 		}
 	}
 	return false
-}
-
-func fileDiskUsage(fi os.FileInfo) int64 {
-	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
-		return st.Blocks * 512
-	}
-	return fi.Size()
 }
