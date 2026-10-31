@@ -35,6 +35,8 @@ const (
 	SortByName
 	// SortByMtime orders most recent first.
 	SortByMtime
+	// SortByCount orders most entries first.
+	SortByCount
 )
 
 func (s SortMode) String() string {
@@ -43,6 +45,8 @@ func (s SortMode) String() string {
 		return "name"
 	case SortByMtime:
 		return "mtime"
+	case SortByCount:
+		return "count"
 	default:
 		return "size"
 	}
@@ -87,7 +91,6 @@ type AnalyzeModel struct {
 	cursor int
 	offset int
 	sort   SortMode
-	showCt bool
 
 	filter    textinput.Model
 	filtering bool
@@ -267,10 +270,7 @@ func (m *AnalyzeModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.rebuildEntries()
 		return m, cmd
 	}
-	if m.help.ShowAll {
-		if msg.String() == "?" || msg.String() == "esc" || msg.String() == "q" {
-			m.help.ShowAll = false
-		}
+	if helpKey(&m.help, msg) {
 		return m, nil
 	}
 
@@ -283,6 +283,14 @@ func (m *AnalyzeModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.move(-1)
 	case key.Matches(msg, m.keys.Down):
 		m.move(1)
+	case key.Matches(msg, m.keys.PageUp):
+		m.page(-1)
+	case key.Matches(msg, m.keys.PageDown):
+		m.page(1)
+	case key.Matches(msg, m.keys.Top):
+		m.setCursor(0)
+	case key.Matches(msg, m.keys.Bottom):
+		m.setCursor(len(m.entries) - 1)
 	case key.Matches(msg, m.keys.Enter):
 		m.enter()
 	case key.Matches(msg, m.keys.Parent):
@@ -293,8 +301,8 @@ func (m *AnalyzeModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.setSort(SortByName)
 	case key.Matches(msg, m.keys.SortMtime):
 		m.setSort(SortByMtime)
-	case key.Matches(msg, m.keys.Count):
-		m.showCt = !m.showCt
+	case key.Matches(msg, m.keys.SortCount):
+		m.setSort(SortByCount)
 	case key.Matches(msg, m.keys.Filter):
 		m.filtering = true
 		m.filter.Focus()
@@ -303,10 +311,15 @@ func (m *AnalyzeModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *AnalyzeModel) move(delta int) {
+	m.setCursor(m.cursor + delta)
+}
+
+// setCursor jumps to an absolute row and keeps it visible.
+func (m *AnalyzeModel) setCursor(idx int) {
 	if len(m.entries) == 0 {
 		return
 	}
-	m.cursor += delta
+	m.cursor = idx
 	if m.cursor < 0 {
 		m.cursor = 0
 	}
@@ -314,6 +327,11 @@ func (m *AnalyzeModel) move(delta int) {
 		m.cursor = len(m.entries) - 1
 	}
 	m.ensureVisible()
+}
+
+// page scrolls by one viewport height.
+func (m *AnalyzeModel) page(delta int) {
+	m.setCursor(m.cursor + delta*m.listHeight())
 }
 
 func (m *AnalyzeModel) enter() {
@@ -354,9 +372,28 @@ func (m *AnalyzeModel) parent() {
 	m.ensureVisible()
 }
 
+// setSort re-sorts the visible entries while keeping the cursor on the entry it
+// was on before the sort, so a sort never teleports the selection.
 func (m *AnalyzeModel) setSort(s SortMode) {
+	if m.sort == s {
+		return
+	}
+	var cur *scan.Node
+	if m.cursor >= 0 && m.cursor < len(m.entries) {
+		cur = m.entries[m.cursor]
+	}
 	m.sort = s
 	m.rebuildEntries()
+	if cur == nil {
+		return
+	}
+	for i, n := range m.entries {
+		if n == cur {
+			m.cursor = i
+			break
+		}
+	}
+	m.ensureVisible()
 }
 
 func (m *AnalyzeModel) rebuildEntries() {
@@ -373,17 +410,26 @@ func (m *AnalyzeModel) rebuildEntries() {
 		out = append(out, c)
 	}
 	sort.SliceStable(out, func(i, j int) bool {
+		a, b := out[i], out[j]
 		switch m.sort {
 		case SortByName:
-			return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
+			return strings.ToLower(a.Name) < strings.ToLower(b.Name)
 		case SortByMtime:
-			return out[i].Mtime.After(out[j].Mtime)
-		default:
-			if m.cfg.Apparent {
-				return out[i].Apparent > out[j].Apparent
+			if !a.Mtime.Equal(b.Mtime) {
+				return a.Mtime.After(b.Mtime)
 			}
-			return out[i].Size > out[j].Size
+		case SortByCount:
+			if a.ItemCount != b.ItemCount {
+				return a.ItemCount > b.ItemCount
+			}
+		default:
+			if va, vb := m.sizeValue(a), m.sizeValue(b); va != vb {
+				return va > vb
+			}
 		}
+		// Name is the deterministic tiebreak so equal keys keep a stable,
+		// predictable order across sorts.
+		return strings.ToLower(a.Name) < strings.ToLower(b.Name)
 	})
 	m.entries = out
 	if m.cursor >= len(out) {
@@ -415,11 +461,16 @@ func (m *AnalyzeModel) ensureVisible() {
 }
 
 func (m *AnalyzeModel) listHeight() int {
-	overhead := 5
+	// path, this-dir totals, stats, blank before list, blank before footer,
+	// footer.
+	overhead := 6
 	if m.unknown > 0 {
 		overhead++
 	}
 	if m.root != nil && len(m.root.SkippedMounts) > 0 {
+		overhead++
+	}
+	if len(m.footerLines()) > 1 {
 		overhead++
 	}
 	h := m.height - overhead
@@ -477,17 +528,18 @@ func truncatePath(p string, width int) string {
 
 func (m *AnalyzeModel) header() string {
 	free := "unknown"
-	if total, avail, err := statfs(m.dir.Path); err == nil {
-		free = fmt.Sprintf("%s free of %s", config.FormatBytes(int64(avail)), config.FormatBytes(int64(total)))
+	if m.dir != nil {
+		if total, avail, err := statfs(m.dir.Path); err == nil {
+			free = fmt.Sprintf("%s free of %s", config.FormatBytes(int64(avail)), config.FormatBytes(int64(total)))
+		}
 	}
-	cursorInfo := ""
-	if m.cursor < len(m.entries) {
-		n := m.entries[m.cursor]
-		cursorInfo = " · cursor " + m.sizeLabel(n)
+	line1 := ""
+	if m.dir != nil {
+		line1 = m.styles.header.Render(m.dir.Path)
 	}
-	line1 := m.styles.header.Render(m.dir.Path)
-	line2 := m.styles.subtle.Render(fmt.Sprintf("%s · %d item(s) · sort %s%s",
-		free, len(m.entries), m.sort, cursorInfo))
+	line2 := m.styles.subtle.Render(m.dirTotalsLine())
+	line3 := m.styles.subtle.Render(fmt.Sprintf("%s · %d item(s) · sort %s",
+		free, len(m.entries), m.sort))
 	var warn string
 	if m.unknown > 0 {
 		warn += m.styles.warn.Render(fmt.Sprintf(
@@ -497,7 +549,22 @@ func (m *AnalyzeModel) header() string {
 		warn += m.styles.warn.Render(fmt.Sprintf(
 			"skipped %d mount(s) on other filesystems: %s", len(m.root.SkippedMounts), skippedMountPaths(m.root.SkippedMounts))) + "\n"
 	}
-	return line1 + "\n" + warn + line2
+	return line1 + "\n" + warn + line2 + "\n" + line3
+}
+
+// dirTotalsLine states the size of the directory being explored and, when it
+// has a parent in the scanned tree, how much of that parent it accounts for.
+func (m *AnalyzeModel) dirTotalsLine() string {
+	if m.dir == nil {
+		return ""
+	}
+	line := "this dir: " + m.sizeLabel(m.dir)
+	if parent := m.parents[m.dir]; parent != nil {
+		if ps := m.sizeValue(parent); ps > 0 {
+			line += fmt.Sprintf(" (%.1f%% of parent)", float64(m.sizeValue(m.dir))*100/float64(ps))
+		}
+	}
+	return line
 }
 
 // skippedMountPaths renders the skipped mount points, bounded so a host with
@@ -515,6 +582,68 @@ func skippedMountPaths(skips []scan.SkippedMount) string {
 	return strings.Join(paths, ", ")
 }
 
+// rowLayout carries the columns that fit at the current terminal width. The
+// name column absorbs whatever is left; optional columns are dropped from the
+// right as the terminal narrows so the row never overflows.
+type rowLayout struct {
+	bar      bool
+	pct      bool
+	mtime    bool
+	count    bool
+	nameCols int
+}
+
+func (m *AnalyzeModel) rowLayout() rowLayout {
+	l := rowLayout{bar: true, pct: true, mtime: true, count: m.sort == SortByCount}
+	width := m.width
+	if width <= 0 {
+		width = 80
+	}
+	const (
+		// marker, space, [R], space, size, space.
+		baseCols = 1 + 1 + 3 + 1 + 10 + 1
+		pctCols  = 6 + 1
+		// "Jan 02 15:04" plus its separator.
+		mtimeCols = 12 + 1
+		countCols = 7 + 1
+		// "[##########]" plus its separator.
+		barCols = 10 + 2 + 1
+	)
+	fixed := baseCols + pctCols
+	if l.mtime {
+		fixed += mtimeCols
+	}
+	if l.count {
+		fixed += countCols
+	}
+	if l.bar {
+		fixed += barCols
+	}
+	name := width - fixed
+	const minName = 10
+	if name < minName && l.bar {
+		l.bar = false
+		name += barCols
+	}
+	if name < minName && l.mtime {
+		l.mtime = false
+		name += mtimeCols
+	}
+	if name < minName && l.count {
+		l.count = false
+		name += countCols
+	}
+	if name < minName && l.pct {
+		l.pct = false
+		name += pctCols
+	}
+	if name < 4 {
+		name = 4
+	}
+	l.nameCols = name
+	return l
+}
+
 func (m *AnalyzeModel) list() string {
 	if len(m.entries) == 0 {
 		return m.styles.subtle.Render("  (empty)")
@@ -530,10 +659,11 @@ func (m *AnalyzeModel) list() string {
 	if end > len(m.entries) {
 		end = len(m.entries)
 	}
+	layout := m.rowLayout()
 	var b strings.Builder
 	for i := m.offset; i < end; i++ {
 		n := m.entries[i]
-		b.WriteString(m.row(n, i == m.cursor, maxSize))
+		b.WriteString(m.row(n, i == m.cursor, maxSize, layout))
 		if i < end-1 {
 			b.WriteString("\n")
 		}
@@ -541,7 +671,7 @@ func (m *AnalyzeModel) list() string {
 	return b.String()
 }
 
-func (m *AnalyzeModel) row(n *scan.Node, cursor bool, maxSize int64) string {
+func (m *AnalyzeModel) row(n *scan.Node, cursor bool, maxSize int64, layout rowLayout) string {
 	marker := " "
 	if cursor {
 		marker = ">"
@@ -550,17 +680,27 @@ func (m *AnalyzeModel) row(n *scan.Node, cursor bool, maxSize int64) string {
 	if m.isCategoryRoot(n.Path) {
 		reclaim = "[R]"
 	}
-	bar := m.bar(n, maxSize)
-	size := fmt.Sprintf("%10s", m.sizeLabel(n))
+	var b strings.Builder
+	b.WriteString(marker + " " + reclaim + " ")
+	if layout.bar {
+		b.WriteString("[" + m.bar(n, maxSize) + "] ")
+	}
+	fmt.Fprintf(&b, "%10s ", m.sizeLabel(n))
+	if layout.pct {
+		fmt.Fprintf(&b, "%6s ", m.pctLabel(n))
+	}
+	if layout.mtime {
+		b.WriteString(padRight(mtimeLabel(n), 12) + " ")
+	}
+	if layout.count {
+		fmt.Fprintf(&b, "%7d ", n.ItemCount)
+	}
 	name := n.Name
 	if n.IsDir {
 		name += "/"
 	}
-	count := ""
-	if m.showCt {
-		count = fmt.Sprintf(" %d", n.ItemCount)
-	}
-	line := fmt.Sprintf("%s %s [%s] %s %s%s", marker, reclaim, bar, size, name, count)
+	b.WriteString(clip(name, layout.nameCols))
+	line := b.String()
 	if cursor {
 		return m.styles.cursor.Render(line)
 	}
@@ -568,6 +708,48 @@ func (m *AnalyzeModel) row(n *scan.Node, cursor bool, maxSize int64) string {
 		return m.styles.dir.Render(line)
 	}
 	return line
+}
+
+// pctLabel is this entry's share of the directory being displayed.
+func (m *AnalyzeModel) pctLabel(n *scan.Node) string {
+	if !n.SizeKnown {
+		return "-"
+	}
+	parent := m.sizeValue(m.dir)
+	if parent <= 0 {
+		return "-"
+	}
+	return fmt.Sprintf("%.1f%%", float64(m.sizeValue(n))*100/float64(parent))
+}
+
+// mtimeLabel renders the modification time that sort-by-mtime orders on.
+func mtimeLabel(n *scan.Node) string {
+	if n.Mtime.IsZero() {
+		return "\u2014"
+	}
+	return n.Mtime.Format("Jan 02 15:04")
+}
+
+// clip shortens s to width cells, marking the cut with an ellipsis.
+func clip(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= width {
+		return s
+	}
+	if width == 1 {
+		return "\u2026"
+	}
+	return string(r[:width-1]) + "\u2026"
+}
+
+func padRight(s string, width int) string {
+	if w := lipgloss.Width(s); w < width {
+		return s + strings.Repeat(" ", width-w)
+	}
+	return s
 }
 
 func (m *AnalyzeModel) bar(n *scan.Node, maxSize int64) string {
@@ -607,14 +789,115 @@ func (m *AnalyzeModel) isCategoryRoot(path string) bool {
 }
 
 func (m *AnalyzeModel) footer() string {
+	return strings.Join(m.footerLines(), "\n")
+}
+
+// footerLines renders the short help as at most two lines so the list keeps a
+// predictable height.
+func (m *AnalyzeModel) footerLines() []string {
 	if m.filtering {
-		return m.filter.View()
+		return []string{m.filter.View()}
 	}
-	return m.help.ShortHelpView(m.keys.shortHelp())
+	lines := renderKeyHelp(m.keys.shortHelp(), m.width)
+	for i := range lines {
+		lines[i] = m.styles.subtle.Render(lines[i])
+	}
+	return lines
 }
 
 func (m *AnalyzeModel) helpView() string {
 	return m.help.FullHelpView(m.keys.fullHelp())
+}
+
+// helpKey handles a key while the full help overlay is open. It reports whether
+// the overlay consumed the key. q and esc close the overlay rather than quit, so
+// the next q still reaches the quit binding.
+func helpKey(h *help.Model, msg tea.KeyMsg) bool {
+	if !h.ShowAll {
+		return false
+	}
+	switch msg.String() {
+	case "?", "esc", "q":
+		h.ShowAll = false
+	}
+	return true
+}
+
+// renderKeyHelp packs bindings into at most two lines of width columns. The last
+// two bindings (help and quit by convention) are always shown: they are how a
+// user reaches the bindings the footer could not fit, so the footer is never a
+// lie about what exists.
+func renderKeyHelp(bindings []key.Binding, width int) []string {
+	if width <= 0 {
+		width = 80
+	}
+	const sep = " \u00b7 "
+	var items []string
+	for _, kb := range bindings {
+		if !kb.Enabled() {
+			continue
+		}
+		items = append(items, kb.Help().Key+" "+kb.Help().Desc)
+	}
+	if len(items) == 0 {
+		return nil
+	}
+
+	head := items
+	tail := items[0]
+	if len(items) >= 2 {
+		head = items[:len(items)-2]
+		tail = items[len(items)-2] + sep + items[len(items)-1]
+	}
+	if len(head) == 0 {
+		return []string{clip(tail, width)}
+	}
+	tailReserve := lipgloss.Width(sep) + lipgloss.Width(tail)
+	if tailReserve+8 > width {
+		return []string{clip(strings.Join(items, sep), width)}
+	}
+
+	var lines []string
+	cur := ""
+	for _, it := range head {
+		limit := width
+		if len(lines) == 1 {
+			limit = width - tailReserve
+		}
+		cand := it
+		if cur != "" {
+			cand = cur + sep + it
+		}
+		if lipgloss.Width(cand) <= limit {
+			cur = cand
+			continue
+		}
+		if cur != "" {
+			lines = append(lines, cur)
+			cur = clip(it, limit)
+			if len(lines) == 2 {
+				cur = ""
+				break
+			}
+			continue
+		}
+		cur = clip(it, limit)
+	}
+	if cur != "" {
+		lines = append(lines, cur)
+	}
+
+	switch len(lines) {
+	case 0:
+		return []string{clip(tail, width)}
+	case 1:
+		if joined := lines[0] + sep + tail; lipgloss.Width(joined) <= width {
+			return []string{joined}
+		}
+		return []string{lines[0], tail}
+	default:
+		return []string{lines[0], lines[1] + sep + tail}
+	}
 }
 
 // statfs returns total and available bytes for the filesystem holding path.
@@ -630,42 +913,62 @@ func statfs(path string) (total, avail uint64, err error) {
 type keyMap struct {
 	Up        key.Binding
 	Down      key.Binding
+	PageUp    key.Binding
+	PageDown  key.Binding
+	Top       key.Binding
+	Bottom    key.Binding
 	Enter     key.Binding
 	Parent    key.Binding
 	SortSize  key.Binding
 	SortName  key.Binding
 	SortMtime key.Binding
-	Count     key.Binding
+	SortCount key.Binding
 	Filter    key.Binding
 	Help      key.Binding
 	Quit      key.Binding
 }
 
+// Rationale for the shared keymap: enter means "act on the selected row" and
+// →/← mean navigation in both the analyze and clean models, so muscle memory
+// carries between them.
 func defaultKeys() keyMap {
 	return keyMap{
-		Up:        key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
-		Down:      key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
-		Enter:     key.NewBinding(key.WithKeys("right", "l", "enter"), key.WithHelp("→/l", "enter")),
-		Parent:    key.NewBinding(key.WithKeys("left", "h"), key.WithHelp("←/h", "parent")),
+		Up:        key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("\u2191/k", "up")),
+		Down:      key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("\u2193/j", "down")),
+		PageUp:    key.NewBinding(key.WithKeys("pgup", "ctrl+b"), key.WithHelp("pgup/^b", "page up")),
+		PageDown:  key.NewBinding(key.WithKeys("pgdown", "ctrl+f"), key.WithHelp("pgdn/^f", "page down")),
+		Top:       key.NewBinding(key.WithKeys("g", "home"), key.WithHelp("g/home", "top")),
+		Bottom:    key.NewBinding(key.WithKeys("G", "end"), key.WithHelp("G/end", "bottom")),
+		Enter:     key.NewBinding(key.WithKeys("enter", "right", "l"), key.WithHelp("enter/\u2192/l", "open dir")),
+		Parent:    key.NewBinding(key.WithKeys("left", "h"), key.WithHelp("\u2190/h", "back")),
 		SortSize:  key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "sort size")),
 		SortName:  key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "sort name")),
 		SortMtime: key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "sort mtime")),
-		Count:     key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "item count")),
+		SortCount: key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "sort count")),
 		Filter:    key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
-		Help:      key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
+		Help:      key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "all keys")),
 		Quit:      key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
 	}
 }
 
+// shortHelp lists every binding in a compact order: navigation, sorting, then
+// the paging keys. renderKeyHelp wraps it to two lines and always keeps the
+// help and quit bindings.
 func (k keyMap) shortHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Down, k.Enter, k.Parent, k.SortSize, k.Filter, k.Help, k.Quit}
+	return []key.Binding{
+		k.Up, k.Down, k.Enter, k.Parent,
+		k.SortSize, k.SortName, k.SortMtime, k.SortCount,
+		k.Filter, k.PageUp, k.PageDown, k.Top, k.Bottom,
+		k.Help, k.Quit,
+	}
 }
 
 func (k keyMap) fullHelp() [][]key.Binding {
 	return [][]key.Binding{
-		{k.Up, k.Down, k.Enter, k.Parent},
-		{k.SortSize, k.SortName, k.SortMtime, k.Count, k.Filter},
-		{k.Help, k.Quit},
+		{k.Up, k.Down, k.PageUp, k.PageDown, k.Top, k.Bottom},
+		{k.Enter, k.Parent},
+		{k.SortSize, k.SortName, k.SortMtime, k.SortCount},
+		{k.Filter, k.Help, k.Quit},
 	}
 }
 
