@@ -262,6 +262,187 @@ func ids(items []*engine.PlannedItem) []string {
 	return out
 }
 
+// probeCategory records whether its Discover ran, so tests can prove that
+// --only scopes discovery instead of filtering after the fact.
+type probeCategory struct {
+	id         string
+	discovered *bool
+	targets    []engine.Target
+}
+
+func (c probeCategory) ID() string          { return c.id }
+func (c probeCategory) Title() string       { return strings.ToUpper(c.id) }
+func (c probeCategory) PreviewNote() string { return "note-" + c.id }
+func (c probeCategory) Discover(context.Context, *engine.Env) ([]engine.Target, error) {
+	*c.discovered = true
+	return c.targets, nil
+}
+
+func catTarget(cat, item string) engine.Target {
+	t := target(cat+"."+item, engine.RiskLow, true, "")
+	t.Category = cat
+	return t
+}
+
+func TestBuildOnlyScopesDiscovery(t *testing.T) {
+	env := testEnv(t, true)
+	devRan, sysRan := false, false
+	dev := probeCategory{id: "dev", discovered: &devRan, targets: []engine.Target{catTarget("dev", "npm")}}
+	sys := probeCategory{id: "system", discovered: &sysRan, targets: []engine.Target{catTarget("system", "pkg-cache")}}
+
+	plan, err := engine.Build(context.Background(), env, engine.Options{
+		Categories: []engine.Category{dev, sys},
+		Only:       []string{"dev"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !devRan {
+		t.Fatal("dev.Discover did not run under --only dev")
+	}
+	if sysRan {
+		t.Fatal("system.Discover ran under --only dev; --only must scope discovery")
+	}
+	if got := ids(plan.Items); len(got) != 1 || got[0] != "dev.npm" {
+		t.Fatalf("items = %v, want [dev.npm]", got)
+	}
+}
+
+func TestBuildOnlyItemSelectorStillNarrowsItems(t *testing.T) {
+	env := testEnv(t, true)
+	devRan, sysRan := false, false
+	dev := probeCategory{id: "dev", discovered: &devRan, targets: []engine.Target{catTarget("dev", "npm")}}
+	sys := probeCategory{id: "system", discovered: &sysRan, targets: []engine.Target{
+		catTarget("system", "pkg-cache"),
+		catTarget("system", "journald"),
+	}}
+
+	plan, err := engine.Build(context.Background(), env, engine.Options{
+		Categories: []engine.Category{dev, sys},
+		Only:       []string{"system.journald"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if devRan {
+		t.Fatal("dev.Discover ran under --only system.journald")
+	}
+	if !sysRan {
+		t.Fatal("system.Discover did not run under --only system.journald")
+	}
+	if got := ids(plan.Items); len(got) != 1 || got[0] != "system.journald" {
+		t.Fatalf("items = %v, want [system.journald]", got)
+	}
+}
+
+func TestBuildOnlyNoCategoryMatchWarns(t *testing.T) {
+	env := testEnv(t, true)
+	dev := probeCategory{id: "dev", discovered: new(bool), targets: []engine.Target{catTarget("dev", "npm")}}
+
+	plan, err := engine.Build(context.Background(), env, engine.Options{
+		Categories: []engine.Category{dev},
+		Only:       []string{"nope"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Items) != 0 {
+		t.Fatalf("items = %v, want none", ids(plan.Items))
+	}
+	if len(plan.Warnings) != 1 || !strings.Contains(plan.Warnings[0], "no category matched --only nope") {
+		t.Fatalf("warnings = %v, want the no-category-match note", plan.Warnings)
+	}
+}
+
+func TestBuildOnlyForeignItemPrefixStillMatches(t *testing.T) {
+	// desktop-pkgs items are flatpak.*/snap.*, so a selector prefix that is not
+	// a category id must not skip discovery nor drop the item.
+	env := testEnv(t, true)
+	devRan, deskRan := false, false
+	dev := probeCategory{id: "dev", discovered: &devRan, targets: []engine.Target{catTarget("dev", "npm")}}
+	desk := probeCategory{id: "desktop-pkgs", discovered: &deskRan, targets: []engine.Target{
+		catTarget("flatpak", "unused"),
+	}}
+	desk.targets[0].Category = "desktop-pkgs"
+
+	plan, err := engine.Build(context.Background(), env, engine.Options{
+		Categories: []engine.Category{dev, desk},
+		Only:       []string{"flatpak.unused"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !deskRan {
+		t.Fatal("desktop-pkgs.Discover did not run for --only flatpak.unused")
+	}
+	if !devRan {
+		t.Fatal("an unknown selector prefix must not skip discovery of other categories")
+	}
+	if got := ids(plan.Items); len(got) != 1 || got[0] != "flatpak.unused" {
+		t.Fatalf("items = %v, want [flatpak.unused]", got)
+	}
+	if len(plan.Warnings) != 0 {
+		t.Fatalf("unexpected warnings: %v", plan.Warnings)
+	}
+}
+
+// hookCategory implements Reconciler and Warner and records reconcile calls.
+type hookCategory struct {
+	warns      []string
+	reconciles int
+}
+
+func (c *hookCategory) ID() string          { return "hook" }
+func (c *hookCategory) Title() string       { return "Hook" }
+func (c *hookCategory) PreviewNote() string { return "" }
+func (c *hookCategory) Discover(context.Context, *engine.Env) ([]engine.Target, error) {
+	return nil, nil
+}
+func (c *hookCategory) Reconcile(plan *engine.Plan) {
+	c.reconciles++
+	for _, it := range plan.Items {
+		it.Selected = false
+	}
+}
+func (c *hookCategory) Warnings() []string { return c.warns }
+
+func TestApplyHooksReconcilesEveryCallAndMergesWarningsOnce(t *testing.T) {
+	plan := &engine.Plan{Items: []*engine.PlannedItem{
+		{Target: engine.Target{ID: "hook.x"}, Selected: true},
+	}}
+	cat := &hookCategory{warns: []string{"root missing"}}
+	engine.ApplyHooks([]engine.Category{cat}, plan)
+	engine.ApplyHooks([]engine.Category{cat}, plan)
+	// Reconcile must run on every call: the CLI calls ApplyHooks again after
+	// the interactive selection so a superset item can supersede picked items.
+	if cat.reconciles != 2 {
+		t.Fatalf("Reconcile ran %d times, want 2", cat.reconciles)
+	}
+	if len(plan.Warnings) != 1 || plan.Warnings[0] != "root missing" {
+		t.Fatalf("warnings = %v, want one merged note", plan.Warnings)
+	}
+	if plan.Items[0].Selected {
+		t.Fatal("Reconcile did not run")
+	}
+}
+
+func TestRecoveryDeleteContract(t *testing.T) {
+	if got := engine.RecoveryDelete.String(); got != "delete" {
+		t.Fatalf("RecoveryDelete.String() = %q, want delete", got)
+	}
+	if !engine.RecoveryDelete.Valid() {
+		t.Fatal("RecoveryDelete must be a valid contract")
+	}
+	tgt := engine.Target{
+		ID:       "trash.empty",
+		Recovery: engine.RecoveryDelete,
+		Action:   fakeAction{recovery: engine.RecoveryDelete},
+	}
+	if err := tgt.Validate(); err != nil {
+		t.Fatalf("delete-contract target without a path must validate: %v", err)
+	}
+}
+
 func TestRegenString(t *testing.T) {
 	cases := map[engine.Regen]string{
 		engine.RegenFree:      "free",

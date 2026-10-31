@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -40,6 +39,10 @@ type Plan struct {
 	Command  string
 	Items    []*PlannedItem
 	Warnings []string
+
+	// hooksApplied records that ApplyHooks ran, so a second call neither
+	// re-reconciles nor duplicates category warnings.
+	hooksApplied bool
 }
 
 // Totals summarizes a set of items.
@@ -111,10 +114,6 @@ func TotalsOf(items []*PlannedItem) Totals {
 // SelectedTotals sums the selected items.
 func (p *Plan) SelectedTotals() Totals { return TotalsOf(p.Selected()) }
 
-// GroupedByCategory returns items grouped by category, preserving plan order.
-// It is GroupedTree without the sub-group detail.
-func (p *Plan) GroupedByCategory() []CategoryGroup { return p.GroupedTree() }
-
 // GroupedTree returns items as category -> optional group -> item, preserving
 // plan order at every level. The grouping is presentation-only; it never
 // changes which targets execute or how.
@@ -164,7 +163,9 @@ func (p *Plan) GroupedTree() []CategoryGroup {
 }
 
 // Build runs steps 2-5: discover (parallel, per-category timeout), measure,
-// filter, and plan. It never mutates the filesystem (invariant I1).
+// filter, and plan. Discovery is limited to categories --only can match, so a
+// narrow selector does not pay for scanning unrelated roots. It never mutates
+// the filesystem (invariant I1).
 func Build(ctx context.Context, env *Env, opts Options) (*Plan, error) {
 	if opts.Command == "" {
 		opts.Command = "clean"
@@ -174,15 +175,17 @@ func Build(ctx context.Context, env *Env, opts Options) (*Plan, error) {
 	}
 	plan := &Plan{RunID: journal.NewRunID(), Command: opts.Command}
 
+	cats, scoped := discoverableCategories(opts)
+
 	type discovered struct {
 		cat     Category
 		targets []Target
 		err     error
 	}
-	results := make(map[string]discovered, len(opts.Categories))
-	ch := make(chan discovered, len(opts.Categories))
+	results := make(map[string]discovered, len(cats))
+	ch := make(chan discovered, len(cats))
 	var wg sync.WaitGroup
-	for _, cat := range opts.Categories {
+	for _, cat := range cats {
 		if !categoryIncluded(cat.ID(), opts.Exclude) {
 			continue
 		}
@@ -202,7 +205,7 @@ func Build(ctx context.Context, env *Env, opts Options) (*Plan, error) {
 	}
 
 	// Step 2/3/4/5 in category order for a stable plan.
-	for _, cat := range opts.Categories {
+	for _, cat := range cats {
 		if !categoryIncluded(cat.ID(), opts.Exclude) {
 			continue
 		}
@@ -241,7 +244,75 @@ func Build(ctx context.Context, env *Env, opts Options) (*Plan, error) {
 			plan.Items = append(plan.Items, item)
 		}
 	}
+	if len(opts.Only) > 0 && !scoped && len(plan.Items) == 0 {
+		plan.Warnings = append(plan.Warnings, fmt.Sprintf("no category matched --only %s", strings.Join(opts.Only, ", ")))
+	}
 	return plan, nil
+}
+
+// ApplyHooks runs the optional category hooks against plan: every Reconciler
+// reconciles the plan, then every Warner's warnings are appended to
+// plan.Warnings. Reconciliation always runs (it must be idempotent, and the
+// CLI calls ApplyHooks again after the interactive selection so a superset item
+// can supersede items the user picked); warnings are appended only once.
+func ApplyHooks(cats []Category, plan *Plan) {
+	if plan == nil {
+		return
+	}
+	for _, c := range cats {
+		if rec, ok := c.(Reconciler); ok {
+			rec.Reconcile(plan)
+		}
+	}
+	if plan.hooksApplied {
+		return
+	}
+	plan.hooksApplied = true
+	for _, c := range cats {
+		if w, ok := c.(Warner); ok {
+			plan.Warnings = append(plan.Warnings, w.Warnings()...)
+		}
+	}
+}
+
+// discoverableCategories narrows the category list to the ones --only can
+// match. A selector's category is everything before its first dot, and a bare
+// selector is itself a category id. Item-level narrowing stays in includeTarget.
+//
+// scoped is false when discovery had to cover every category: no selector
+// prefix matched a category id, yet an item id does not always share its
+// category's prefix (desktop-pkgs items are flatpak.*/snap.*), so skipping
+// discovery could silently drop a real match.
+func discoverableCategories(opts Options) (cats []Category, scoped bool) {
+	if len(opts.Only) == 0 {
+		return opts.Categories, true
+	}
+	known := make(map[string]bool, len(opts.Categories))
+	for _, c := range opts.Categories {
+		known[c.ID()] = true
+	}
+	prefixes := make(map[string]bool, len(opts.Only))
+	unknown := false
+	for _, s := range opts.Only {
+		cat, _, _ := strings.Cut(s, ".")
+		if cat == "" {
+			continue
+		}
+		prefixes[cat] = true
+		if !known[cat] {
+			unknown = true
+		}
+	}
+	if unknown || len(prefixes) == 0 {
+		return opts.Categories, false
+	}
+	var matched []Category
+	for _, c := range opts.Categories {
+		if prefixes[c.ID()] {
+			matched = append(matched, c)
+		}
+	}
+	return matched, true
 }
 
 // categoryIncluded reports whether a category survives --exclude at the
@@ -474,16 +545,4 @@ func FreeBytes(path string) uint64 {
 		return 0
 	}
 	return st.Bavail * uint64(st.Bsize)
-}
-
-// SortItemsBySize orders items largest-first, unknown sizes last. It is used by
-// the preview so the biggest wins are visible first.
-func SortItemsBySize(items []*PlannedItem) {
-	sort.SliceStable(items, func(i, j int) bool {
-		a, b := items[i].Target, items[j].Target
-		if a.SizeKnown != b.SizeKnown {
-			return a.SizeKnown
-		}
-		return a.SizeBytes > b.SizeBytes
-	})
 }
