@@ -9,6 +9,7 @@ package tui
 import (
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 
 	"github.com/brandtg/burrow/internal/catalog/projects"
@@ -142,10 +143,19 @@ func reviewText(plan *engine.Plan, dryRun bool) string {
 	return b.String()
 }
 
-// RenderSummary writes the per-item results, totals, and journal path.
+// RenderSummary writes the per-item results, totals, and journal path. The
+// display column is width-aligned across the actual results (not a fixed
+// width) so one long display name cannot desync the table.
 func RenderSummary(w io.Writer, sum *engine.Summary, color bool) {
-	for _, it := range sum.Executed() {
-		fmt.Fprintf(w, "  %-28s %s%s\n", it.Target.Display, statusLabel(it, color), reasonSuffix(it))
+	items := sum.Executed()
+	width := 0
+	for _, it := range items {
+		if n := displayWidth(it.Target.Display); n > width {
+			width = n
+		}
+	}
+	for _, it := range items {
+		fmt.Fprintf(w, "  %-*s %s%s\n", width, it.Target.Display, statusLabel(it, color), reasonSuffix(it))
 	}
 	freed := "unknown"
 	if sum.FreedKnown || sum.Freed > 0 {
@@ -354,6 +364,7 @@ type CleanModel struct {
 
 	collapsedCat map[string]bool
 	collapsedGrp map[string]bool
+	sortByName   bool
 
 	filter    textinput.Model
 	filtering bool
@@ -362,6 +373,9 @@ type CleanModel struct {
 	confirmed bool
 	aborted   bool
 	status    string
+
+	// reviewOffset is the first visible line of the review screen's text.
+	reviewOffset int
 
 	help   help.Model
 	keys   cleanKeyMap
@@ -437,10 +451,7 @@ func (m *CleanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *CleanModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if m.help.ShowAll {
-		if msg.String() == "?" || msg.String() == "esc" || msg.String() == "q" {
-			m.help.ShowAll = false
-		}
+	if helpKey(&m.help, msg) {
 		return m, nil
 	}
 	if m.filtering {
@@ -472,6 +483,19 @@ func (m *CleanModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "q", "ctrl+c":
 			m.aborted = true
 			return m, tea.Quit
+		case "down", "j":
+			m.reviewOffset++
+		case "up", "k":
+			m.reviewOffset--
+		case "pgdown":
+			m.reviewOffset += m.reviewHeight()
+		case "pgup":
+			m.reviewOffset -= m.reviewHeight()
+		case "g", "home":
+			m.reviewOffset = 0
+		case "G", "end":
+			// Clamped against the line count when rendered.
+			m.reviewOffset = 1 << 30
 		}
 		return m, nil
 	}
@@ -504,6 +528,8 @@ func (m *CleanModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.selectAll()
 	case key.Matches(msg, m.keys.Clear):
 		m.clearAll()
+	case key.Matches(msg, m.keys.SortName):
+		m.toggleSort()
 	case key.Matches(msg, m.keys.Keep):
 		m.keep()
 	case key.Matches(msg, m.keys.Filter):
@@ -511,6 +537,7 @@ func (m *CleanModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.filter.Focus()
 	case key.Matches(msg, m.keys.Review):
 		m.screen = 1
+		m.reviewOffset = 0
 	}
 	return m, nil
 }
@@ -715,10 +742,27 @@ func matchCleanItem(it *engine.PlannedItem, q string) bool {
 		strings.Contains(strings.ToLower(it.Target.Path), q)
 }
 
+// toggleSort switches the row order between name and the plan's natural order
+// (category, then discovery order). The cursor stays on the same row.
+func (m *CleanModel) toggleSort() {
+	m.sortByName = !m.sortByName
+	m.rebuildRows()
+}
+
 func (m *CleanModel) rebuildRows() {
 	q := strings.ToLower(strings.TrimSpace(m.filter.Value()))
+	prev, hadPrev := m.currentRow()
+	catOrder := make([]int, len(m.cats))
+	for i := range catOrder {
+		catOrder[i] = i
+	}
+	if m.sortByName {
+		sort.SliceStable(catOrder, func(i, j int) bool {
+			return strings.ToLower(m.cats[catOrder[i]].Title) < strings.ToLower(m.cats[catOrder[j]].Title)
+		})
+	}
 	m.rows = nil
-	for ci := range m.cats {
+	for _, ci := range catOrder {
 		cat := &m.cats[ci]
 		type visibleGroup struct {
 			group *engine.ItemGroup
@@ -741,6 +785,16 @@ func (m *CleanModel) rebuildRows() {
 		if len(vgs) == 0 {
 			continue
 		}
+		if m.sortByName {
+			sort.SliceStable(vgs, func(i, j int) bool {
+				return strings.ToLower(vgs[i].group.Title) < strings.ToLower(vgs[j].group.Title)
+			})
+			for _, v := range vgs {
+				sort.SliceStable(v.items, func(i, j int) bool {
+					return strings.ToLower(v.items[i].Target.Display) < strings.ToLower(v.items[j].Target.Display)
+				})
+			}
+		}
 		m.rows = append(m.rows, cleanRow{kind: rowCategory, cat: cat})
 		if m.collapsedCat[cat.ID] && q == "" {
 			continue
@@ -761,8 +815,39 @@ func (m *CleanModel) rebuildRows() {
 			}
 		}
 	}
+	if hadPrev {
+		for i, r := range m.rows {
+			if sameRow(r, prev) {
+				m.cursor = i
+				break
+			}
+		}
+	}
 	m.clampCursor()
 	m.ensureVisible()
+}
+
+// currentRow returns the row under the cursor, if any.
+func (m *CleanModel) currentRow() (cleanRow, bool) {
+	if m.cursor < 0 || m.cursor >= len(m.rows) {
+		return cleanRow{}, false
+	}
+	return m.rows[m.cursor], true
+}
+
+// sameRow reports whether two rows point at the same plan entry.
+func sameRow(a, b cleanRow) bool {
+	if a.kind != b.kind {
+		return false
+	}
+	switch a.kind {
+	case rowCategory:
+		return a.cat == b.cat
+	case rowGroup:
+		return a.cat == b.cat && a.group == b.group
+	default:
+		return a.item == b.item
+	}
 }
 
 func (m *CleanModel) ensureVisible() {
@@ -785,7 +870,13 @@ func (m *CleanModel) ensureVisible() {
 }
 
 func (m *CleanModel) listHeight() int {
-	h := m.height - 6
+	// Two header lines, a blank line before the list, a blank line before the
+	// footer, and the footer (plus the status line when there is one).
+	overhead := 4 + len(m.footerLines())
+	if m.status != "" {
+		overhead++
+	}
+	h := m.height - overhead
 	if h < 1 {
 		h = 1
 	}
@@ -819,9 +910,13 @@ func (m *CleanModel) header() string {
 	if m.dryRun {
 		mode = " \u00b7 dry-run"
 	}
+	sortLabel := "default"
+	if m.sortByName {
+		sortLabel = "name"
+	}
 	line2 := m.styles.subtle.Render(fmt.Sprintf(
-		"%d category(ies) \u00b7 %d item(s) \u00b7 selected %s across %d%s",
-		len(m.cats), len(m.plan.Items), config.FormatBytes(t.Bytes), t.Count, mode))
+		"%d category(ies) \u00b7 %d item(s) \u00b7 selected %s across %d \u00b7 sort %s%s",
+		len(m.cats), len(m.plan.Items), config.FormatBytes(t.Bytes), t.Count, sortLabel, mode))
 	return line1 + "\n" + line2
 }
 
@@ -900,21 +995,66 @@ func selectionMark(items []*engine.PlannedItem) string {
 }
 
 func (m *CleanModel) reviewView() string {
+	lines := strings.Split(reviewText(m.plan, m.dryRun), "\n")
+	height := m.reviewHeight()
+	m.clampReviewOffset(len(lines), height)
+	start, end := m.reviewOffset, m.reviewOffset+height
+	if end > len(lines) {
+		end = len(lines)
+	}
 	var b strings.Builder
-	b.WriteString(reviewText(m.plan, m.dryRun))
-	b.WriteString("\nenter confirm  esc back  q quit\n")
+	if m.platform != "" {
+		b.WriteString(m.styles.header.Render(m.platform) + "\n\n")
+	}
+	for _, l := range lines[start:end] {
+		b.WriteString(l + "\n")
+	}
+	foot := "enter confirm  esc back  q quit"
+	if height < len(lines) {
+		foot = fmt.Sprintf("%d\u2013%d of %d \u00b7 j/k scroll \u00b7 %s", start+1, end, len(lines), foot)
+	}
+	b.WriteString("\n" + m.styles.subtle.Render(foot))
 	return b.String()
 }
 
+// reviewHeight is the number of review lines that fit between the platform
+// header and the footer.
+func (m *CleanModel) reviewHeight() int {
+	h := m.height - 6
+	if h < 3 {
+		h = 3
+	}
+	return h
+}
+
+func (m *CleanModel) clampReviewOffset(n, height int) {
+	if m.reviewOffset > n-height {
+		m.reviewOffset = n - height
+	}
+	if m.reviewOffset < 0 {
+		m.reviewOffset = 0
+	}
+}
+
 func (m *CleanModel) footer() string {
-	if m.filtering {
-		return m.filter.View()
-	}
-	line := m.help.ShortHelpView(m.keys.shortHelp())
+	out := strings.Join(m.footerLines(), "\n")
 	if m.status != "" {
-		return line + "\n" + m.styles.subtle.Render(m.status)
+		out += "\n" + m.styles.subtle.Render(m.status)
 	}
-	return line
+	return out
+}
+
+// footerLines renders the short help as at most two lines so the list keeps a
+// predictable height.
+func (m *CleanModel) footerLines() []string {
+	if m.filtering {
+		return []string{m.filter.View()}
+	}
+	lines := renderKeyHelp(m.keys.shortHelp(), m.width)
+	for i := range lines {
+		lines[i] = m.styles.subtle.Render(lines[i])
+	}
+	return lines
 }
 
 type cleanKeyMap struct {
@@ -929,6 +1069,7 @@ type cleanKeyMap struct {
 	Collapse  key.Binding
 	SelectAll key.Binding
 	Clear     key.Binding
+	SortName  key.Binding
 	Keep      key.Binding
 	Filter    key.Binding
 	Review    key.Binding
@@ -936,6 +1077,9 @@ type cleanKeyMap struct {
 	Quit      key.Binding
 }
 
+// Shared keymap rationale: enter acts on the selected row (here: opens the
+// review screen) and →/← navigate the tree in both models. n means sort by name
+// in both models, so select-none moved to N.
 func defaultCleanKeys() cleanKeyMap {
 	return cleanKeyMap{
 		Up:        key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("\u2191/k", "up")),
@@ -945,29 +1089,37 @@ func defaultCleanKeys() cleanKeyMap {
 		Top:       key.NewBinding(key.WithKeys("g", "home"), key.WithHelp("g/home", "top")),
 		Bottom:    key.NewBinding(key.WithKeys("G", "end"), key.WithHelp("G/end", "bottom")),
 		Toggle:    key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "toggle")),
-		Expand:    key.NewBinding(key.WithKeys("right", "l", "tab"), key.WithHelp("\u2192/l", "expand")),
+		Expand:    key.NewBinding(key.WithKeys("right", "l"), key.WithHelp("\u2192/l", "expand")),
 		Collapse:  key.NewBinding(key.WithKeys("left", "h"), key.WithHelp("\u2190/h", "collapse")),
-		SelectAll: key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "all-safe")),
-		Clear:     key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "none")),
+		SelectAll: key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "all safe")),
+		Clear:     key.NewBinding(key.WithKeys("N"), key.WithHelp("N", "none")),
+		SortName:  key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "sort name")),
 		// Shift-K: lowercase k is the vim "up" binding, so the whitelist key
 		// must be distinct or it is unreachable.
 		Keep:   key.NewBinding(key.WithKeys("K"), key.WithHelp("K", "keep")),
 		Filter: key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search")),
-		Review: key.NewBinding(key.WithKeys("enter", "r"), key.WithHelp("enter", "review")),
-		Help:   key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
+		Review: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "review")),
+		Help:   key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "all keys")),
 		Quit:   key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
 	}
 }
 
+// shortHelp lists the most-used bindings compactly. renderKeyHelp wraps it to
+// two lines; when it cannot fit, the footer says "? all keys", which lists the
+// rest (page keys, g/G) in the full help view.
 func (k cleanKeyMap) shortHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Down, k.PageUp, k.PageDown, k.Toggle, k.SelectAll, k.Keep, k.Filter, k.Review, k.Help, k.Quit}
+	return []key.Binding{
+		k.Up, k.Down, k.Toggle, k.Expand, k.Collapse,
+		k.SortName, k.SelectAll, k.Clear, k.Keep, k.Filter,
+		k.Review, k.Help, k.Quit,
+	}
 }
 
 func (k cleanKeyMap) fullHelp() [][]key.Binding {
 	return [][]key.Binding{
-		{k.Up, k.Down, k.PageUp, k.PageDown, k.Top, k.Bottom, k.Expand, k.Collapse},
-		{k.Toggle, k.SelectAll, k.Clear, k.Filter},
-		{k.Keep, k.Review, k.Help, k.Quit},
+		{k.Up, k.Down, k.PageUp, k.PageDown, k.Top, k.Bottom},
+		{k.Expand, k.Collapse, k.Toggle, k.SelectAll, k.Clear},
+		{k.SortName, k.Keep, k.Filter, k.Review, k.Help, k.Quit},
 	}
 }
 

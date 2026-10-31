@@ -22,7 +22,7 @@ func TestAnalyzeFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	node, err := scan.Analyze(context.Background(), root, scan.Options{})
+	node, err := scan.Default().Scan(context.Background(), root, scan.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func TestAnalyzeFixture(t *testing.T) {
 func TestAnalyzeCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := scan.Analyze(ctx, t.TempDir(), scan.Options{}); err == nil {
+	if _, err := scan.Default().Scan(ctx, t.TempDir(), scan.Options{}); err == nil {
 		t.Fatal("expected canceled context to fail")
 	}
 }

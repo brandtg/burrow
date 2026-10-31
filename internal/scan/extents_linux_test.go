@@ -49,7 +49,7 @@ func TestReflinkSharedExtentsNotDoubleCounted(t *testing.T) {
 	}
 	oneCopy := fi.Size()
 
-	n, err := Analyze(context.Background(), dir, Options{})
+	n, err := Default().Scan(context.Background(), dir, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
