@@ -80,9 +80,9 @@ func FormatBytes(n int64) string {
 		return fmt.Sprintf("%d B", n)
 	}
 	div, exp := int64(unit), 0
-	for v := n / unit; v >= unit; v /= unit {
+	for v := n / unit; v >= unit && exp < len("KMGT")+1; v /= unit {
 		div *= unit
 		exp++
 	}
-	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGT"[exp])
+	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
 }
