@@ -1,4 +1,4 @@
-package purge
+package projects
 
 import (
 	"context"
@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/brandtg/burrow/internal/owner"
-	"github.com/brandtg/burrow/internal/safe"
 )
 
 // Options controls discovery.
@@ -155,12 +154,6 @@ func classify(ctx context.Context, p, pattern, root string, opts Options, git *g
 	now := opts.Now
 	if now.IsZero() {
 		now = time.Now()
-	}
-
-	if snap, err := safe.TakeSnapshot(p); err == nil {
-		a.Snapshot = snap
-	} else {
-		a.KeepReason = firstReason(a.KeepReason, "cannot snapshot: "+err.Error())
 	}
 
 	size, newest, hasGit, ok := measure(ctx, p, opts.ScanTimeout)

@@ -41,7 +41,7 @@ func (*Category) Title() string { return "Containers" }
 
 // PreviewNote is the category guidance shown in the preview.
 func (*Category) PreviewNote() string {
-	return "Container runtime caches and unused images. Owner commands; reclaimed state is re-downloadable. Volumes can hold data, not cache."
+	return "Container runtime caches and unused images, shown only when docker or podman is installed. Owner commands; reclaimed state is re-downloadable. Volumes and system-wide prunes can hold data and stay off."
 }
 
 // Discover enumerates container targets. The docker items are only offered when

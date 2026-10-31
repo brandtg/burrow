@@ -5,21 +5,26 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/brandtg/burrow/internal/safe"
 )
 
 func TestDefaults(t *testing.T) {
 	c := Default()
-	if c.General.Color != "auto" || c.General.LogLevel != "info" {
+	if c.General.Color != "auto" {
 		t.Fatalf("unexpected general defaults: %+v", c.General)
 	}
-	if c.Clean.JournaldMaxSize != "500M" {
+	if c.Clean.JournaldMaxSize != DefaultJournaldMaxSize {
 		t.Fatalf("journald size = %q", c.Clean.JournaldMaxSize)
-	}
-	if c.Trash.Backend != "native" {
-		t.Fatalf("trash backend = %q", c.Trash.Backend)
 	}
 	if len(c.Analyze.Ignore) == 0 || !c.Analyze.OneFileSystem {
 		t.Fatalf("unexpected analyze defaults: %+v", c.Analyze)
+	}
+	if len(c.Downloads.InstallerExtensions) != len(DefaultInstallerExtensions) {
+		t.Fatalf("downloads extensions = %v", c.Downloads.InstallerExtensions)
+	}
+	if c.Downloads.InstallerMinAge != DefaultInstallerMinAge || c.Downloads.OldMinAge != DefaultOldMinAge || c.Downloads.OldMinSize != DefaultOldMinSize {
+		t.Fatalf("downloads defaults = %+v", c.Downloads)
 	}
 }
 
@@ -37,7 +42,7 @@ func TestLoadMergesOverDefaults(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	content := `
 [general]
-log_level = "debug"
+color = "never"
 
 [clean]
 min_size = "10M"
@@ -49,17 +54,14 @@ min_size = "10M"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.General.LogLevel != "debug" {
-		t.Fatalf("log_level = %q", c.General.LogLevel)
-	}
-	if c.General.Color != "auto" {
-		t.Fatalf("unspecified field lost its default: %q", c.General.Color)
+	if c.General.Color != "never" {
+		t.Fatalf("color = %q", c.General.Color)
 	}
 	if c.Clean.MinSize != "10M" {
 		t.Fatalf("min_size = %q", c.Clean.MinSize)
 	}
-	if c.Trash.Backend != "native" {
-		t.Fatalf("trash default lost: %q", c.Trash.Backend)
+	if c.Clean.JournaldMaxSize != DefaultJournaldMaxSize {
+		t.Fatalf("unspecified field lost its default: %q", c.Clean.JournaldMaxSize)
 	}
 }
 
@@ -69,7 +71,7 @@ func TestApplyEnvOverrides(t *testing.T) {
 		"BURROW_COLOR":           "never",
 		"BURROW_MIN_SIZE":        "5M",
 		"BURROW_PROTECTED_PATHS": "/a,/b",
-		"BURROW_TRASH_BACKEND":   "external",
+		"BURROW_PROJECT_PATHS":   "/p,/q",
 	}
 	c.ApplyEnv(func(k string) string { return env[k] })
 	if c.General.Color != "never" || c.Clean.MinSize != "5M" {
@@ -78,8 +80,171 @@ func TestApplyEnvOverrides(t *testing.T) {
 	if len(c.Clean.ProtectedPaths) != 2 || c.Clean.ProtectedPaths[1] != "/b" {
 		t.Fatalf("protected paths = %v", c.Clean.ProtectedPaths)
 	}
-	if c.Trash.Backend != "external" {
-		t.Fatalf("backend = %q", c.Trash.Backend)
+	if len(c.Purge.Paths) != 2 || c.Purge.Paths[1] != "/q" {
+		t.Fatalf("project paths = %v", c.Purge.Paths)
+	}
+}
+
+func TestApplyEnvLegacyProjectPathsFallback(t *testing.T) {
+	c := Default()
+	c.ApplyEnv(func(k string) string {
+		if k == "BURROW_PURGE_PATHS" {
+			return "/legacy"
+		}
+		return ""
+	})
+	if len(c.Purge.Paths) != 1 || c.Purge.Paths[0] != "/legacy" {
+		t.Fatalf("legacy project paths = %v", c.Purge.Paths)
+	}
+}
+
+func TestApplyEnvProjectPathsWinOverLegacy(t *testing.T) {
+	c := Default()
+	env := map[string]string{
+		"BURROW_PROJECT_PATHS": "/new",
+		"BURROW_PURGE_PATHS":   "/legacy",
+	}
+	c.ApplyEnv(func(k string) string { return env[k] })
+	if len(c.Purge.Paths) != 1 || c.Purge.Paths[0] != "/new" {
+		t.Fatalf("project paths = %v, want [/new]", c.Purge.Paths)
+	}
+}
+
+func TestLoadProjectsSection(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	content := `
+[projects]
+paths = ["/srv/code"]
+max_age = "14d"
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := LoadWithHome(path, "/home/u")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Purge.Paths) != 1 || c.Purge.Paths[0] != "/srv/code" {
+		t.Fatalf("paths = %v", c.Purge.Paths)
+	}
+	if c.Purge.MaxAge != "14d" {
+		t.Fatalf("max_age = %q", c.Purge.MaxAge)
+	}
+	if c.Purge.ActiveWithin != "30d" {
+		t.Fatalf("unspecified active_within lost its default: %q", c.Purge.ActiveWithin)
+	}
+}
+
+func TestLoadLegacyPurgeSection(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	content := `
+[purge]
+paths = ["/old/code"]
+max_age = "21d"
+active_within = "0"
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := LoadWithHome(path, "/home/u")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Purge.Paths) != 1 || c.Purge.Paths[0] != "/old/code" {
+		t.Fatalf("legacy paths not merged: %v", c.Purge.Paths)
+	}
+	if c.Purge.MaxAge != "21d" || c.Purge.ActiveWithin != "0" {
+		t.Fatalf("legacy windows not merged: %+v", c.Purge)
+	}
+	if !c.LegacyPurge.zero() {
+		t.Fatalf("legacy section must be cleared after merge: %+v", c.LegacyPurge)
+	}
+}
+
+func TestLoadProjectsSectionWinsOverLegacy(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	content := `
+[projects]
+paths = ["/new/code"]
+
+[purge]
+paths = ["/old/code"]
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := LoadWithHome(path, "/home/u")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Purge.Paths) != 1 || c.Purge.Paths[0] != "/new/code" {
+		t.Fatalf("projects section must win: %v", c.Purge.Paths)
+	}
+	if !c.LegacyPurge.zero() {
+		t.Fatalf("legacy section must be cleared: %+v", c.LegacyPurge)
+	}
+}
+
+func TestLoadExpandsHomeInPathKeys(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	content := `
+[clean]
+protected_paths = ["~/secret"]
+
+[projects]
+paths = ["~/code"]
+
+[analyze]
+ignore = ["~/tmp"]
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := LoadWithHome(path, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Clean.ProtectedPaths[0]; got != filepath.Join(home, "secret") {
+		t.Fatalf("protected path = %q, want %q", got, filepath.Join(home, "secret"))
+	}
+	if got := c.Purge.Paths[0]; got != filepath.Join(home, "code") {
+		t.Fatalf("project path = %q, want %q", got, filepath.Join(home, "code"))
+	}
+	if got := c.Analyze.Ignore[0]; got != filepath.Join(home, "tmp") {
+		t.Fatalf("ignore path = %q, want %q", got, filepath.Join(home, "tmp"))
+	}
+}
+
+// TestProtectedPathsExpandedProtectHome pins the fail-open bug: an unexpanded
+// "~/secret" protected path used to match nothing.
+func TestProtectedPathsExpandedProtectHome(t *testing.T) {
+	home := t.TempDir()
+	secret := filepath.Join(home, "secret")
+	other := filepath.Join(home, "other")
+	for _, dir := range []string{secret, other} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := filepath.Join(t.TempDir(), "config.toml")
+	content := `
+[clean]
+protected_paths = ["~/secret"]
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := LoadWithHome(path, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := safe.NewValidator(-1, c.Clean.ProtectedPaths...)
+	if err := v.Validate(secret); err == nil {
+		t.Fatalf("expanded protected path must protect %s", secret)
+	}
+	if err := v.Validate(other); err != nil {
+		t.Fatalf("sibling path must remain valid: %v", err)
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/brandtg/burrow/internal/action"
+	"github.com/brandtg/burrow/internal/config"
 	"github.com/brandtg/burrow/internal/distro"
 	"github.com/brandtg/burrow/internal/engine"
 	"github.com/brandtg/burrow/internal/owner"
@@ -24,7 +25,9 @@ import (
 const ID = "system"
 
 // Category enumerates system cleanup targets.
-type Category struct{}
+type Category struct {
+	warns []string
+}
 
 // New returns the system category.
 func New() *Category { return &Category{} }
@@ -37,12 +40,24 @@ func (*Category) Title() string { return "System" }
 
 // PreviewNote is the category guidance shown in the preview.
 func (*Category) PreviewNote() string {
-	return "Package manager, journal, logs, and temp files. Owner commands; reclaimed state is re-downloadable, not recoverable."
+	return "Package manager, journal, logs, and temp files. Owner commands; reclaimed state is re-downloadable, not recoverable. Package rows only exist on apt and dnf; high-risk rows stay off."
 }
+
+// Warnings returns the non-fatal configuration notes collected by the last
+// Discover call. The CLI merges them into the plan so they are visible.
+func (c *Category) Warnings() []string { return c.warns }
+
+func (c *Category) warn(msg string) { c.warns = append(c.warns, ID+": "+msg) }
 
 // Discover enumerates system targets. Per-item probe failures are skipped, not
 // returned as errors, so one missing tool never blanks the category.
-func (*Category) Discover(ctx context.Context, env *engine.Env) ([]engine.Target, error) {
+func (c *Category) Discover(ctx context.Context, env *engine.Env) ([]engine.Target, error) {
+	// Warnings accumulate on the category value, which is registered as a
+	// singleton. Reset them so repeated discovery is idempotent.
+	c.warns = nil
+	if env != nil && env.Cfg != nil && env.Cfg.Clean.JournaldMaxAge != "" && env.Cfg.Clean.JournaldMaxSize != "" {
+		c.warn("journald_max_size and journald_max_age are both set; journald_max_size wins")
+	}
 	var out []engine.Target
 	out = append(out, packageItems(ctx, env)...)
 	out = append(out, journaldItem(ctx, env)...)
@@ -204,7 +219,7 @@ func journaldCommand(env *engine.Env) owner.OwnerCommand {
 			return owner.JournaldVacuumSize(env.Cfg.Clean.JournaldMaxSize)
 		}
 	}
-	return owner.JournaldVacuumSize("500M")
+	return owner.JournaldVacuumSize(config.DefaultJournaldMaxSize)
 }
 
 func tmpfilesItems(env *engine.Env) []engine.Target {

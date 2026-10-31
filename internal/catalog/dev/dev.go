@@ -44,7 +44,7 @@ func (*Category) Title() string { return "Developer caches" }
 
 // PreviewNote is the category guidance shown in the preview.
 func (*Category) PreviewNote() string {
-	return "Language and toolchain caches, shown but not pre-selected by default. Owner commands where available; otherwise the documented cache root is trashed."
+	return "Language and toolchain caches. Dev caches are never pre-selected by default — press a to override. Owner commands where available; otherwise the documented cache root is trashed."
 }
 
 // Process guards. A running owner means skip, fail closed.

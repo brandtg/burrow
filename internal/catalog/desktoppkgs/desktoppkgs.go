@@ -42,7 +42,7 @@ func (*Category) Title() string { return "Desktop packages" }
 
 // PreviewNote is the category guidance shown in the preview.
 func (*Category) PreviewNote() string {
-	return "Flatpak and snap packages. Owner commands plus trashed user data for applications that are no longer installed."
+	return "Flatpak and snap packages, shown only when the runtime is installed. Owner commands plus trashed user data for applications that are no longer installed; user-data rows stay off."
 }
 
 // Discover enumerates desktop-package targets. Absence of flatpak/snap is

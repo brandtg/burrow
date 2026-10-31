@@ -33,7 +33,7 @@ func (*Category) Title() string { return "Downloads" }
 
 // PreviewNote is the category guidance shown in the preview.
 func (*Category) PreviewNote() string {
-	return "Installers and stale downloads. Trashed, so recoverable; ages and extensions come from [downloads]."
+	return "Installers older than the configured age are pre-selected; stale large downloads are shown but off. Trashed, so recoverable."
 }
 
 // Discover enumerates installer files and stale Downloads entries.
@@ -75,10 +75,10 @@ func (*Category) Discover(_ context.Context, env *engine.Env) ([]engine.Target, 
 }
 
 func downloadConfig(env *engine.Env) (exts []string, installerAge, oldAge time.Duration, oldSize int64) {
-	exts = []string{".deb", ".rpm", ".AppImage", ".iso", ".pkg.tar.zst", ".snap", ".flatpakref"}
-	installerAge = 30 * 24 * time.Hour
-	oldAge = 90 * 24 * time.Hour
-	oldSize = 100 << 20
+	exts = append([]string(nil), config.DefaultInstallerExtensions...)
+	installerAge, _ = config.ParseDuration(config.DefaultInstallerMinAge)
+	oldAge, _ = config.ParseDuration(config.DefaultOldMinAge)
+	oldSize, _ = config.ParseBytes(config.DefaultOldMinSize)
 	if env.Cfg == nil {
 		return
 	}
