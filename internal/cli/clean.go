@@ -27,8 +27,10 @@ import (
 )
 
 type cleanFlags struct {
-	all       bool
-	whitelist bool
+	all        bool
+	whitelist  bool
+	age        string
+	minSizeSet bool
 }
 
 func (a *App) newCleanCmd() *cobra.Command {
@@ -36,28 +38,40 @@ func (a *App) newCleanCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "clean",
 		Short: "categorized cleaner (preview -> confirm -> execute)",
-		Args:  cobra.NoArgs,
+		Args:  noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			f.minSizeSet = cmd.Flags().Changed("min-size")
 			return a.runClean(f)
 		},
 	}
 	cmd.Flags().BoolVar(&f.all, "all", false, "include every category (still respects whitelist and guards)")
 	cmd.Flags().BoolVar(&f.whitelist, "whitelist", false, "manage the whitelist")
+	cmd.Flags().StringVar(&f.age, "age", "", "only artifacts with no activity in this window (default 7d)")
+	a.addSelectionFlags(cmd)
 	return cmd
 }
 
 func (a *App) runClean(f cleanFlags) error {
 	env, err := a.Env()
 	if err != nil {
-		return err
+		// A bad config path, an invalid config, or a root-without-SUDO_USER
+		// refusal is an invocation problem, not an operational failure.
+		return &ExitError{Code: ExitUsage, Err: err}
 	}
 	if f.whitelist {
 		return a.runWhitelist(env)
 	}
 
-	minSize, err := a.resolveMinSize(env)
+	minSize, err := a.resolveMinSize(env, f.minSizeSet)
 	if err != nil {
 		return &ExitError{Code: ExitUsage, Err: err}
+	}
+	if f.age != "" {
+		if _, err := config.ParseDuration(f.age); err != nil {
+			return &ExitError{Code: ExitUsage, Err: err}
+		}
+		// An explicit --age overrides the configured inactivity window.
+		env.Cfg.Purge.MaxAge = f.age
 	}
 
 	reg := catalog.NewRegistry(system.New(), projects.New(), dev.New(), usercache.New(), downloads.New(), containers.New(), desktoppkgs.New())
@@ -264,9 +278,13 @@ func (a *App) printWhitelistEntries(entries []string) error {
 	return nil
 }
 
-func (a *App) resolveMinSize(env *engine.Env) (int64, error) {
+// resolveMinSize resolves the size floor. An explicit --min-size wins, even
+// when it is "0" (which turns the configured floor off); otherwise the config
+// value applies.
+func (a *App) resolveMinSize(env *engine.Env, set bool) (int64, error) {
 	raw := a.Flags.MinSize
-	if raw == "" || raw == "0" {
+	if !set {
+		raw = ""
 		if env.Cfg != nil {
 			raw = env.Cfg.Clean.MinSize
 		}

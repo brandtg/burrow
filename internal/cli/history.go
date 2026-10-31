@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -20,7 +21,7 @@ func (a *App) newHistoryCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "history",
 		Short: "read the operation journal",
-		Args:  cobra.NoArgs,
+		Args:  noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			env, err := a.Env()
 			if err != nil {
@@ -45,14 +46,20 @@ func (a *App) printHistory(env *engine.Env, runID string) error {
 	if err != nil {
 		return err
 	}
+	runs := journal.Group(records)
 	if runID != "" {
+		resolved, err := resolveRunID(runs, runID)
+		if err != nil {
+			return err
+		}
 		filtered := records[:0:0]
 		for _, r := range records {
-			if r.RunID == runID {
+			if r.RunID == resolved {
 				filtered = append(filtered, r)
 			}
 		}
 		records = filtered
+		runs = journal.Group(records)
 	}
 	if a.Flags.JSON {
 		enc := json.NewEncoder(a.Out)
@@ -63,7 +70,6 @@ func (a *App) printHistory(env *engine.Env, runID string) error {
 		}
 		return nil
 	}
-	runs := journal.Group(records)
 	if len(runs) == 0 {
 		fmt.Fprintln(a.Out, "no operations recorded")
 		return nil
@@ -84,9 +90,14 @@ func (a *App) restoreRun(env *engine.Env, runID string) error {
 	if err != nil {
 		return err
 	}
-	run, ok := journal.Find(journal.Group(records), runID)
+	runs := journal.Group(records)
+	resolved, err := resolveRunID(runs, runID)
+	if err != nil {
+		return err
+	}
+	run, ok := journal.Find(runs, resolved)
 	if !ok {
-		return fmt.Errorf("no run %q in journal", runID)
+		return &ExitError{Code: ExitUsage, Err: fmt.Errorf("no run %q in journal", runID)}
 	}
 	tr := trash.New(env.Paths.TrashDir, env.UID())
 	entries, err := tr.List()
@@ -125,4 +136,30 @@ func shortID(id string) string {
 		return id[:8]
 	}
 	return id
+}
+
+// resolveRunID accepts a full run id or a unique prefix of one, matching
+// against the ids listed in the journal. The table prints a short id, so a
+// pasted prefix has to work. No match and an ambiguous match are both usage
+// errors: there is nothing safe to guess at.
+func resolveRunID(runs []journal.Run, id string) (string, error) {
+	for _, r := range runs {
+		if r.RunID == id {
+			return id, nil
+		}
+	}
+	var matches []string
+	for _, r := range runs {
+		if strings.HasPrefix(r.RunID, id) {
+			matches = append(matches, r.RunID)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return "", &ExitError{Code: ExitUsage, Err: fmt.Errorf("no run %q in journal", id)}
+	case 1:
+		return matches[0], nil
+	default:
+		return "", &ExitError{Code: ExitUsage, Err: fmt.Errorf("run id %q is ambiguous; candidates: %s", id, strings.Join(matches, ", "))}
+	}
 }

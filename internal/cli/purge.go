@@ -6,7 +6,6 @@ import (
 	"os"
 
 	"github.com/brandtg/burrow/internal/catalog/projects"
-	"github.com/brandtg/burrow/internal/config"
 	"github.com/brandtg/burrow/internal/engine"
 	"github.com/spf13/cobra"
 )
@@ -23,8 +22,9 @@ type purgeOptions struct {
 func (a *App) newPurgeCmd() *cobra.Command {
 	var opts purgeOptions
 	cmd := &cobra.Command{
-		Use:   "purge",
-		Short: "deprecated alias for: burrow clean --only projects",
+		Use:    "purge",
+		Short:  "deprecated alias for: burrow clean --only projects",
+		Hidden: true,
 		Long: `Deprecated alias for ` + "`burrow clean --only projects`" + `.
 
 Finds rebuildable build artifacts (node_modules, target, virtualenvs,
@@ -34,7 +34,7 @@ determined, when they contain a git repository, when their activity age cannot
 be verified, or when they have seen file activity within the age window.
 Trashed artifacts are recoverable (burrow history --restore); nothing is
 permanently deleted.`,
-		Args: cobra.NoArgs,
+		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			env, err := a.Env()
 			if err != nil {
@@ -43,21 +43,17 @@ permanently deleted.`,
 			if opts.paths {
 				return a.printPurgePaths(env, projects.Roots(env))
 			}
-			if opts.age != "" {
-				if _, err := config.ParseDuration(opts.age); err != nil {
-					return &ExitError{Code: ExitUsage, Err: err}
-				}
-				// An explicit --age overrides the fallback window.
-				env.Cfg.Purge.MaxAge = opts.age
-			}
 			fmt.Fprintln(a.ErrOut, "notice: 'burrow purge' is deprecated; running the equivalent of 'burrow clean --only projects'")
-			a.Flags.Only = []string{projects.ID}
-			return a.runClean(cleanFlags{})
+			// Append rather than replace: `burrow purge --only dev` keeps the
+			// user's selection and adds the projects category.
+			a.Flags.Only = append(a.Flags.Only, projects.ID)
+			return a.runClean(cleanFlags{age: opts.age, minSizeSet: cmd.Flags().Changed("min-size")})
 		},
 	}
 	f := cmd.Flags()
 	f.BoolVar(&opts.paths, "paths", false, "print the configured project roots")
 	f.StringVar(&opts.age, "age", "", "only artifacts with no activity in this window (default 7d)")
+	a.addSelectionFlags(cmd)
 	return cmd
 }
 
