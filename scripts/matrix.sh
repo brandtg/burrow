@@ -43,7 +43,7 @@ CGO_ENABLED=0 go build -o "$work/burrow" ./cmd/burrow
 images=(
   "ubuntu:24.04 apt"
   "debian:12 apt"
-  "fedora:41 dnf"
+  "fedora:44 dnf"
 )
 
 failed=0
