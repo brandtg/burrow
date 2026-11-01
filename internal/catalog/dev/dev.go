@@ -1,11 +1,11 @@
-// Package dev implements the `dev` cleanup category (spec §8.4): language and
+// Package dev implements the `dev` cleanup category: language and
 // toolchain caches. It is the category that differentiates burrow from a
 // generic cleaner.
 //
 // Each item prefers its owner command and falls back to trashing a documented
 // cache root only when the owner command is unavailable. Owner caches are
 // per-user: they are resolved by asking the owner immediately before acting and
-// are never elevated (spec §7.6).
+// are never elevated.
 //
 // Provenance: this is a clean-room behavioral port of Mole's lib/clean/dev.sh
 // keep/discard reasoning (Cargo registry/src, Poetry virtualenvs, CPAN sources,
@@ -44,16 +44,215 @@ func (*Category) Title() string { return "Developer caches" }
 
 // PreviewNote is the category guidance shown in the preview.
 func (*Category) PreviewNote() string {
-	return "Language and toolchain caches, shown but not pre-selected by default. Owner commands where available; otherwise the documented cache root is trashed."
+	return "Language and toolchain caches. Dev caches are never pre-selected by default — press a to override. Owner commands where available; otherwise the documented cache root is trashed."
 }
 
-// Process guards (spec §7.5). A running owner means skip, fail closed.
+// Process guards. A running owner means skip, fail closed.
 var (
 	npmGuard   = catalog.ProcessGuard{Names: []string{"npm"}}
 	pnpmGuard  = catalog.ProcessGuard{Names: []string{"pnpm"}}
 	goGuard    = catalog.ProcessGuard{Names: []string{"go", "gopls"}}
 	cargoGuard = catalog.ProcessGuard{Names: []string{"cargo", "rustc"}}
 )
+
+// cacheBase names the directory a spec's relative path is resolved against.
+type cacheBase int
+
+const (
+	homeBase cacheBase = iota
+	xdgCacheBase
+	xdgConfigBase
+	cargoHomeBase
+	rustupHomeBase
+)
+
+// trashSpec is the documented cache-root fallback for an item.
+type trashSpec struct {
+	base     cacheBase
+	paths    []string // candidate paths; the first that exists wins
+	glob     string   // when set, every match is its own target
+	evidence string
+}
+
+// ownerSpec is the owner command an item prefers. A nil probe means the owner
+// reports no path to resolve; path, when set, is a known location used only for
+// evidence and sizing.
+type ownerSpec struct {
+	binary   string
+	command  func() owner.OwnerCommand
+	probe    func() owner.OwnerCommand
+	base     cacheBase
+	path     string
+	evidence string
+}
+
+// itemSpec is one row of the dev catalog. An item with both an owner and a
+// trash fallback uses the owner when it is installed and the fallback otherwise,
+// so the two never produce duplicate rows.
+type itemSpec struct {
+	id        string
+	display   string
+	risk      engine.Risk
+	defaultOn bool
+	guard     engine.Guard
+	owner     *ownerSpec
+	trash     *trashSpec
+}
+
+var itemSpecs = []itemSpec{
+	{
+		id: "dev.npm", display: "npm cache", risk: engine.RiskLow, defaultOn: true, guard: npmGuard,
+		owner: &ownerSpec{binary: "npm", command: owner.NpmCacheClean, probe: owner.NpmCacheProbe, evidence: "npm owns its cache"},
+		// Prefer the content-addressable cache so _logs and _update-notifier
+		// are left alone; fall back to the whole ~/.npm only on older layouts.
+		trash: &trashSpec{base: homeBase, paths: []string{".npm/_cacache", ".npm"}, evidence: "documented npm cache root"},
+	},
+	{
+		id: "dev.pnpm", display: "pnpm store", risk: engine.RiskLow, defaultOn: true, guard: pnpmGuard,
+		owner: &ownerSpec{binary: "pnpm", command: owner.PnpmStorePrune, probe: owner.PnpmStoreProbe, evidence: "pnpm owns its content-addressable store"},
+		trash: &trashSpec{base: homeBase, paths: []string{".local/share/pnpm/store", ".pnpm-store"}, evidence: "documented pnpm store root"},
+	},
+	{
+		id: "dev.yarn", display: "yarn cache", risk: engine.RiskLow, defaultOn: true,
+		trash: &trashSpec{base: homeBase, paths: []string{".yarn/cache"}, evidence: "yarn cache is regenerable"},
+	},
+	{
+		id: "dev.yarn-cache", display: "yarn cache", risk: engine.RiskLow, defaultOn: true,
+		trash: &trashSpec{base: xdgCacheBase, paths: []string{"yarn"}, evidence: "yarn cache is regenerable"},
+	},
+	{
+		id: "dev.bun", display: "bun cache", risk: engine.RiskLow, defaultOn: true,
+		owner: &ownerSpec{binary: "bun", command: owner.BunCacheRm, probe: owner.BunCacheProbe, evidence: "bun owns its cache"},
+		trash: &trashSpec{base: homeBase, paths: []string{".bun/install/cache"}, evidence: "documented bun cache root"},
+	},
+	{
+		id: "dev.go-mod", display: "Go module cache", risk: engine.RiskLow, defaultOn: true, guard: goGuard,
+		owner: &ownerSpec{binary: "go", command: owner.GoCleanModCache, probe: owner.GoModCacheProbe, evidence: "go owns GOMODCACHE"},
+		trash: &trashSpec{base: homeBase, paths: []string{"go/pkg/mod"}, evidence: "documented GOMODCACHE root"},
+	},
+	{
+		id: "dev.go-build", display: "Go build cache", risk: engine.RiskLow, defaultOn: true,
+		owner: &ownerSpec{binary: "go", command: owner.GoCleanCache, probe: owner.GoBuildCacheProbe, evidence: "go owns GOCACHE; cleaning is concurrent-safe"},
+		trash: &trashSpec{base: xdgCacheBase, paths: []string{"go-build"}, evidence: "documented GOCACHE root"},
+	},
+	{
+		id: "dev.rust-registry-cache", display: "Cargo registry cache", risk: engine.RiskLow, defaultOn: true, guard: cargoGuard,
+		// Keep registry/src, registry/index, git, bin, and toolchains: only the
+		// downloaded crate archives under registry/cache are disposable.
+		trash: &trashSpec{base: cargoHomeBase, paths: []string{"registry/cache"}, evidence: "keep registry/src, registry/index, git, bin, toolchains"},
+	},
+	{
+		id: "dev.rustup-downloads", display: "rustup downloads", risk: engine.RiskLow, defaultOn: true,
+		trash: &trashSpec{base: rustupHomeBase, paths: []string{"downloads"}, evidence: "downloaded toolchain archives are re-fetchable"},
+	},
+	{
+		id: "dev.pip", display: "pip cache", risk: engine.RiskLow, defaultOn: true,
+		owner: &ownerSpec{binary: "pip3", command: owner.PipCachePurge, probe: owner.PipCacheDirProbe, evidence: "pip owns its wheel cache"},
+		trash: &trashSpec{base: xdgCacheBase, paths: []string{"pip"}, evidence: "documented pip cache root"},
+	},
+	{
+		id: "dev.uv", display: "uv cache", risk: engine.RiskLow, defaultOn: true,
+		owner: &ownerSpec{binary: "uv", command: owner.UvCachePrune, probe: owner.UvCacheDirProbe, evidence: "uv owns its cache"},
+		trash: &trashSpec{base: xdgCacheBase, paths: []string{"uv"}, evidence: "documented uv cache root"},
+	},
+	{
+		id: "dev.poetry.artifacts", display: "Poetry artifacts", risk: engine.RiskLow, defaultOn: true,
+		trash: &trashSpec{base: xdgCacheBase, paths: []string{"pypoetry/artifacts"}, evidence: "keep pypoetry/virtualenvs"},
+	},
+	{
+		id: "dev.poetry.cache", display: "Poetry cache", risk: engine.RiskLow, defaultOn: true,
+		trash: &trashSpec{base: xdgCacheBase, paths: []string{"pypoetry/cache"}, evidence: "keep pypoetry/virtualenvs"},
+	},
+	{
+		id: "dev.conda", display: "conda cache", risk: engine.RiskLow, defaultOn: true,
+		owner: &ownerSpec{binary: "conda", command: owner.CondaClean, evidence: "conda owns its package caches"},
+	},
+	{
+		id: "dev.gem", display: "RubyGems cache", risk: engine.RiskLow, defaultOn: true,
+		trash: &trashSpec{base: homeBase, glob: ".gem/ruby/*/cache", evidence: "gem cache is regenerable"},
+	},
+	{
+		id: "dev.gem-bundle", display: "Bundler cache", risk: engine.RiskLow, defaultOn: true,
+		trash: &trashSpec{base: homeBase, paths: []string{".bundle/cache"}, evidence: "bundler cache is regenerable"},
+	},
+	{
+		id: "dev.rbenv", display: "rbenv cache", risk: engine.RiskLow, defaultOn: true,
+		trash: &trashSpec{base: homeBase, paths: []string{".rbenv/cache"}, evidence: "rbenv cache is regenerable"},
+	},
+	{
+		id: "dev.cpan-build", display: "CPAN build dir", risk: engine.RiskLow, defaultOn: true,
+		trash: &trashSpec{base: homeBase, paths: []string{".cpan/build"}, evidence: "keep ~/.cpan/sources"},
+	},
+	{
+		id: "dev.nix", display: "Nix store garbage", risk: engine.RiskLow, defaultOn: true,
+		owner: &ownerSpec{binary: "nix-collect-garbage", command: owner.NixCollectGarbage, evidence: "nix-collect-garbage owns the store"},
+	},
+	{
+		id: "dev.corepack", display: "corepack cache", risk: engine.RiskLow, defaultOn: true,
+		owner: &ownerSpec{binary: "corepack", command: owner.CorepackCacheClean, base: xdgCacheBase, path: "node/corepack", evidence: "corepack owns its cache"},
+	},
+	{
+		id: "dev.mise", display: "mise cache", risk: engine.RiskLow, defaultOn: true,
+		owner: &ownerSpec{binary: "mise", command: owner.MiseCacheClear, probe: owner.MiseCachePathProbe, evidence: "mise owns its cache"},
+		trash: &trashSpec{base: xdgCacheBase, paths: []string{"mise"}, evidence: "documented mise cache root"},
+	},
+	{
+		id: "dev.frontend-caches.typescript", display: "typescript cache", risk: engine.RiskLow, defaultOn: true,
+		trash: &trashSpec{base: xdgCacheBase, paths: []string{"typescript"}, evidence: "frontend tool caches are regenerable"},
+	},
+	{
+		id: "dev.frontend-caches.electron", display: "electron cache", risk: engine.RiskLow, defaultOn: true,
+		trash: &trashSpec{base: xdgCacheBase, paths: []string{"electron"}, evidence: "frontend tool caches are regenerable"},
+	},
+	{
+		id: "dev.frontend-caches.node-gyp", display: "node-gyp cache", risk: engine.RiskLow, defaultOn: true,
+		trash: &trashSpec{base: xdgCacheBase, paths: []string{"node-gyp"}, evidence: "frontend tool caches are regenerable"},
+	},
+	{
+		id: "dev.frontend-caches.vite", display: "vite cache", risk: engine.RiskLow, defaultOn: true,
+		trash: &trashSpec{base: xdgCacheBase, paths: []string{"vite"}, evidence: "frontend tool caches are regenerable"},
+	},
+	{
+		id: "dev.frontend-caches.webpack", display: "webpack cache", risk: engine.RiskLow, defaultOn: true,
+		trash: &trashSpec{base: xdgCacheBase, paths: []string{"webpack"}, evidence: "frontend tool caches are regenerable"},
+	},
+	{
+		id: "dev.frontend-caches.eslint", display: "eslint cache", risk: engine.RiskLow, defaultOn: true,
+		trash: &trashSpec{base: xdgCacheBase, paths: []string{"eslint"}, evidence: "frontend tool caches are regenerable"},
+	},
+	{
+		id: "dev.frontend-caches.prettier", display: "prettier cache", risk: engine.RiskLow, defaultOn: true,
+		trash: &trashSpec{base: xdgCacheBase, paths: []string{"prettier"}, evidence: "frontend tool caches are regenerable"},
+	},
+	{
+		id: "dev.frontend-caches.parcel-cache", display: "parcel-cache cache", risk: engine.RiskLow, defaultOn: true,
+		trash: &trashSpec{base: xdgCacheBase, paths: []string{"parcel-cache"}, evidence: "frontend tool caches are regenerable"},
+	},
+	{
+		id: "dev.docker-buildx", display: "Docker buildx cache", risk: engine.RiskLow, defaultOn: true,
+		trash: &trashSpec{base: homeBase, paths: []string{".docker/buildx/cache"}, evidence: "buildx cache is regenerable"},
+	},
+	{
+		id: "dev.cloud-cli.kube", display: "kubectl cache", risk: engine.RiskLow, defaultOn: true,
+		trash: &trashSpec{base: homeBase, paths: []string{".kube/cache"}, evidence: "kubectl discovery cache"},
+	},
+	{
+		id: "dev.cloud-cli.aws", display: "AWS CLI cache", risk: engine.RiskLow, defaultOn: true,
+		trash: &trashSpec{base: homeBase, paths: []string{".aws/cli/cache"}, evidence: "AWS CLI cache"},
+	},
+	{
+		id: "dev.cloud-cli.gcloud", display: "gcloud logs", risk: engine.RiskLow, defaultOn: true,
+		trash: &trashSpec{base: xdgConfigBase, paths: []string{"gcloud/logs"}, evidence: "gcloud logs"},
+	},
+	{
+		id: "dev.cloud-cli.azure", display: "Azure logs", risk: engine.RiskLow, defaultOn: true,
+		trash: &trashSpec{base: homeBase, paths: []string{".azure/logs"}, evidence: "Azure CLI logs"},
+	},
+	{
+		id: "dev.gh-cli", display: "GitHub CLI cache", risk: engine.RiskLow, defaultOn: true,
+		owner: &ownerSpec{binary: "gh", command: owner.GhClearCache, base: xdgCacheBase, path: "gh", evidence: "gh owns its cache"},
+	},
+}
 
 // Discover enumerates dev targets. Per-item probe failures are skipped rather
 // than returned, so one missing tool never blanks the category.
@@ -62,32 +261,25 @@ func (*Category) Discover(ctx context.Context, env *engine.Env) ([]engine.Target
 		return nil, nil
 	}
 	var out []engine.Target
-	out = append(out, npmItem(ctx, env)...)
-	out = append(out, pnpmItem(ctx, env)...)
-	out = append(out, yarnItems(env)...)
-	out = append(out, bunItem(ctx, env)...)
-	out = append(out, goModItem(ctx, env)...)
-	out = append(out, goBuildItem(ctx, env)...)
-	out = append(out, rustRegistryItem(env)...)
-	out = append(out, rustupDownloadsItem(env)...)
-	out = append(out, pipItem(ctx, env)...)
-	out = append(out, uvItem(ctx, env)...)
-	out = append(out, poetryItems(env)...)
-	out = append(out, condaItem(env)...)
-	out = append(out, gemItems(env)...)
-	out = append(out, rbenvItem(env)...)
-	out = append(out, cpanBuildItem(env)...)
-	out = append(out, nixItem(env)...)
-	out = append(out, corepackItem(env)...)
-	out = append(out, miseItem(ctx, env)...)
-	out = append(out, frontendCacheItems(env)...)
-	out = append(out, dockerBuildxItem(env)...)
-	out = append(out, cloudCLIItems(env)...)
-	out = append(out, ghItem(env)...)
+	for _, s := range itemSpecs {
+		out = append(out, s.discover(ctx, env)...)
+	}
 	out = applyRegen(out)
 	out = applyIdleGate(env, out)
 	out = applyPreselect(env, out)
 	return out, nil
+}
+
+// discover resolves one spec: the owner command when installed, otherwise the
+// documented trash fallback.
+func (s itemSpec) discover(ctx context.Context, env *engine.Env) []engine.Target {
+	if s.owner != nil && owner.Available(s.owner.binary) {
+		return s.owner.discover(ctx, env, s)
+	}
+	if s.trash != nil {
+		return s.trash.discover(env, s)
+	}
+	return nil
 }
 
 // regenFor classifies how expensive a dev cache is to rebuild. It gates
@@ -158,21 +350,39 @@ func applyPreselect(env *engine.Env, targets []engine.Target) []engine.Target {
 
 // CacheRoots returns the top-level XDG cache directories the dev category
 // manages. user-cache.app-caches uses it so a dev cache is never double-counted
-// or trashed twice (dev items win).
+// or trashed twice (dev items win). It is derived from itemSpecs, so adding a
+// cache cannot leave the sweep out of date.
 func CacheRoots(env *engine.Env) []string {
 	if env == nil || env.XDGCache == "" {
 		return nil
 	}
-	names := []string{
-		"yarn", "typescript", "electron", "node-gyp", "vite", "webpack",
-		"eslint", "prettier", "parcel-cache", "pypoetry", "pip", "uv",
-		"go-build", "mise", "gh", "node",
-	}
-	out := make([]string, 0, len(names))
-	for _, n := range names {
-		out = append(out, filepath.Join(env.XDGCache, n))
+	seen := map[string]bool{}
+	var out []string
+	for _, s := range itemSpecs {
+		name := s.cacheRoot()
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, filepath.Join(env.XDGCache, name))
 	}
 	return out
+}
+
+// cacheRoot is the top-level XDG cache entry an item owns, or "" when it does
+// not live under the XDG cache. It is taken from the same spec that builds the
+// item, so the sweep allow-list cannot drift from discovery.
+func (s itemSpec) cacheRoot() string {
+	var rel string
+	switch {
+	case s.trash != nil && s.trash.base == xdgCacheBase && len(s.trash.paths) > 0:
+		rel = s.trash.paths[0]
+	case s.owner != nil && s.owner.base == xdgCacheBase && s.owner.path != "":
+		rel = s.owner.path
+	default:
+		return ""
+	}
+	return strings.SplitN(filepath.ToSlash(rel), "/", 2)[0]
 }
 
 // --- constructors ---
@@ -211,7 +421,7 @@ func pathResolver(argv []string) action.PathResolver {
 
 // trashIfExists builds a trash target for a documented cache root, or nothing
 // when the root is absent or fails validation.
-func trashIfExists(env *engine.Env, id, display, path string, risk engine.Risk, on bool, evidence string) []engine.Target {
+func trashIfExists(env *engine.Env, id, display, path string, risk engine.Risk, on bool, evidence string, guard engine.Guard) []engine.Target {
 	if path == "" || !catalog.FileExists(path) {
 		return nil
 	}
@@ -222,7 +432,47 @@ func trashIfExists(env *engine.Env, id, display, path string, risk engine.Risk, 
 	if err != nil {
 		return nil
 	}
+	if guard != nil {
+		t.Guard = guard
+	}
 	return []engine.Target{t}
+}
+
+// discover builds an owner target for the spec, re-resolving its path at
+// execution time when the owner reports one.
+func (o ownerSpec) discover(ctx context.Context, env *engine.Env, s itemSpec) []engine.Target {
+	cmd := o.command()
+	if o.probe != nil {
+		return resolvedOwner(ctx, env, s.id, s.display, cmd, o.probe(), s.guard, s.risk, s.defaultOn, o.evidence)
+	}
+	path := ""
+	if o.path != "" {
+		if p := filepath.Join(baseDir(env, o.base), o.path); catalog.DirExists(p) {
+			path = p
+		}
+	}
+	return []engine.Target{ownerTarget(env, s.id, s.display, path, cmd, nil, s.guard, s.risk, s.defaultOn, o.evidence)}
+}
+
+// discover builds the trash fallback for the spec, using the first candidate
+// path that exists.
+func (t trashSpec) discover(env *engine.Env, s itemSpec) []engine.Target {
+	base := baseDir(env, t.base)
+	if t.glob != "" {
+		matches, _ := filepath.Glob(filepath.Join(base, t.glob))
+		var out []engine.Target
+		for _, m := range matches {
+			id := s.id + "." + filepath.Base(filepath.Dir(m))
+			out = append(out, trashIfExists(env, id, s.display, m, s.risk, s.defaultOn, t.evidence, s.guard)...)
+		}
+		return out
+	}
+	for _, rel := range t.paths {
+		if ts := trashIfExists(env, s.id, s.display, filepath.Join(base, rel), s.risk, s.defaultOn, t.evidence, s.guard); len(ts) > 0 {
+			return ts
+		}
+	}
+	return nil
 }
 
 // resolvedOwner probes the owner for its cache path and, when the path is
@@ -236,187 +486,22 @@ func resolvedOwner(ctx context.Context, env *engine.Env, id, display string, cmd
 	return []engine.Target{ownerTarget(env, id, display, path, cmd, pathResolver(probe.Argv), guard, risk, on, evidence)}
 }
 
-// --- items ---
-
-func npmItem(ctx context.Context, env *engine.Env) []engine.Target {
-	if owner.Available("npm") {
-		return resolvedOwner(ctx, env, "dev.npm", "npm cache", owner.NpmCacheClean(), owner.NpmCacheProbe(), npmGuard, engine.RiskLow, true, "npm owns its cache")
-	}
-	// Prefer the content-addressable cache so _logs and _update-notifier are
-	// left alone; fall back to the whole ~/.npm only on older npm layouts.
-	if ts := trashIfExists(env, "dev.npm", "npm cache", filepath.Join(env.Home, ".npm", "_cacache"), engine.RiskLow, true, "documented npm cache root"); len(ts) > 0 {
-		return ts
-	}
-	return trashIfExists(env, "dev.npm", "npm cache", filepath.Join(env.Home, ".npm"), engine.RiskLow, true, "documented npm cache root")
-}
-
-func pnpmItem(ctx context.Context, env *engine.Env) []engine.Target {
-	if owner.Available("pnpm") {
-		return resolvedOwner(ctx, env, "dev.pnpm", "pnpm store", owner.PnpmStorePrune(), owner.PnpmStoreProbe(), pnpmGuard, engine.RiskLow, true, "pnpm owns its content-addressable store")
-	}
-	for _, p := range []string{filepath.Join(env.Home, ".local", "share", "pnpm", "store"), filepath.Join(env.Home, ".pnpm-store")} {
-		if ts := trashIfExists(env, "dev.pnpm", "pnpm store", p, engine.RiskLow, true, "documented pnpm store root"); len(ts) > 0 {
-			return ts
-		}
-	}
-	return nil
-}
-
-func yarnItems(env *engine.Env) []engine.Target {
-	var out []engine.Target
-	out = append(out, trashIfExists(env, "dev.yarn", "yarn cache", filepath.Join(env.Home, ".yarn", "cache"), engine.RiskLow, true, "yarn cache is regenerable")...)
-	out = append(out, trashIfExists(env, "dev.yarn-cache", "yarn cache", filepath.Join(env.XDGCache, "yarn"), engine.RiskLow, true, "yarn cache is regenerable")...)
-	return out
-}
-
-func bunItem(ctx context.Context, env *engine.Env) []engine.Target {
-	if owner.Available("bun") {
-		return resolvedOwner(ctx, env, "dev.bun", "bun cache", owner.BunCacheRm(), owner.BunCacheProbe(), nil, engine.RiskLow, true, "bun owns its cache")
-	}
-	return trashIfExists(env, "dev.bun", "bun cache", filepath.Join(env.Home, ".bun", "install", "cache"), engine.RiskLow, true, "documented bun cache root")
-}
-
-func goModItem(ctx context.Context, env *engine.Env) []engine.Target {
-	if owner.Available("go") {
-		return resolvedOwner(ctx, env, "dev.go-mod", "Go module cache", owner.GoCleanModCache(), owner.GoModCacheProbe(), goGuard, engine.RiskLow, true, "go owns GOMODCACHE")
-	}
-	return trashIfExists(env, "dev.go-mod", "Go module cache", filepath.Join(env.Home, "go", "pkg", "mod"), engine.RiskLow, true, "documented GOMODCACHE root")
-}
-
-func goBuildItem(ctx context.Context, env *engine.Env) []engine.Target {
-	if owner.Available("go") {
-		// Go documents the build cache as safe to clean concurrently; no guard.
-		return resolvedOwner(ctx, env, "dev.go-build", "Go build cache", owner.GoCleanCache(), owner.GoBuildCacheProbe(), nil, engine.RiskLow, true, "go owns GOCACHE; cleaning is concurrent-safe")
-	}
-	return trashIfExists(env, "dev.go-build", "Go build cache", filepath.Join(env.XDGCache, "go-build"), engine.RiskLow, true, "documented GOCACHE root")
-}
-
-func rustRegistryItem(env *engine.Env) []engine.Target {
-	// Keep registry/src, registry/index, git, bin, and toolchains: only the
-	// downloaded crate archives under registry/cache are disposable (Mole's
-	// cargo reasoning). There is no cargo command for this, so the subtree is
-	// trashed under the trash contract.
-	cargoHome := envVar("CARGO_HOME", filepath.Join(env.Home, ".cargo"))
-	targets := trashIfExists(env, "dev.rust-registry-cache", "Cargo registry cache", filepath.Join(cargoHome, "registry", "cache"), engine.RiskLow, true, "keep registry/src, registry/index, git, bin, toolchains")
-	for i := range targets {
-		targets[i].Guard = cargoGuard
-	}
-	return targets
-}
-
-func rustupDownloadsItem(env *engine.Env) []engine.Target {
-	rustupHome := envVar("RUSTUP_HOME", filepath.Join(env.Home, ".rustup"))
-	return trashIfExists(env, "dev.rustup-downloads", "rustup downloads", filepath.Join(rustupHome, "downloads"), engine.RiskLow, true, "downloaded toolchain archives are re-fetchable")
-}
-
-func pipItem(ctx context.Context, env *engine.Env) []engine.Target {
-	if owner.Available("pip3") {
-		return resolvedOwner(ctx, env, "dev.pip", "pip cache", owner.PipCachePurge(), owner.PipCacheDirProbe(), nil, engine.RiskLow, true, "pip owns its wheel cache")
-	}
-	return trashIfExists(env, "dev.pip", "pip cache", filepath.Join(env.XDGCache, "pip"), engine.RiskLow, true, "documented pip cache root")
-}
-
-func uvItem(ctx context.Context, env *engine.Env) []engine.Target {
-	if owner.Available("uv") {
-		return resolvedOwner(ctx, env, "dev.uv", "uv cache", owner.UvCachePrune(), owner.UvCacheDirProbe(), nil, engine.RiskLow, true, "uv owns its cache")
-	}
-	return trashIfExists(env, "dev.uv", "uv cache", filepath.Join(env.XDGCache, "uv"), engine.RiskLow, true, "documented uv cache root")
-}
-
-func poetryItems(env *engine.Env) []engine.Target {
-	// Keep virtualenvs; only artifacts/ and cache/ are regenerable.
-	var out []engine.Target
-	out = append(out, trashIfExists(env, "dev.poetry.artifacts", "Poetry artifacts", filepath.Join(env.XDGCache, "pypoetry", "artifacts"), engine.RiskLow, true, "keep pypoetry/virtualenvs")...)
-	out = append(out, trashIfExists(env, "dev.poetry.cache", "Poetry cache", filepath.Join(env.XDGCache, "pypoetry", "cache"), engine.RiskLow, true, "keep pypoetry/virtualenvs")...)
-	return out
-}
-
-func condaItem(env *engine.Env) []engine.Target {
-	if !owner.Available("conda") {
-		return nil
-	}
-	return []engine.Target{ownerTarget(env, "dev.conda", "conda cache", "", owner.CondaClean(), nil, nil, engine.RiskLow, true, "conda owns its package caches")}
-}
-
-func gemItems(env *engine.Env) []engine.Target {
-	var out []engine.Target
-	if matches, _ := filepath.Glob(filepath.Join(env.Home, ".gem", "ruby", "*", "cache")); matches != nil {
-		for _, m := range matches {
-			out = append(out, trashIfExists(env, "dev.gem."+filepath.Base(filepath.Dir(m)), "RubyGems cache", m, engine.RiskLow, true, "gem cache is regenerable")...)
-		}
-	}
-	out = append(out, trashIfExists(env, "dev.gem-bundle", "Bundler cache", filepath.Join(env.Home, ".bundle", "cache"), engine.RiskLow, true, "bundler cache is regenerable")...)
-	return out
-}
-
-func rbenvItem(env *engine.Env) []engine.Target {
-	return trashIfExists(env, "dev.rbenv", "rbenv cache", filepath.Join(env.Home, ".rbenv", "cache"), engine.RiskLow, true, "rbenv cache is regenerable")
-}
-
-func cpanBuildItem(env *engine.Env) []engine.Target {
-	// Keep ~/.cpan/sources (Mole's CPAN reasoning).
-	return trashIfExists(env, "dev.cpan-build", "CPAN build dir", filepath.Join(env.Home, ".cpan", "build"), engine.RiskLow, true, "keep ~/.cpan/sources")
-}
-
-func nixItem(env *engine.Env) []engine.Target {
-	if !owner.Available("nix-collect-garbage") {
-		return nil
-	}
-	return []engine.Target{ownerTarget(env, "dev.nix", "Nix store garbage", "", owner.NixCollectGarbage(), nil, nil, engine.RiskLow, true, "nix-collect-garbage owns the store")}
-}
-
-func corepackItem(env *engine.Env) []engine.Target {
-	if !owner.Available("corepack") {
-		return nil
-	}
-	home := envVar("COREPACK_HOME", filepath.Join(env.XDGCache, "node", "corepack"))
-	path := ""
-	if catalog.DirExists(home) {
-		path = home
-	}
-	return []engine.Target{ownerTarget(env, "dev.corepack", "corepack cache", path, owner.CorepackCacheClean(), nil, nil, engine.RiskLow, true, "corepack owns its cache")}
-}
-
-func miseItem(ctx context.Context, env *engine.Env) []engine.Target {
-	if owner.Available("mise") {
-		return resolvedOwner(ctx, env, "dev.mise", "mise cache", owner.MiseCacheClear(), owner.MiseCachePathProbe(), nil, engine.RiskLow, true, "mise owns its cache")
-	}
-	return trashIfExists(env, "dev.mise", "mise cache", filepath.Join(env.XDGCache, "mise"), engine.RiskLow, true, "documented mise cache root")
-}
-
-func frontendCacheItems(env *engine.Env) []engine.Target {
-	var out []engine.Target
-	for _, name := range []string{"typescript", "electron", "node-gyp", "vite", "webpack", "eslint", "prettier", "parcel-cache"} {
-		out = append(out, trashIfExists(env, "dev.frontend-caches."+name, name+" cache", filepath.Join(env.XDGCache, name), engine.RiskLow, true, "frontend tool caches are regenerable")...)
-	}
-	return out
-}
-
-func dockerBuildxItem(env *engine.Env) []engine.Target {
-	return trashIfExists(env, "dev.docker-buildx", "Docker buildx cache", filepath.Join(env.Home, ".docker", "buildx", "cache"), engine.RiskLow, true, "buildx cache is regenerable")
-}
-
-func cloudCLIItems(env *engine.Env) []engine.Target {
-	var out []engine.Target
-	out = append(out, trashIfExists(env, "dev.cloud-cli.kube", "kubectl cache", filepath.Join(env.Home, ".kube", "cache"), engine.RiskLow, true, "kubectl discovery cache")...)
-	out = append(out, trashIfExists(env, "dev.cloud-cli.aws", "AWS CLI cache", filepath.Join(env.Home, ".aws", "cli", "cache"), engine.RiskLow, true, "AWS CLI cache")...)
-	out = append(out, trashIfExists(env, "dev.cloud-cli.gcloud", "gcloud logs", filepath.Join(env.XDGConfig, "gcloud", "logs"), engine.RiskLow, true, "gcloud logs")...)
-	out = append(out, trashIfExists(env, "dev.cloud-cli.azure", "Azure logs", filepath.Join(env.Home, ".azure", "logs"), engine.RiskLow, true, "Azure CLI logs")...)
-	return out
-}
-
-func ghItem(env *engine.Env) []engine.Target {
-	if !owner.Available("gh") {
-		return nil
-	}
-	path := ""
-	if dir := filepath.Join(env.XDGCache, "gh"); catalog.DirExists(dir) {
-		path = dir
-	}
-	return []engine.Target{ownerTarget(env, "dev.gh-cli", "GitHub CLI cache", path, owner.GhClearCache(), nil, nil, engine.RiskLow, true, "gh owns its cache")}
-}
-
 // --- helpers ---
+
+func baseDir(env *engine.Env, b cacheBase) string {
+	switch b {
+	case xdgCacheBase:
+		return env.XDGCache
+	case xdgConfigBase:
+		return env.XDGConfig
+	case cargoHomeBase:
+		return envVar("CARGO_HOME", filepath.Join(env.Home, ".cargo"))
+	case rustupHomeBase:
+		return envVar("RUSTUP_HOME", filepath.Join(env.Home, ".rustup"))
+	default:
+		return env.Home
+	}
+}
 
 func envVar(name, fallback string) string {
 	if v := os.Getenv(name); filepath.IsAbs(v) {

@@ -1,6 +1,7 @@
 // Package scan is the only place that imports gdu. All gdu usage is confined
-// here so the in-process analyzer can be swapped for the `gdu --json`
-// shell-out without touching the rest of the tree (spec D2 / risk table).
+// here so the rest of the tree never sees gdu types. The real fallback when
+// the engine cannot size a subtree is the du -sk repair path (repair, below);
+// a `gdu --json` shell-out has never existed in this codebase.
 package scan
 
 import (
@@ -28,7 +29,7 @@ import (
 // the pseudo-filesystems below are pruned as separate mounts anyway.
 var DefaultIgnore = []string{"/proc", "/dev", "/sys"}
 
-// Scan status values reported by Status and the --json schema (spec §10).
+// Scan status values reported by Status and the --json schema.
 const (
 	StatusComplete    = "complete"
 	StatusPartial     = "partial"
@@ -65,6 +66,9 @@ type Options struct {
 	// directory scan. It is not called for single-file scans. Callbacks run
 	// on the scan's progress goroutine and must not block.
 	Progress func(Progress)
+	// Timeout bounds the per-root scan. Zero falls back to
+	// owner.TimeoutScanPerRoot. The du -sk repair path shares the deadline.
+	Timeout time.Duration
 }
 
 // Progress is a point-in-time snapshot of a running scan. ItemCount and
@@ -91,6 +95,9 @@ type Node struct {
 	ItemCount int64
 	Children  []*Node
 	SizeKnown bool // false when the engine could not size this node
+	// repair is set when this node was sized by the du -sk fallback rather
+	// than the in-process engine, so StatusReason can say so.
+	repair bool
 
 	// SkippedMounts lists nested mounts the scan refused to cross because they
 	// are backed by a different store than the root. It is set only on the
@@ -126,7 +133,8 @@ type GDU struct{}
 func Default() Scanner { return GDU{} }
 
 // Scan analyzes root and returns a Node tree. It honors ctx cancellation and
-// applies the per-root deadline from owner.TimeoutScanPerRoot.
+// applies the per-root deadline from Options.Timeout (owner.TimeoutScanPerRoot
+// when unset).
 func (GDU) Scan(ctx context.Context, root string, opts Options) (*Node, error) {
 	quietGDU()
 	if root == "" {
@@ -138,7 +146,11 @@ func (GDU) Scan(ctx context.Context, root string, opts Options) (*Node, error) {
 	}
 	abs = filepath.Clean(abs)
 
-	scanCtx, cancel := context.WithTimeout(ctx, owner.TimeoutScanPerRoot)
+	timeout := opts.Timeout
+	if timeout <= 0 {
+		timeout = owner.TimeoutScanPerRoot
+	}
+	scanCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	// A single file is sized directly; gdu's directory analyzer is for trees.
@@ -178,11 +190,11 @@ func (GDU) Scan(ctx context.Context, root string, opts Options) (*Node, error) {
 	if item == nil {
 		// The engine could not provide a tree (for example an unreadable
 		// root). Fall back to du/stat and mark the size unknown on failure.
-		return fallback(scanCtx, abs)
+		return repair(scanCtx, abs)
 	}
 	// AnalyzeDir builds the tree but leaves size/usage aggregation to the
 	// caller. A shared, non-nil HardLinkedItems map makes shared inodes count
-	// once (spec §8.8).
+	// once.
 	item.UpdateStats(make(fs.HardLinkedItems))
 	tree := build(scanCtx, item, opts.Depth, opts.Depth <= 0)
 	// On reflink-capable filesystems, re-attribute on-disk sizes so shared
@@ -193,12 +205,6 @@ func (GDU) Scan(ctx context.Context, root string, opts Options) (*Node, error) {
 	}
 	tree.SkippedMounts = skips.list()
 	return tree, nil
-}
-
-// Analyze is the Plan 01 entry point, retained for callers that do not need
-// the Scanner interface.
-func Analyze(ctx context.Context, path string, opts Options) (*Node, error) {
-	return GDU{}.Scan(ctx, path, opts)
 }
 
 var quietGDUOnce sync.Once
@@ -272,16 +278,21 @@ func build(ctx context.Context, item fs.Item, depth int, unlimited bool) *Node {
 	return n
 }
 
-// fallback sizes path without gdu. Directories use du -skP (on-disk); files use
+// repair sizes path without gdu. Directories use du -skP (on-disk); files use
 // stat. On any failure the node is returned with SizeKnown=false so callers
 // render "unknown" rather than 0.
-func fallback(ctx context.Context, path string) (*Node, error) {
+//
+// This du -sk repair path is the real fallback when the engine cannot size a
+// subtree. The `gdu --json` shell-out the package comment mentions has never
+// been written; do not claim it exists in docs.
+func repair(ctx context.Context, path string) (*Node, error) {
 	fi, err := os.Lstat(path)
 	if err != nil {
 		return nil, err
 	}
 	if !fi.IsDir() {
-		return fileNode(path, fi), nil
+		n := fileNode(path, fi)
+		return n, nil
 	}
 	n := &Node{
 		Name:  filepath.Base(path),
@@ -295,6 +306,7 @@ func fallback(ctx context.Context, path string) (*Node, error) {
 		n.Apparent = size
 		n.SizeKnown = true
 	}
+	n.repair = true
 	return n, nil
 }
 
@@ -315,12 +327,10 @@ func fileNode(path string, fi os.FileInfo) *Node {
 	return n
 }
 
-// duSize runs `du -skP` under the per-root scan deadline and returns on-disk
-// bytes. It is the fallback when the engine cannot size a subtree.
+// duSize runs `du -skP` under the scan deadline and returns on-disk bytes. It
+// is the fallback when the engine cannot size a subtree.
 func duSize(ctx context.Context, path string) (int64, bool) {
-	probeCtx, cancel := context.WithTimeout(ctx, owner.TimeoutScanPerRoot)
-	defer cancel()
-	out, err := exec.CommandContext(probeCtx, "du", "-skP", "--", path).Output()
+	out, err := exec.CommandContext(ctx, "du", "-skP", "--", path).Output()
 	if err != nil {
 		return 0, false
 	}
@@ -347,6 +357,45 @@ func Status(n *Node) string {
 		return StatusPartial
 	}
 	return StatusComplete
+}
+
+// StatusReason explains why Status is not StatusComplete, or "" when it is.
+// It names the first path the scanner could not read and says when the du -sk
+// repair path produced the numbers, so a partial scan is never unexplained.
+func StatusReason(n *Node) string {
+	if n == nil {
+		return "no tree was produced: the root could not be read"
+	}
+	var unknown, repaired *Node
+	var walk func(n *Node)
+	walk = func(n *Node) {
+		if n == nil {
+			return
+		}
+		if repaired == nil && n.repair {
+			repaired = n
+		}
+		if unknown == nil && !n.SizeKnown {
+			unknown = n
+		}
+		for _, c := range n.Children {
+			walk(c)
+		}
+	}
+	walk(n)
+
+	var parts []string
+	if repaired != nil {
+		parts = append(parts, "sized by the du -sk repair path: "+repaired.Path)
+	}
+	if unknown != nil {
+		if unknown.IsDir && len(unknown.Children) == 0 {
+			parts = append(parts, "unreadable directory: "+unknown.Path)
+		} else {
+			parts = append(parts, "unreadable entries under "+unknown.Path)
+		}
+	}
+	return strings.Join(parts, "; ")
 }
 
 func hasUnknown(n *Node) bool {

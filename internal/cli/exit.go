@@ -7,7 +7,7 @@ import (
 	"github.com/brandtg/burrow/internal/safe"
 )
 
-// Exit codes (spec §5.5).
+// Exit codes.
 const (
 	ExitOK        = 0
 	ExitGeneric   = 1

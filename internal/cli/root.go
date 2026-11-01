@@ -13,22 +13,21 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// GlobalFlags are the flags shared by every command (spec §5.1).
+// GlobalFlags are the flags shared by every command. NoOwner, Only, Exclude
+// and MinSize are only bound on the commands that run the clean flow; the
+// fields stay here because that flow reads them through the App.
 type GlobalFlags struct {
-	DryRun   bool
-	Yes      bool
-	JSON     bool
-	Plain    bool
-	NoOwner  bool
-	Only     []string
-	Exclude  []string
-	MinSize  string
-	Color    string
-	NoColor  bool
-	Config   string
-	LogLevel string
-	Verbose  bool
-	Quiet    bool
+	DryRun  bool
+	Yes     bool
+	JSON    bool
+	Plain   bool
+	NoOwner bool
+	Only    []string
+	Exclude []string
+	MinSize string
+	Color   string
+	NoColor bool
+	Config  string
 }
 
 // App holds process-wide dependencies so commands are testable.
@@ -76,6 +75,7 @@ func (a *App) Env() (*engine.Env, error) {
 
 // Root builds the cobra root command.
 func (a *App) Root() *cobra.Command {
+	var f cleanFlags
 	root := &cobra.Command{
 		Use:           "burrow",
 		Short:         "a prescriptive Linux disk-space and cleanup tool",
@@ -84,7 +84,20 @@ func (a *App) Root() *cobra.Command {
 		// Bare `burrow` IS the product: the full clean flow (scan ->
 		// grouped preview -> confirm). `burrow clean` runs the same flow.
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return a.runClean(cleanFlags{})
+			f.minSizeSet = cmd.Flags().Changed("min-size")
+			return a.runClean(f)
+		},
+		// An explicit --color always wins; otherwise --no-color is the
+		// convenience alias for --color=never. Resolving it once here keeps
+		// every command (including analyze) on one precedence rule.
+		PersistentPreRun: func(cmd *cobra.Command, _ []string) {
+			if cmd.Flags().Changed("color") {
+				a.Flags.NoColor = false
+				return
+			}
+			if a.Flags.NoColor {
+				a.Flags.Color = "never"
+			}
 		},
 	}
 	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
@@ -96,16 +109,21 @@ func (a *App) Root() *cobra.Command {
 	pf.BoolVarP(&a.Flags.Yes, "yes", "y", false, "skip the interactive confirm")
 	pf.BoolVar(&a.Flags.JSON, "json", false, "machine-readable output")
 	pf.BoolVar(&a.Flags.Plain, "plain", false, "non-interactive plain-text output instead of the TUI")
-	pf.BoolVar(&a.Flags.NoOwner, "no-owner", false, "skip all owner-command/system acts")
-	pf.StringSliceVar(&a.Flags.Only, "only", nil, "comma list of categories or item ids to include")
-	pf.StringSliceVar(&a.Flags.Exclude, "exclude", nil, "comma list of categories or item ids to exclude")
-	pf.StringVar(&a.Flags.MinSize, "min-size", "0", "only act on items >= size (e.g. 10M, 1G)")
 	pf.StringVar(&a.Flags.Color, "color", "auto", "terminal color policy: auto|always|never")
 	pf.BoolVar(&a.Flags.NoColor, "no-color", false, "disable color (same as --color=never)")
 	pf.StringVar(&a.Flags.Config, "config", "", "override the config file path")
-	pf.StringVar(&a.Flags.LogLevel, "log-level", "info", "trace|debug|info|warn|error")
-	pf.BoolVarP(&a.Flags.Verbose, "verbose", "v", false, "shorthand for --log-level debug")
-	pf.BoolVar(&a.Flags.Quiet, "quiet", false, "only print errors")
+
+	// The clean-flow selection flags are local to the commands that consume
+	// them (bare burrow, clean, purge) so `burrow analyze --min-size 1G` is a
+	// usage error instead of a silently ignored flag.
+	a.addSelectionFlags(root)
+	root.Flags().StringVar(&f.age, "age", "", "only artifacts with no activity in this window (default 7d)")
+
+	// docs and cobra's completion are packager tools, not product surface:
+	// still callable, just not advertised in the command menu.
+	docsCmd := a.newDocsCmd(root)
+	docsCmd.Hidden = true
+	root.CompletionOptions.HiddenDefaultCmd = true
 
 	root.AddCommand(
 		a.newVersionCmd(),
@@ -114,9 +132,27 @@ func (a *App) Root() *cobra.Command {
 		a.newAnalyzeCmd(),
 		a.newCleanCmd(),
 		a.newPurgeCmd(),
-		a.newDocsCmd(root),
+		docsCmd,
 	)
 	return root
+}
+
+// addSelectionFlags binds the clean-flow selection flags as local flags of cmd.
+func (a *App) addSelectionFlags(cmd *cobra.Command) {
+	fs := cmd.Flags()
+	fs.BoolVar(&a.Flags.NoOwner, "no-owner", false, "skip all owner-command/system acts")
+	fs.StringSliceVar(&a.Flags.Only, "only", nil, "comma list of categories or item ids to include")
+	fs.StringSliceVar(&a.Flags.Exclude, "exclude", nil, "comma list of categories or item ids to exclude")
+	fs.StringVar(&a.Flags.MinSize, "min-size", "0", "only act on items >= size (e.g. 10M, 1G)")
+}
+
+// noArgs rejects positional arguments as a usage error, so a stray argument
+// exits 2 like any other invocation mistake instead of the generic 1.
+func noArgs(cmd *cobra.Command, args []string) error {
+	if len(args) > 0 {
+		return &ExitError{Code: ExitUsage, Err: fmt.Errorf("unexpected argument %q for %q", args[0], cmd.CommandPath())}
+	}
+	return nil
 }
 
 // Run executes the CLI with the given arguments (excluding the program name),

@@ -1,6 +1,6 @@
 Ubuntu 24.04 · apt · 118.0 GiB free
+Reclaimable now: 1.7 GiB across 2 items
 ▸ System  1.7 GiB / 3 items
   [x] package cache        1.2 GiB  [owner] (root) free low
   [x] systemd journal    512.0 MiB  [owner] (root) free low
   [ ] orphaned packages        0 B  [owner] (root) free high
-Selected: 1.7 GiB across 2 items

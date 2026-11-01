@@ -2,9 +2,9 @@ package distro
 
 import "github.com/brandtg/burrow/internal/owner"
 
-// SystemSpec is the distro-specific data behind the `system` catalog items
-// (spec §8.1). The system catalog drives it generically, so adding a distro
-// family is a data-only change to its adapter (Plan 07, spec D10). A zero-value
+// SystemSpec is the distro-specific data behind the `system` catalog items.
+// The system catalog drives it generically, so adding a distro
+// family is a data-only change to its adapter. A zero-value
 // field means the family does not implement that item yet and the catalog skips
 // it rather than guessing an argv.
 type SystemSpec struct {

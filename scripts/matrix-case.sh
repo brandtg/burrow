@@ -99,11 +99,17 @@ wait "$owner_pid" 2>/dev/null || true
 ok "guard tripped (exit 75) on a running $PROC"
 
 # --- (e) exit codes ---
+# A non-interactive run without --yes prints the preview and stops with a
+# re-run hint; it must exit 0 and mutate nothing.
 set +e
-"$burrow" clean --only system.pkg-cache >/dev/null 2>&1
+unconfirmed=$("$burrow" clean --only system.pkg-cache 2>/dev/null)
 usage_code=$?
 set -e
-[ "$usage_code" -eq 2 ] || fail "expected exit 2 without --yes, got $usage_code"
-ok "exit code 2 for an unconfirmed non-interactive clean"
+[ "$usage_code" -eq 0 ] || fail "expected exit 0 without --yes, got $usage_code"
+case "$unconfirmed" in
+  *"re-run with --yes"*) ;;
+  *) fail "unconfirmed run must end with the re-run hint" ;;
+esac
+ok "exit 0 plus re-run hint for an unconfirmed non-interactive clean"
 
 printf 'matrix-case[%s]: all assertions passed\n' "$family"

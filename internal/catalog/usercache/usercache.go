@@ -1,4 +1,4 @@
-// Package usercache implements the `user-cache` cleanup category (spec §8.5):
+// Package usercache implements the `user-cache` cleanup category:
 // the XDG cache sweep. Every top-level entry under $XDG_CACHE_HOME that is not
 // owned by a dev item is its own row, so a user can keep specific caches; the
 // whitelist and the protected set also apply.
@@ -37,7 +37,7 @@ func (*Category) Title() string { return "User cache" }
 
 // PreviewNote is the category guidance shown in the preview.
 func (*Category) PreviewNote() string {
-	return "XDG cache entries. Trashed, so recoverable; whitelisted paths and their parents are skipped."
+	return "XDG cache entries, one row per top-level cache. Only the curated cheap allowlist is pre-selected; expensive caches stay off. Trashed, so recoverable; whitelisted paths are skipped."
 }
 
 // protectedNames are top-level cache entries the generic sweep never touches.
@@ -120,7 +120,7 @@ func appCacheItems(env *engine.Env) []engine.Target {
 		if safe.WithinAnyRoot(path, devRoots) {
 			continue
 		}
-		if env.Whitelist != nil && env.Whitelist.Protected(path) {
+		if env.Whitelist != nil && env.Whitelist.Contains(path) {
 			continue
 		}
 
@@ -191,7 +191,7 @@ func trashItem(env *engine.Env) []engine.Target {
 		Display:   "empty Trash",
 		Path:      dir,
 		Action:    &action.EmptyTrashAction{Trash: tr, Path: dir},
-		Recovery:  engine.RecoveryOwner,
+		Recovery:  engine.RecoveryDelete,
 		Risk:      engine.RiskHigh,
 		DefaultOn: false,
 		Evidence:  []string{"emptying the Trash is irreversible"},

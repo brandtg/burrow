@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/signal"
 	"sort"
 	"syscall"
+	"time"
 
+	"github.com/brandtg/burrow/internal/catalog/roots"
 	"github.com/brandtg/burrow/internal/engine"
 	"github.com/brandtg/burrow/internal/scan"
 	"github.com/brandtg/burrow/internal/tui"
@@ -17,7 +20,7 @@ import (
 	"golang.org/x/term"
 )
 
-// analyzeOptions are the analyze-specific flags (spec §5.3).
+// analyzeOptions are the analyze-specific flags.
 type analyzeOptions struct {
 	apparent    bool
 	oneFS       bool
@@ -25,6 +28,7 @@ type analyzeOptions struct {
 	noHidden    bool
 	depth       int
 	top         int
+	scanTimeout time.Duration
 }
 
 func (a *App) newAnalyzeCmd() *cobra.Command {
@@ -39,18 +43,21 @@ things in burrow is the clean flow's review screen.
 
 The --json schema is stable:
   {"path":"...","total_size":N,"total_files":N,
-   "entries":[{"name":"...","path":"...","size":N,"is_dir":true}],
-   "largest":[...],"scan_status":"complete|partial|unavailable"}
+   "entries":[...],"largest":[...],
+   "scan_status":"complete|partial|unavailable","scan_status_reason":"..."}
 
 When stdout is not a terminal (or --json is set), analyze behaves like
 --json and never waits for input. --json accepts a single path.`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validateMountFlags(cmd); err != nil {
+				return err
+			}
 			env, err := a.Env()
 			if err != nil {
 				return err
 			}
-			// Precedence (spec §13): an explicit --cross-mounts disables the
+			// Precedence: an explicit --cross-mounts disables the
 			// boundary, an explicit -x/--one-file-system enables it, otherwise
 			// the config value applies. The boundary is on by default so a
 			// scan of a path on one drive does not silently absorb other
@@ -68,12 +75,23 @@ When stdout is not a terminal (or --json is set), analyze behaves like
 	}
 	f := cmd.Flags()
 	f.BoolVarP(&opts.apparent, "apparent", "a", false, "show apparent size instead of on-disk usage")
-	f.BoolVarP(&opts.oneFS, "one-file-system", "x", false, "do not descend across mount points (default; btrfs subvolumes on the same device stay in scope)")
+	f.BoolVarP(&opts.oneFS, "one-file-system", "x", false, "do not descend across mount points (default comes from config; an explicit flag wins)")
 	f.BoolVar(&opts.crossMounts, "cross-mounts", false, "descend into nested mounts on other filesystems")
 	f.BoolVarP(&opts.noHidden, "no-hidden", "H", false, "skip dotfiles")
+	f.DurationVar(&opts.scanTimeout, "scan-timeout", 90*time.Second, "per-root scan deadline")
 	f.IntVar(&opts.depth, "depth", 0, "non-interactive depth (with --json); 0 = unlimited")
 	f.IntVarP(&opts.top, "top", "t", 10, "non-interactive top-N largest entries (with --json)")
 	return cmd
+}
+
+// validateMountFlags rejects contradictory mount-boundary flags with a usage
+// error. The explicit form wins over the config default, but asking for both
+// directions has no resolution.
+func validateMountFlags(cmd *cobra.Command) error {
+	if cmd.Flags().Changed("one-file-system") && cmd.Flags().Changed("cross-mounts") {
+		return &ExitError{Code: ExitUsage, Err: errors.New("--one-file-system and --cross-mounts are mutually exclusive")}
+	}
+	return nil
 }
 
 func (a *App) runAnalyze(env *engine.Env, args []string, opts analyzeOptions) error {
@@ -86,7 +104,9 @@ func (a *App) runAnalyze(env *engine.Env, args []string, opts analyzeOptions) er
 		paths = []string{cwd}
 	}
 
-	interactive := !a.Flags.JSON && isTerminal(a.Out)
+	// --plain means the non-interactive text path even on a terminal; --json
+	// and a non-TTY stdout select it too.
+	interactive := !a.Flags.JSON && !a.Flags.Plain && isTerminal(a.Out)
 	if !interactive && len(paths) > 1 {
 		return &ExitError{Code: ExitUsage, Err: errors.New("--json accepts a single path")}
 	}
@@ -97,6 +117,7 @@ func (a *App) runAnalyze(env *engine.Env, args []string, opts analyzeOptions) er
 		NoHidden:      opts.noHidden,
 		Apparent:      opts.apparent,
 		Depth:         opts.depth,
+		Timeout:       opts.scanTimeout,
 	}
 
 	if interactive {
@@ -133,6 +154,15 @@ func (a *App) scanRoots(ctx context.Context, paths []string, opts scan.Options) 
 }
 
 func (a *App) runAnalyzeTUI(env *engine.Env, paths []string, scanOpts scan.Options, opts analyzeOptions) error {
+	// The reclaimable-root bridge: rows inside these directories carry the
+	// [R] marker and a hint naming the clean invocation that handles them.
+	reclaim := roots.All(env)
+	catRoots := make([]string, 0, len(reclaim))
+	selectors := make(map[string]string, len(reclaim))
+	for _, r := range reclaim {
+		catRoots = append(catRoots, r.Path)
+		selectors[r.Path] = r.Selector
+	}
 	model := tui.NewAnalyzeModel(tui.AnalyzeConfig{
 		// Scan in the background so the TUI can show progress instead of
 		// freezing on a cold cache (the model renders a loading view).
@@ -140,8 +170,10 @@ func (a *App) runAnalyzeTUI(env *engine.Env, paths []string, scanOpts scan.Optio
 			scanOpts.Progress = progress
 			return a.scanRoots(ctx, paths, scanOpts)
 		},
-		Apparent: opts.apparent,
-		Color:    a.colorEnabled(env),
+		Apparent:      opts.apparent,
+		Color:         a.colorEnabled(env),
+		CategoryRoots: catRoots,
+		RootSelectors: selectors,
 	})
 	return model.Run()
 }
@@ -163,30 +195,44 @@ type jsonSkippedMount struct {
 	Fstype string `json:"fstype,omitempty"`
 }
 
-// jsonReport is the stable --json schema (spec §10).
+// jsonReport is the stable --json schema.
 type jsonReport struct {
-	Path          string             `json:"path"`
-	TotalSize     int64              `json:"total_size"`
-	TotalFiles    int64              `json:"total_files"`
-	Entries       []jsonEntry        `json:"entries"`
-	Largest       []jsonEntry        `json:"largest"`
-	ScanStatus    string             `json:"scan_status"`
-	SkippedMounts []jsonSkippedMount `json:"skipped_mounts,omitempty"`
+	Path             string             `json:"path"`
+	TotalSize        int64              `json:"total_size"`
+	TotalFiles       int64              `json:"total_files"`
+	Entries          []jsonEntry        `json:"entries"`
+	Largest          []jsonEntry        `json:"largest"`
+	ScanStatus       string             `json:"scan_status"`
+	ScanStatusReason string             `json:"scan_status_reason,omitempty"`
+	SkippedMounts    []jsonSkippedMount `json:"skipped_mounts,omitempty"`
 }
 
 func (a *App) printAnalyzeJSON(ctx context.Context, path string, opts scan.Options, aopts analyzeOptions) error {
 	root, err := scan.Default().Scan(ctx, path, opts)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			// The deadline is the reason the scan is unavailable, so say so
+			// instead of failing the whole report.
+			report := jsonReport{
+				Path:             path,
+				ScanStatus:       scan.StatusUnavailable,
+				ScanStatusReason: fmt.Sprintf("scan deadline exceeded before the tree completed (%s)", opts.Timeout),
+			}
+			enc := json.NewEncoder(a.Out)
+			enc.SetIndent("", "  ")
+			return enc.Encode(report)
+		}
 		return err
 	}
 	report := jsonReport{
-		Path:          root.Path,
-		TotalSize:     root.DisplaySize(aopts.apparent),
-		TotalFiles:    scan.FileCount(root),
-		Entries:       collectEntries(root, entryDepth(aopts.depth), aopts.apparent),
-		Largest:       largest(root, aopts.top, aopts.apparent),
-		ScanStatus:    scan.Status(root),
-		SkippedMounts: jsonSkippedMounts(root.SkippedMounts),
+		Path:             root.Path,
+		TotalSize:        root.DisplaySize(aopts.apparent),
+		TotalFiles:       scan.FileCount(root),
+		Entries:          collectEntries(root, entryDepth(aopts.depth), aopts.apparent),
+		Largest:          largest(root, aopts.top, aopts.apparent),
+		ScanStatus:       scan.Status(root),
+		ScanStatusReason: scan.StatusReason(root),
+		SkippedMounts:    jsonSkippedMounts(root.SkippedMounts),
 	}
 	enc := json.NewEncoder(a.Out)
 	enc.SetIndent("", "  ")

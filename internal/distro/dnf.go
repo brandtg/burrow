@@ -1,5 +1,5 @@
 // dnf.go implements the Fedora/RHEL (dnf/rpm) adapter. It is the acceptance
-// test for the Plan 03 adapter design: the whole family lands here plus the
+// test for the adapter design: the whole family lands here plus the
 // owner command table, with no change to the engine or catalog framework.
 package distro
 
@@ -23,13 +23,6 @@ func (dnfAdapter) System() SystemSpec {
 		KernelsProbe:         owner.RpmKernelProbe(),
 		HasOldKernels:        dnfHasOldKernels,
 	}
-}
-
-func (dnfAdapter) PackageCacheAction() owner.OwnerCommand { return owner.DnfPackageCache() }
-func (dnfAdapter) OrphansAction() owner.OwnerCommand      { return owner.DnfOrphans() }
-func (dnfAdapter) OldKernelsAction() owner.OwnerCommand   { return owner.DnfOldKernels() }
-func (dnfAdapter) ResidualConfigAction([]string) (owner.OwnerCommand, error) {
-	return owner.OwnerCommand{}, errNoResidualConfig("dnf")
 }
 
 // parseDnfOrphans counts the package names emitted by `dnf repoquery

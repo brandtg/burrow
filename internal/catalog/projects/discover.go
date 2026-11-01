@@ -1,4 +1,4 @@
-package purge
+package projects
 
 import (
 	"context"
@@ -9,11 +9,10 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
 
+	"github.com/brandtg/burrow/internal/disk"
 	"github.com/brandtg/burrow/internal/owner"
-	"github.com/brandtg/burrow/internal/safe"
 )
 
 // Options controls discovery.
@@ -157,12 +156,6 @@ func classify(ctx context.Context, p, pattern, root string, opts Options, git *g
 		now = time.Now()
 	}
 
-	if snap, err := safe.TakeSnapshot(p); err == nil {
-		a.Snapshot = snap
-	} else {
-		a.KeepReason = firstReason(a.KeepReason, "cannot snapshot: "+err.Error())
-	}
-
 	size, newest, hasGit, ok := measure(ctx, p, opts.ScanTimeout)
 	if !ok {
 		a.KeepReason = firstReason(a.KeepReason, "cannot measure artifact tree")
@@ -271,9 +264,7 @@ func measure(ctx context.Context, root string, timeout time.Duration) (size int6
 		if ierr != nil {
 			return ierr
 		}
-		if st, sok := info.Sys().(*syscall.Stat_t); sok {
-			size += st.Blocks * 512
-		}
+		size += disk.Blocks512(info)
 		if mt := info.ModTime(); mt.After(newest) {
 			newest = mt
 		}

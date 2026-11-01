@@ -77,6 +77,32 @@ func TestTrashActionIdentityGuard(t *testing.T) {
 	}
 }
 
+func TestTrashActionHonoursCancelledContext(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "cache-item")
+	if err := os.WriteFile(src, []byte("junk"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := safe.TakeSnapshot(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := trash.New(filepath.Join(dir, "Trash"), os.Getuid())
+	a := action.NewTrash(src, tr, snap, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := a.Run(ctx, false); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+	if _, err := os.Lstat(src); err != nil {
+		t.Fatalf("cancelled action must leave the source untouched: %v", err)
+	}
+	if entries, _ := tr.List(); len(entries) != 0 {
+		t.Fatalf("cancelled action created %d trash entries", len(entries))
+	}
+}
+
 func TestTrashActionIdempotentWhenAbsent(t *testing.T) {
 	dir := t.TempDir()
 	missing := filepath.Join(dir, "gone")
@@ -131,7 +157,7 @@ func TestEmptyTrashAction(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := &action.EmptyTrashAction{Trash: tr, Path: tr.Home()}
-	if a.Recovery() != engine.RecoveryOwner {
+	if a.Recovery() != engine.RecoveryDelete {
 		t.Fatalf("recovery = %v", a.Recovery())
 	}
 	if _, err := a.Run(context.Background(), true); err != nil {

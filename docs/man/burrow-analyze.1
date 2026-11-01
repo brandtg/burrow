@@ -19,8 +19,8 @@ things in burrow is the clean flow's review screen.
 .PP
 The --json schema is stable:
   {"path":"...","total_size":N,"total_files":N,
-   "entries":[{"name":"...","path":"...","size":N,"is_dir":true}],
-   "largest":[...],"scan_status":"complete|partial|unavailable"}
+   "entries":[...],"largest":[...],
+   "scan_status":"complete|partial|unavailable","scan_status_reason":"..."}
 
 .PP
 When stdout is not a terminal (or --json is set), analyze behaves like
@@ -49,7 +49,11 @@ When stdout is not a terminal (or --json is set), analyze behaves like
 
 .PP
 \fB-x\fP, \fB--one-file-system\fP[=false]
-	do not descend across mount points (default; btrfs subvolumes on the same device stay in scope)
+	do not descend across mount points (default comes from config; an explicit flag wins)
+
+.PP
+\fB--scan-timeout\fP=1m30s
+	per-root scan deadline
 
 .PP
 \fB-t\fP, \fB--top\fP=10
@@ -69,44 +73,16 @@ When stdout is not a terminal (or --json is set), analyze behaves like
 	never mutate; print the plan and exit
 
 .PP
-\fB--exclude\fP=[]
-	comma list of categories or item ids to exclude
-
-.PP
 \fB--json\fP[=false]
 	machine-readable output
-
-.PP
-\fB--log-level\fP="info"
-	trace|debug|info|warn|error
-
-.PP
-\fB--min-size\fP="0"
-	only act on items >= size (e.g. 10M, 1G)
 
 .PP
 \fB--no-color\fP[=false]
 	disable color (same as --color=never)
 
 .PP
-\fB--no-owner\fP[=false]
-	skip all owner-command/system acts
-
-.PP
-\fB--only\fP=[]
-	comma list of categories or item ids to include
-
-.PP
 \fB--plain\fP[=false]
 	non-interactive plain-text output instead of the TUI
-
-.PP
-\fB--quiet\fP[=false]
-	only print errors
-
-.PP
-\fB-v\fP, \fB--verbose\fP[=false]
-	shorthand for --log-level debug
 
 .PP
 \fB-y\fP, \fB--yes\fP[=false]

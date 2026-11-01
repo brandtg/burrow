@@ -1,4 +1,4 @@
-// Package containers implements the `containers` cleanup category (spec §8.2):
+// Package containers implements the `containers` cleanup category:
 // docker and podman pruning. Every mutating action is an allow-listed owner
 // command (invariant I4); discovery and measurement are read-only. Volumes are
 // treated as data, not cache: the volume and system-wide prunes are high risk,
@@ -41,7 +41,7 @@ func (*Category) Title() string { return "Containers" }
 
 // PreviewNote is the category guidance shown in the preview.
 func (*Category) PreviewNote() string {
-	return "Container runtime caches and unused images. Owner commands; reclaimed state is re-downloadable. Volumes can hold data, not cache."
+	return "Container runtime caches and unused images, shown only when docker or podman is installed. Owner commands; reclaimed state is re-downloadable. Volumes and system-wide prunes can hold data and stay off."
 }
 
 // Discover enumerates container targets. The docker items are only offered when
@@ -51,14 +51,11 @@ func (*Category) Discover(ctx context.Context, env *engine.Env) ([]engine.Target
 	var out []engine.Target
 	out = append(out, dockerItems(ctx, env)...)
 	out = append(out, podmanItems(ctx, env)...)
-	// containers.k8s-evicted is report-only in v0.1 and has no action, so it is
-	// intentionally not a target yet: the engine requires every target to carry
-	// a valid recovery contract and action.
 	return out, nil
 }
 
 // Reconcile drops docker sub-prunes that a broader selected prune already
-// covers, so a run never executes redundant prunes (plan 05 risk note):
+// covers, so a run never executes redundant prunes:
 // `docker system prune -a --volumes` supersedes every part, and
 // `docker image prune -a` supersedes the dangling-only prune.
 func (*Category) Reconcile(plan *engine.Plan) {
@@ -230,8 +227,8 @@ func parseDockerDF(out string) dockerDF {
 			continue
 		}
 		typ := strings.ToLower(strings.Join(fields[:idx], " "))
-		size, ok := parseDockerSize(fields[idx+3])
-		if !ok {
+		size, err := config.ParseBytes(fields[idx+3])
+		if err != nil {
 			continue
 		}
 		switch typ {
@@ -246,44 +243,6 @@ func parseDockerDF(out string) dockerDF {
 		}
 	}
 	return d
-}
-
-// dockerUnits are docker's decimal (1000-based) size suffixes.
-var dockerUnits = map[string]float64{
-	"B":  1,
-	"kB": 1e3, "KB": 1e3,
-	"MB": 1e6,
-	"GB": 1e9,
-	"TB": 1e12,
-	"PB": 1e15,
-}
-
-// parseDockerSize parses a docker size string such as "1.2GB" or "800MB".
-func parseDockerSize(s string) (int64, bool) {
-	s = strings.TrimSpace(s)
-	if s == "" || s == "N/A" {
-		return 0, false
-	}
-	i := 0
-	for i < len(s) && (s[i] == '.' || (s[i] >= '0' && s[i] <= '9')) {
-		i++
-	}
-	if i == 0 {
-		return 0, false
-	}
-	num, err := strconv.ParseFloat(s[:i], 64)
-	if err != nil {
-		return 0, false
-	}
-	unit := s[i:]
-	mult, ok := dockerUnits[unit]
-	if !ok {
-		if unit != "" {
-			return 0, false
-		}
-		mult = 1
-	}
-	return int64(num * mult), true
 }
 
 func isAllDigits(s string) bool {

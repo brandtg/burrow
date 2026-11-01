@@ -1,7 +1,7 @@
 package safe
 
 // State is the tri-state outcome of a guard. Busy and Unknown both stop the
-// action (fail closed, spec §7.5).
+// action (fail closed).
 type State int
 
 const (

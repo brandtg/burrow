@@ -1,6 +1,6 @@
-// Package purge discovers rebuildable project artifacts (node_modules, Rust
-// target, virtualenvs, __pycache__, ...) under configured project roots and
-// moves them to the Trash after proving they are safe to remove.
+// Artifact discovery for the projects category: rebuildable build artifacts
+// (node_modules, Rust target, virtualenvs, __pycache__, ...) under configured
+// project roots.
 //
 // Safety: discovery is read-only (invariant I1). An artifact is kept (never
 // purged) when it is git-tracked, when git state cannot be determined, when it
@@ -12,19 +12,16 @@
 // Provenance: behavioral port of Mole's purge rule (git-tracked-file
 // protection, nested-repo protection, age filter). Reimplemented clean-room; no
 // Mole source was copied (Mole is GPL-3.0).
-package purge
+package projects
 
 import (
 	"path"
 	"path/filepath"
 	"strings"
 	"time"
-
-	"github.com/brandtg/burrow/internal/safe"
 )
 
-// DefaultArtifactDirs is the pinned v0.1 artifact list (spec §11). It is
-// extensible via [purge] artifact_dirs in config.
+// DefaultArtifactDirs is the pinned artifact list.
 var DefaultArtifactDirs = []string{
 	"node_modules",
 	"target",
@@ -69,8 +66,6 @@ type Artifact struct {
 	Tracked bool
 	// KeepReason, when non-empty, means the artifact must not be purged.
 	KeepReason string
-	// Snapshot is the identity captured during discovery for TOCTOU defense.
-	Snapshot *safe.Snapshot
 }
 
 // Kept reports whether the artifact is protected from purging.

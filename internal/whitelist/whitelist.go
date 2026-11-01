@@ -1,7 +1,7 @@
 // Package whitelist loads and matches burrow's path whitelist.
 //
-// A whitelisted path protects itself and its parent from the generic user-cache
-// sweep (spec §13.1). Matching is prefix-based on resolved physical paths.
+// A whitelisted path protects itself and every path underneath it. Matching is
+// prefix-based on resolved physical paths.
 //
 // Provenance: independent reimplementation of Mole's whitelist semantics.
 package whitelist
@@ -65,7 +65,10 @@ func (s *Set) Entries() []string {
 // Empty reports whether the set has no entries.
 func (s *Set) Empty() bool { return s == nil || len(s.entries) == 0 }
 
-// Contains reports whether path is an entry or lies underneath one.
+// Contains reports whether path is an entry or lies underneath one. This is
+// the single protection rule shared by the engine and the user-cache sweep:
+// exact match or descendant, with a path-boundary check so "/home/ab" does not
+// protect "/home/abc".
 func (s *Set) Contains(path string) bool {
 	if s == nil {
 		return false
@@ -73,24 +76,6 @@ func (s *Set) Contains(path string) bool {
 	clean := filepath.Clean(path)
 	for _, e := range s.entries {
 		if clean == e || strings.HasPrefix(clean, e+string(filepath.Separator)) {
-			return true
-		}
-	}
-	return false
-}
-
-// Protected reports whether path should be skipped by the generic sweep. It is
-// protected if it is whitelisted or is the parent of a whitelisted entry.
-func (s *Set) Protected(path string) bool {
-	if s == nil {
-		return false
-	}
-	if s.Contains(path) {
-		return true
-	}
-	clean := filepath.Clean(path)
-	for _, e := range s.entries {
-		if filepath.Dir(e) == clean {
 			return true
 		}
 	}

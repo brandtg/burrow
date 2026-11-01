@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/brandtg/burrow/internal/cli"
 	"github.com/brandtg/burrow/internal/config"
 	"github.com/brandtg/burrow/internal/engine"
 	"github.com/brandtg/burrow/internal/owner"
@@ -34,7 +33,7 @@ func TestI1NoMutationBeforePreview(t *testing.T) {
 	before := digestTree(t, root)
 
 	// Discovery and planning are read-only.
-	if _, err := scan.Analyze(context.Background(), root, scan.Options{}); err != nil {
+	if _, err := scan.Default().Scan(context.Background(), root, scan.Options{}); err != nil {
 		t.Fatal(err)
 	}
 	target := filepath.Join(root, "a.txt")
@@ -172,33 +171,10 @@ func TestI6RootWithoutSudoRefuses(t *testing.T) {
 	}
 }
 
-// TestI7MutableAncestorGuardStop asserts a privileged path with a user-mutable
-// ancestor produces a guard-stop that maps to exit code 75.
-func TestI7MutableAncestorGuardStop(t *testing.T) {
-	base := t.TempDir()
-	mutable := filepath.Join(base, "writable")
-	if err := os.Mkdir(mutable, 0o777); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(mutable, 0o777); err != nil {
-		t.Fatal(err)
-	}
-	target := filepath.Join(mutable, "victim")
-	if err := os.WriteFile(target, []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	ancestor, found, err := safe.MutableAncestor(target)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !found {
-		t.Fatal("expected to find a user-mutable ancestor")
-	}
-	err = safe.GuardStop("privileged path has a user-mutable ancestor: %s", ancestor)
-	if code := cli.ExitCode(err); code != cli.ExitGuard {
-		t.Fatalf("guard-stop exit code = %d, want %d", code, cli.ExitGuard)
-	}
-}
+// TestI7Retired: safe.MutableAncestor and its guard-stop assertion were
+// retired. There is no privileged hand-delete path to guard; owner commands
+// are exact argv from the catalog. The guard-stop error type itself stays
+// exercised by cli's exit-code tests.
 
 func writeFixture(t *testing.T, root, rel, content string) {
 	t.Helper()

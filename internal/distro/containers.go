@@ -8,8 +8,8 @@ import (
 	"github.com/brandtg/burrow/internal/safe"
 )
 
-// Container-runtime guard (spec §7.5), used by the containers catalog (plan
-// 05). It fails closed: a probe that cannot prove the daemon is reachable
+// Container-runtime guard, used by the containers catalog. It fails closed: a
+// probe that cannot prove the daemon is reachable
 // returns Unknown, which stops the action.
 
 // CheckContainerRuntime proves a container runtime's daemon is reachable. It

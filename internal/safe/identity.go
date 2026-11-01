@@ -9,7 +9,7 @@ import (
 
 // Snapshot records the identity of a path and its parent immediately before a
 // mutation. Re-stat'ing and comparing immediately before the sink defeats a
-// path swap between discovery and execution (TOCTOU), spec §7.3.
+// path swap between discovery and execution (TOCTOU).
 //
 // Provenance: independent reimplementation of Mole's
 // _mole_snapshot_path_identity / _mole_path_matches_identity.

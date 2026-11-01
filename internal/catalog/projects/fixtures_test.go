@@ -1,4 +1,4 @@
-package purge
+package projects
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 
 func copyFixture(t *testing.T, name string) string {
 	t.Helper()
-	src := filepath.Join("..", "..", "testdata", "purge", name)
+	src := filepath.Join("..", "..", "..", "testdata", "purge", name)
 	dst := t.TempDir()
 	err := filepath.WalkDir(src, func(p string, d os.DirEntry, err error) error {
 		if err != nil {

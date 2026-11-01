@@ -10,6 +10,7 @@ import (
 
 	"github.com/brandtg/burrow/internal/engine"
 	"github.com/brandtg/burrow/internal/whitelist"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func samplePlan() *engine.Plan {
@@ -57,6 +58,27 @@ func TestRenderPreviewGolden(t *testing.T) {
 	}
 	if got != string(want) {
 		t.Fatalf("preview golden mismatch:\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+}
+
+func TestRenderPreviewShowsEmptyCategories(t *testing.T) {
+	plan := samplePlan()
+	plan.Scanned = []engine.CategoryRef{
+		{ID: "system", Title: "System"},
+		{ID: "containers", Title: "Containers"},
+	}
+	var buf bytes.Buffer
+	RenderPreview(&buf, plan, "", false)
+	out := buf.String()
+	if !strings.Contains(out, "▸ Containers  nothing found") {
+		t.Fatalf("empty category should render as nothing found:\n%s", out)
+	}
+	if strings.Contains(out, "▸ System  nothing found") {
+		t.Fatalf("category with items must not be marked empty:\n%s", out)
+	}
+	if !strings.HasPrefix(strings.TrimSpace(strings.SplitN(out, "\n", 2)[0]), "Reclaimable now:") ||
+		(!strings.HasPrefix(out, "Reclaimable now:") && !strings.Contains(out, "\nReclaimable now:")) {
+		t.Fatalf("the reclaimable total should lead the preview:\n%s", out)
 	}
 }
 
@@ -300,5 +322,133 @@ func TestSelectAllSkipsExpensiveAndGated(t *testing.T) {
 	}
 	if gated.Selected {
 		t.Fatal("gated item must not be selected by select-all")
+	}
+}
+
+// twoCategoryPlan lists System before Developer caches so a name sort has to
+// reorder the categories.
+func twoCategoryPlan() *engine.Plan {
+	mk := func(id, cat, title, display string, size int64) *engine.PlannedItem {
+		return &engine.PlannedItem{
+			Target: engine.Target{
+				ID: id, Category: cat, Display: display,
+				Path: "/tmp/" + id, SizeBytes: size, SizeKnown: true,
+				Recovery: engine.RecoveryTrash, Risk: engine.RiskLow, DefaultOn: true,
+			},
+			CategoryTitle: title,
+			Selected:      true,
+		}
+	}
+	return &engine.Plan{RunID: "T", Command: "clean", Items: []*engine.PlannedItem{
+		mk("system.a", "system", "System", "z-cache", 10),
+		mk("dev.a", "dev", "Developer caches", "a-cache", 20),
+	}}
+}
+
+// TestCleanHelpThenQuit pins the overlay behaviour: q closes the help, and the
+// next q quits (and aborts the run).
+func TestCleanHelpThenQuit(t *testing.T) {
+	m := NewCleanModel(CleanConfig{Plan: samplePlan()})
+	if cmd := pressKey(t, m, runeKey('?')); cmd != nil {
+		t.Fatalf("opening help ran a command: %v", cmd)
+	}
+	if !m.help.ShowAll {
+		t.Fatal("? should open the full help")
+	}
+	if cmd := pressKey(t, m, runeKey('q')); cmd != nil {
+		t.Fatal("q while help is open must close the help, not quit")
+	}
+	if m.help.ShowAll || m.aborted {
+		t.Fatalf("help still open=%v aborted=%v", m.help.ShowAll, m.aborted)
+	}
+	if cmd := pressKey(t, m, runeKey('q')); !isQuitCmd(cmd) {
+		t.Fatal("the q after closing help must quit")
+	}
+	if !m.aborted {
+		t.Fatal("quitting the clean TUI must abort the run")
+	}
+}
+
+func TestCleanHelpThenEscThenQuit(t *testing.T) {
+	m := NewCleanModel(CleanConfig{Plan: samplePlan()})
+	pressKey(t, m, runeKey('?'))
+	if cmd := pressKey(t, m, tea.KeyMsg{Type: tea.KeyEsc}); cmd != nil {
+		t.Fatal("esc should close the help, not quit")
+	}
+	if m.help.ShowAll {
+		t.Fatal("esc should close the help overlay")
+	}
+	if cmd := pressKey(t, m, runeKey('q')); !isQuitCmd(cmd) {
+		t.Fatal("q after closing help must quit")
+	}
+}
+
+// TestCleanSortNameKeepsSelectionAndCursor asserts n sorts by name without
+// touching the selection or moving the cursor, and that N clears the selection.
+func TestCleanSortNameKeepsSelectionAndCursor(t *testing.T) {
+	plan := twoCategoryPlan()
+	m := NewCleanModel(CleanConfig{Plan: plan})
+	first, ok := m.currentRow()
+	if !ok || first.kind != rowCategory || first.cat.Title != "System" {
+		t.Fatalf("cursor should start on the System category, got %+v", m.rows)
+	}
+
+	pressKey(t, m, runeKey('n'))
+	if !m.sortByName {
+		t.Fatal("n must sort by name")
+	}
+	for _, it := range plan.Items {
+		if !it.Selected {
+			t.Fatalf("n cleared the selection of %s", it.Target.ID)
+		}
+	}
+	cur, ok := m.currentRow()
+	if !ok || !sameRow(cur, first) {
+		t.Fatalf("n moved the cursor off the System category: %+v", cur)
+	}
+	if got := m.rows[0].cat.Title; got != "Developer caches" {
+		t.Fatalf("name sort should put Developer caches first, got %q", got)
+	}
+
+	pressKey(t, m, runeKey('N'))
+	for _, it := range plan.Items {
+		if it.Selected {
+			t.Fatalf("N must clear the selection of %s", it.Target.ID)
+		}
+	}
+
+	pressKey(t, m, runeKey('n'))
+	if m.sortByName {
+		t.Fatal("n should toggle back to the natural order")
+	}
+	if got := m.rows[0].cat.Title; got != "System" {
+		t.Fatalf("natural order should put System first, got %q", got)
+	}
+}
+
+// TestCleanFooterListsBindings asserts the footer names the keys it used to hide
+// and points at the full help for the rest.
+func TestCleanFooterListsBindings(t *testing.T) {
+	m := NewCleanModel(CleanConfig{Plan: samplePlan()})
+	m.width = 120
+	m.help.Width = 120
+	footer := m.footer()
+	for _, want := range []string{
+		"toggle", "expand", "collapse", "sort name", "none", "all safe",
+		"keep", "search", "review", "all keys", "quit",
+	} {
+		if !strings.Contains(footer, want) {
+			t.Fatalf("footer hides %q:\n%s", want, footer)
+		}
+	}
+	if lines := strings.Count(footer, "\n") + 1; lines > 2 {
+		t.Fatalf("footer is %d lines, want at most 2:\n%s", lines, footer)
+	}
+
+	full := m.help.FullHelpView(m.keys.fullHelp())
+	for _, want := range []string{"page up", "page down", "top", "bottom", "sort name"} {
+		if !strings.Contains(full, want) {
+			t.Fatalf("full help hides %q:\n%s", want, full)
+		}
 	}
 }

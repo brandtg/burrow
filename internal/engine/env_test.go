@@ -13,7 +13,7 @@ import (
 // TestResolveElevatedConfiguresPerUserRunner proves that an elevated invocation
 // (euid 0 with SUDO_USER set) configures the owner runner to drop to the
 // invoking user for per-user commands and to pass that user's HOME/XDG, so
-// owner commands never run as root (spec §7.6).
+// owner commands never run as root.
 func TestResolveElevatedConfiguresPerUserRunner(t *testing.T) {
 	u, err := user.Current()
 	if err != nil {

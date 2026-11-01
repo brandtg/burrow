@@ -1,9 +1,9 @@
 // Package projects implements the `projects` cleanup category: rebuildable
 // build artifacts (node_modules, target, virtualenvs, __pycache__, ...) under
-// the configured project roots. Discovery is internal/purge's own — the
-// git-tracked check, the active-project guard, and the inactivity window —
-// reused, not duplicated. Every target carries the trash recovery contract,
-// so a wrong guess costs disk space, not data.
+// the configured project roots. Discovery lives in this package: the
+// git-tracked check, the active-project guard, and the inactivity window.
+// Every target carries the trash recovery contract, so a wrong guess costs
+// disk space, not data.
 //
 // Provenance: behavioral port of Mole's purge rule (git-tracked-file
 // protection, nested-repo protection, age filter), reimplemented clean-room.
@@ -22,19 +22,18 @@ import (
 	"github.com/brandtg/burrow/internal/catalog"
 	"github.com/brandtg/burrow/internal/config"
 	"github.com/brandtg/burrow/internal/engine"
-	"github.com/brandtg/burrow/internal/purge"
 )
 
 // ID is the category identifier.
 const ID = "projects"
 
 // Category enumerates rebuildable project artifacts. The only state is the
-// warning sink and a git hook for tests; all protection rules live in
-// internal/purge discovery.
+// warning sink and a git hook for tests; all protection rules live in this
+// package's discovery.
 type Category struct {
 	warns []string
 	// git overrides the git implementation for tests. Nil uses ExecGit.
-	git purge.Git
+	git Git
 }
 
 // New returns the projects category.
@@ -48,7 +47,7 @@ func (*Category) Title() string { return "Projects" }
 
 // PreviewNote is the category guidance shown in the preview.
 func (*Category) PreviewNote() string {
-	return "Rebuildable artifacts under the configured project roots, one row per project. Trashed, so recoverable."
+	return "Rebuildable artifacts under the configured project roots, one row per project. Only bytecode caches are pre-selected; node_modules and build outputs stay off. Trashed, so recoverable."
 }
 
 // Warnings returns the non-fatal discovery notes (a configured root that does
@@ -60,11 +59,14 @@ func (c *Category) Warnings() []string { return c.warns }
 func (c *Category) warn(msg string) { c.warns = append(c.warns, ID+": "+msg) }
 
 // Discover enumerates rebuildable artifacts under the configured project roots.
-// Artifacts protected by purge's keep rules (git-tracked, unknown git state,
+// Artifacts protected by the discovery keep rules (git-tracked, unknown git state,
 // nested repository, unverifiable age, recent activity) produce no target.
 // Discovery is read-only; each candidate is validated and snapshotted before it
 // becomes a target, so an invalid candidate is skipped (fail closed).
 func (c *Category) Discover(ctx context.Context, env *engine.Env) ([]engine.Target, error) {
+	// Warnings accumulate on the category value, which is registered as a
+	// singleton. Reset them so repeated discovery is idempotent.
+	c.warns = nil
 	if env == nil || env.Cfg == nil {
 		return nil, nil
 	}
@@ -74,13 +76,13 @@ func (c *Category) Discover(ctx context.Context, env *engine.Env) ([]engine.Targ
 	}
 	maxAge, err := config.ParseDuration(env.Cfg.Purge.MaxAge)
 	if err != nil {
-		return nil, fmt.Errorf("invalid [purge] max_age: %w", err)
+		return nil, fmt.Errorf("invalid [projects] max_age: %w", err)
 	}
 	activeWithin, err := config.ParseDuration(env.Cfg.Purge.ActiveWithin)
 	if err != nil {
-		return nil, fmt.Errorf("invalid [purge] active_within: %w", err)
+		return nil, fmt.Errorf("invalid [projects] active_within: %w", err)
 	}
-	arts, err := purge.Discover(ctx, purge.Options{
+	arts, err := Discover(ctx, Options{
 		Roots:        roots,
 		MaxAge:       maxAge,
 		ActiveWithin: activeWithin,
@@ -109,7 +111,7 @@ func (c *Category) Discover(ctx context.Context, env *engine.Env) ([]engine.Targ
 // target builds one trash-contract target for a discovered artifact. Roots is
 // the resolved project-root allow-list: a candidate can only ever be trashed
 // inside a configured root.
-func (c *Category) target(env *engine.Env, roots []string, a purge.Artifact, seen map[string]bool) (engine.Target, error) {
+func (c *Category) target(env *engine.Env, roots []string, a Artifact, seen map[string]bool) (engine.Target, error) {
 	regen := regenFor(a.Type)
 	return catalog.NewTrashTarget(env, catalog.TrashTargetOptions{
 		ID:         uniqueID(a, seen),
@@ -145,23 +147,16 @@ func regenFor(pattern string) engine.Regen {
 }
 
 // evidence states why the artifact is a candidate: its last known activity.
-func evidence(a purge.Artifact) []string {
+func evidence(a Artifact) []string {
 	if !a.AgeKnown {
 		return []string{"activity age unknown"}
 	}
-	age := time.Since(a.Mtime)
-	if age < 0 {
-		age = 0
-	}
-	if days := int(age.Hours() / 24); days > 0 {
-		return []string{fmt.Sprintf("last activity %dd ago", days)}
-	}
-	return []string{fmt.Sprintf("last activity %dh ago", int(age.Hours()))}
+	return []string{"last activity " + humanAge(time.Since(a.Mtime)) + " ago"}
 }
 
 // uniqueID builds a stable per-artifact id: projects.<rel-to-project>, with a
 // short path hash appended when two candidates would otherwise collide.
-func uniqueID(a purge.Artifact, seen map[string]bool) string {
+func uniqueID(a Artifact, seen map[string]bool) string {
 	base := relID(a.Project, a.Path)
 	id := ID + "." + base
 	if seen[id] {
@@ -189,7 +184,7 @@ func shortHash(path string) string {
 	return hex.EncodeToString(sum[:4])
 }
 
-// Roots expands the configured project roots ([purge] paths) against the
+// Roots expands the configured project roots ([projects] paths) against the
 // invoking user's home, resolves symlinks, and de-duplicates them. Discovery
 // reports artifacts at their physical path, so the deletion allow-list must
 // use the same resolved roots or a symlinked project root (for example

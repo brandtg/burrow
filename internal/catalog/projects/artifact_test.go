@@ -1,4 +1,4 @@
-package purge
+package projects
 
 import (
 	"context"
@@ -36,8 +36,8 @@ func TestMatchArtifact(t *testing.T) {
 	}
 }
 
-// makeArtifact creates dir/<name>/file with content and an old mtime.
-func makeArtifact(t *testing.T, dir, name string, when time.Time) string {
+// makeArtifactAt creates dir/<name>/file with content and the given mtime.
+func makeArtifactAt(t *testing.T, dir, name string, when time.Time) string {
 	t.Helper()
 	p := filepath.Join(dir, name)
 	if err := os.MkdirAll(p, 0o755); err != nil {
@@ -65,7 +65,7 @@ func touchTree(t *testing.T, root string, when time.Time) {
 
 func TestDiscoverUntrackedPurged(t *testing.T) {
 	root := t.TempDir()
-	art := makeArtifact(t, root, "node_modules", time.Now().Add(-30*24*time.Hour))
+	art := makeArtifactAt(t, root, "node_modules", time.Now().Add(-30*24*time.Hour))
 	got, err := Discover(context.Background(), Options{Roots: []string{root}})
 	if err != nil {
 		t.Fatal(err)
@@ -83,7 +83,7 @@ func TestDiscoverUntrackedPurged(t *testing.T) {
 
 func TestDiscoverPrunesNestedArtifacts(t *testing.T) {
 	root := t.TempDir()
-	outer := makeArtifact(t, root, "node_modules", time.Now().Add(-30*24*time.Hour))
+	outer := makeArtifactAt(t, root, "node_modules", time.Now().Add(-30*24*time.Hour))
 	inner := filepath.Join(outer, "nested", "node_modules")
 	if err := os.MkdirAll(inner, 0o755); err != nil {
 		t.Fatal(err)
@@ -99,7 +99,7 @@ func TestDiscoverPrunesNestedArtifacts(t *testing.T) {
 
 func TestDiscoverNestedRepoKept(t *testing.T) {
 	root := t.TempDir()
-	art := makeArtifact(t, root, "build", time.Now().Add(-30*24*time.Hour))
+	art := makeArtifactAt(t, root, "build", time.Now().Add(-30*24*time.Hour))
 	if err := os.MkdirAll(filepath.Join(art, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -112,42 +112,12 @@ func TestDiscoverNestedRepoKept(t *testing.T) {
 	}
 }
 
-// fakeGit simulates git for tracked/unknown tests.
-type fakeGit struct {
-	root      string
-	tracked   []string
-	err       error
-	commit    time.Time
-	commitErr error
-}
-
-func (f fakeGit) TopLevel(context.Context, string) (string, error) {
-	if f.err != nil {
-		return "", f.err
-	}
-	return f.root, nil
-}
-
-func (f fakeGit) LsFiles(context.Context, string) ([]string, error) {
-	if f.err != nil {
-		return nil, f.err
-	}
-	return f.tracked, nil
-}
-
-func (f fakeGit) LastCommit(context.Context, string) (time.Time, error) {
-	if f.commitErr != nil {
-		return time.Time{}, f.commitErr
-	}
-	return f.commit, nil
-}
-
 func TestDiscoverGitTrackedKept(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	art := makeArtifact(t, root, "node_modules", time.Now().Add(-30*24*time.Hour))
+	art := makeArtifactAt(t, root, "node_modules", time.Now().Add(-30*24*time.Hour))
 	if err := os.MkdirAll(filepath.Join(art, "keep"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +139,7 @@ func TestDiscoverUnknownGitKept(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	makeArtifact(t, root, "node_modules", time.Now().Add(-30*24*time.Hour))
+	makeArtifactAt(t, root, "node_modules", time.Now().Add(-30*24*time.Hour))
 	git := fakeGit{err: errors.New("git unavailable")}
 	got, err := Discover(context.Background(), Options{Roots: []string{root}, Git: git})
 	if err != nil {
@@ -182,8 +152,8 @@ func TestDiscoverUnknownGitKept(t *testing.T) {
 
 func TestDiscoverAgeFilter(t *testing.T) {
 	root := t.TempDir()
-	makeArtifact(t, root, "stale", time.Now().Add(-30*24*time.Hour))
-	makeArtifact(t, root, "fresh", time.Now())
+	makeArtifactAt(t, root, "stale", time.Now().Add(-30*24*time.Hour))
+	makeArtifactAt(t, root, "fresh", time.Now())
 	got, err := Discover(context.Background(), Options{
 		Roots:        []string{root},
 		ArtifactDirs: []string{"stale", "fresh"},
@@ -204,9 +174,9 @@ func TestDiscoverAgeFilter(t *testing.T) {
 	}
 }
 
-func TestDiscoverWarnsOnMissingRoot(t *testing.T) {
+func TestArtifactDiscoverWarnsOnMissingRoot(t *testing.T) {
 	root := t.TempDir()
-	makeArtifact(t, root, "node_modules", time.Now().Add(-30*24*time.Hour))
+	makeArtifactAt(t, root, "node_modules", time.Now().Add(-30*24*time.Hour))
 	missing := filepath.Join(t.TempDir(), "does-not-exist")
 	var warnings []string
 	got, err := Discover(context.Background(), Options{
@@ -263,12 +233,12 @@ func TestDiscoverDepthBound(t *testing.T) {
 	}
 }
 
-func TestDiscoverActiveProjectKept(t *testing.T) {
+func TestArtifactDiscoverActiveProjectKept(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	makeArtifact(t, root, "node_modules", time.Now().Add(-60*24*time.Hour))
+	makeArtifactAt(t, root, "node_modules", time.Now().Add(-60*24*time.Hour))
 	git := fakeGit{root: root, commit: time.Now().Add(-24 * time.Hour)}
 	got, err := Discover(context.Background(), Options{
 		Roots:        []string{root},
@@ -291,8 +261,8 @@ func TestDiscoverActiveProjectKept(t *testing.T) {
 // recovery a wrong guess costs disk space, not data.
 func TestDiscoverSingleAgeWindow(t *testing.T) {
 	root := t.TempDir()
-	makeArtifact(t, root, "node_modules", time.Now().Add(-20*24*time.Hour))
-	makeArtifact(t, root, "__pycache__", time.Now().Add(-20*24*time.Hour))
+	makeArtifactAt(t, root, "node_modules", time.Now().Add(-20*24*time.Hour))
+	makeArtifactAt(t, root, "__pycache__", time.Now().Add(-20*24*time.Hour))
 	got, err := Discover(context.Background(), Options{
 		Roots:        []string{root},
 		ArtifactDirs: []string{"node_modules", "__pycache__"},
@@ -326,9 +296,9 @@ func TestDiscoverSingleAgeWindow(t *testing.T) {
 
 // TestDiscoverGenericNameNeedsNoMarker: a generic name (build, dist) is a
 // candidate like any other; the ecosystem-marker gating is gone.
-func TestDiscoverGenericNameNeedsNoMarker(t *testing.T) {
+func TestArtifactDiscoverGenericNameNeedsNoMarker(t *testing.T) {
 	root := t.TempDir()
-	makeArtifact(t, root, "build", time.Now().Add(-30*24*time.Hour))
+	makeArtifactAt(t, root, "build", time.Now().Add(-30*24*time.Hour))
 	got, err := Discover(context.Background(), Options{
 		Roots:        []string{root},
 		ArtifactDirs: []string{"build"},
@@ -366,8 +336,8 @@ func TestDiscoverRealGit(t *testing.T) {
 		t.Fatal(err)
 	}
 	run("add", "tracked-pkg/keep.txt")
-	makeArtifact(t, root, "tracked-pkg", time.Now().Add(-30*24*time.Hour))
-	makeArtifact(t, root, "node_modules", time.Now().Add(-30*24*time.Hour))
+	makeArtifactAt(t, root, "tracked-pkg", time.Now().Add(-30*24*time.Hour))
+	makeArtifactAt(t, root, "node_modules", time.Now().Add(-30*24*time.Hour))
 
 	got, err := Discover(context.Background(), Options{
 		Roots:        []string{root},

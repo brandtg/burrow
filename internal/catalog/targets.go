@@ -105,7 +105,7 @@ func AllowedRoots(env *engine.Env) []string {
 	return roots
 }
 
-// ProcessGuard fails closed when any named process is running (spec §7.5). A
+// ProcessGuard fails closed when any named process is running. A
 // missing pgrep or an indeterminate probe is Unknown, which stops the action.
 type ProcessGuard struct{ Names []string }
 
@@ -142,7 +142,7 @@ func processRunning(ctx context.Context, env *engine.Env, name string) (bool, er
 
 // ResolveOwnerPath probes an owner command and returns the absolute path it
 // reports on the first non-empty line. It fails closed on a relative or empty
-// path: owner output is untrusted input (spec §7.3).
+// path: owner output is untrusted input.
 func ResolveOwnerPath(ctx context.Context, r *owner.Runner, argv []string) (string, error) {
 	if r == nil {
 		return "", errors.New("catalog: no runner available")

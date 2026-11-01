@@ -10,8 +10,6 @@ import (
 	"io"
 	"os"
 	"strings"
-
-	"github.com/brandtg/burrow/internal/owner"
 )
 
 // Info is the parsed /etc/os-release.
@@ -84,30 +82,17 @@ func (i Info) Family() string {
 	return "unknown"
 }
 
-// Adapter describes a package-manager family. The command methods return
-// allow-listed argv (invariant I4); a zero-value OwnerCommand means the family
-// does not implement that item yet, and the system catalog skips it.
+// Adapter describes a package-manager family. The owner commands a family
+// exposes (allow-listed argv, invariant I4) travel inside SystemSpec; a
+// zero-value OwnerCommand means the family does not implement that item yet,
+// and the system catalog skips it.
 type Adapter interface {
 	// ID is the family identifier, e.g. "apt".
 	ID() string
-	// PackageManager is the primary binary, e.g. "apt-get".
-	PackageManager() string
-	// LockFiles are the paths whose presence indicates a busy package manager.
-	LockFiles() []string
-	// NeedsRoot reports whether owner commands for this family need elevation.
-	NeedsRoot() bool
-	// PackageCacheAction empties the package-manager cache.
-	PackageCacheAction() owner.OwnerCommand
-	// OrphansAction removes packages no longer required.
-	OrphansAction() owner.OwnerCommand
-	// ResidualConfigAction purges the given residual-config packages.
-	ResidualConfigAction(pkgs []string) (owner.OwnerCommand, error)
-	// OldKernelsAction removes old kernels.
-	OldKernelsAction() owner.OwnerCommand
 	// LockGuard names the locks and processes that indicate a busy manager.
 	LockGuard() LockProbe
 	// System returns the data behind the generic `system` catalog items so the
-	// catalog stays distro-agnostic (Plan 07). It is read-only data.
+	// catalog stays distro-agnostic. It is read-only data.
 	System() SystemSpec
 }
 
@@ -131,49 +116,27 @@ func For(info Info) Adapter {
 
 type aptAdapter struct{}
 
-func (aptAdapter) ID() string             { return "apt" }
-func (aptAdapter) PackageManager() string { return "apt-get" }
-func (aptAdapter) LockFiles() []string {
-	return []string{"/var/lib/dpkg/lock-frontend", "/var/lib/dpkg/lock"}
-}
-func (aptAdapter) NeedsRoot() bool { return true }
+func (aptAdapter) ID() string { return "apt" }
 
 type dnfAdapter struct{}
 
-func (dnfAdapter) ID() string             { return "dnf" }
-func (dnfAdapter) PackageManager() string { return "dnf" }
-func (dnfAdapter) LockFiles() []string {
-	return []string{"/var/lib/rpm/.rpm.lock", "/var/cache/dnf/metadata_lock.pid"}
-}
-func (dnfAdapter) NeedsRoot() bool { return true }
+func (dnfAdapter) ID() string { return "dnf" }
 
 type pacmanAdapter struct{}
 
-func (pacmanAdapter) ID() string             { return "pacman" }
-func (pacmanAdapter) PackageManager() string { return "pacman" }
-func (pacmanAdapter) LockFiles() []string    { return []string{"/var/lib/pacman/db.lck"} }
-func (pacmanAdapter) NeedsRoot() bool        { return true }
+func (pacmanAdapter) ID() string { return "pacman" }
 
 type zypperAdapter struct{}
 
-func (zypperAdapter) ID() string             { return "zypper" }
-func (zypperAdapter) PackageManager() string { return "zypper" }
-func (zypperAdapter) LockFiles() []string    { return []string{"/var/run/zypp.pid"} }
-func (zypperAdapter) NeedsRoot() bool        { return true }
+func (zypperAdapter) ID() string { return "zypper" }
 
 type apkAdapter struct{}
 
-func (apkAdapter) ID() string             { return "apk" }
-func (apkAdapter) PackageManager() string { return "apk" }
-func (apkAdapter) LockFiles() []string    { return []string{"/lib/apk/db/lock"} }
-func (apkAdapter) NeedsRoot() bool        { return true }
+func (apkAdapter) ID() string { return "apk" }
 
 type genericAdapter struct{}
 
-func (genericAdapter) ID() string             { return "unknown" }
-func (genericAdapter) PackageManager() string { return "" }
-func (genericAdapter) LockFiles() []string    { return nil }
-func (genericAdapter) NeedsRoot() bool        { return false }
+func (genericAdapter) ID() string { return "unknown" }
 
 // String renders a short human description.
 func (i Info) String() string {

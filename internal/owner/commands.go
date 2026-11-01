@@ -15,14 +15,13 @@ type OwnerCommand struct {
 	ID        string
 	Argv      []string
 	NeedsRoot bool
-	ReadOnly  bool
 	Timeout   time.Duration
 }
 
 // Valid reports whether the command has an id and a non-empty argv.
 func (c OwnerCommand) Valid() bool { return c.ID != "" && len(c.Argv) > 0 }
 
-// --- Debian/Ubuntu (apt/dpkg) owner commands (spec §8.1, §21.1). ---
+// --- Debian/Ubuntu (apt/dpkg) owner commands. ---
 
 // AptPackageCache empties /var/cache/apt/archives.
 func AptPackageCache() OwnerCommand {
@@ -79,7 +78,7 @@ func AptResidualConfig(pkgs []string) (OwnerCommand, error) {
 	}, nil
 }
 
-// --- Fedora/RHEL (dnf/rpm) owner commands (spec §8.1, §21.1). ---
+// --- Fedora/RHEL (dnf/rpm) owner commands. ---
 
 // DnfPackageCache empties the dnf package cache.
 func DnfPackageCache() OwnerCommand {
@@ -116,12 +115,12 @@ func DnfOldKernels() OwnerCommand {
 // format string carries a literal newline escape so dnf emits one name per
 // line; without it dnf concatenates every name into a single token.
 func DnfOrphansProbe() OwnerCommand {
-	return OwnerCommand{ID: "probe.dnf.unneeded", Argv: []string{"dnf", "repoquery", "--unneeded", "--qf", "%{name}\\n"}, ReadOnly: true, Timeout: TimeoutSizeProbe}
+	return OwnerCommand{ID: "probe.dnf.unneeded", Argv: []string{"dnf", "repoquery", "--unneeded", "--qf", "%{name}\\n"}, Timeout: TimeoutSizeProbe}
 }
 
 // RpmKernelProbe lists installed kernel packages (read-only).
 func RpmKernelProbe() OwnerCommand {
-	return OwnerCommand{ID: "probe.rpm.kernels", Argv: []string{"rpm", "-q", "kernel"}, ReadOnly: true, Timeout: TimeoutSizeProbe}
+	return OwnerCommand{ID: "probe.rpm.kernels", Argv: []string{"rpm", "-q", "kernel"}, Timeout: TimeoutSizeProbe}
 }
 
 // --- systemd owner commands. ---
@@ -156,14 +155,14 @@ func SystemdTmpfilesClean(id string) OwnerCommand {
 	}
 }
 
-// --- Per-user language/toolchain owner commands (spec §8.4, §21.1). ---
+// --- Per-user language/toolchain owner commands. ---
 //
 // These are inherently per-user and must never be elevated: they operate on the
 // invoking user's own cache. NeedsRoot is false and the runner resolves the
-// binary as that user (spec §7.6).
+// binary as that user.
 //
-// Provenance: the owner-command list is cross-checked against spec §21.1; the
-// keep/discard reasoning for each toolchain is a behavioral port of Mole's
+// Provenance: the keep/discard reasoning for each toolchain is a behavioral
+// port of Mole's
 // lib/clean/dev.sh, reimplemented clean-room.
 
 // NpmCacheClean clears the npm cache.
@@ -232,13 +231,13 @@ func MiseCacheClear() OwnerCommand {
 
 // GhClearCache clears the GitHub CLI cache. The runner sets the invoking user's
 // XDG_CACHE_HOME for per-user commands, so gh clears the same cache directory
-// that discovery resolved (spec §8.4's `XDG_CACHE_HOME=<parent>` intent) without
+// that discovery resolved, without
 // building a dynamic argv.
 func GhClearCache() OwnerCommand {
 	return OwnerCommand{ID: "dev.gh-cli", Argv: []string{"gh", "config", "clear-cache"}, Timeout: TimeoutOwnerClean}
 }
 
-// --- Containers: docker/podman owner commands (spec §8.2, §21.1). ---
+// --- Containers: docker/podman owner commands. ---
 //
 // Docker/podman are typically reachable as the invoking user (rootless or the
 // docker group), so these run without elevation. If the socket is root-only the
@@ -260,7 +259,7 @@ func DockerImagePruneAll() OwnerCommand {
 }
 
 // DockerVolumePrune removes unused volumes. Volumes can hold data, not just
-// cache; this is a high-risk action (plan 05 risk note).
+// cache; this is a high-risk action.
 func DockerVolumePrune() OwnerCommand {
 	return OwnerCommand{ID: "containers.docker-volumes", Argv: []string{"docker", "volume", "prune", "-f"}, Timeout: TimeoutOwnerClean}
 }
@@ -279,24 +278,13 @@ func PodmanSystemPrune() OwnerCommand {
 
 // DockerSystemDFProbe reports docker's per-category disk usage (read-only).
 func DockerSystemDFProbe() OwnerCommand {
-	return OwnerCommand{ID: "probe.docker.df", Argv: []string{"docker", "system", "df"}, ReadOnly: true, Timeout: TimeoutSizeProbe}
+	return OwnerCommand{ID: "probe.docker.df", Argv: []string{"docker", "system", "df"}, Timeout: TimeoutSizeProbe}
 }
 
-// DockerInfoProbe checks that the docker daemon is reachable (read-only; it
-// never triggers a pull).
-func DockerInfoProbe() OwnerCommand {
-	return OwnerCommand{ID: "probe.docker.info", Argv: []string{"docker", "info"}, ReadOnly: true, Timeout: TimeoutQuickDetect}
-}
-
-// PodmanInfoProbe checks that podman is usable (read-only).
-func PodmanInfoProbe() OwnerCommand {
-	return OwnerCommand{ID: "probe.podman.info", Argv: []string{"podman", "info"}, ReadOnly: true, Timeout: TimeoutQuickDetect}
-}
-
-// --- Desktop packages: flatpak/snap owner commands (spec §8.3, §21.1). ---
+// --- Desktop packages: flatpak/snap owner commands. ---
 
 // FlatpakUninstallUnused removes unused runtimes. It is per-user; it must never
-// run as root (spec §7.6).
+// run as root.
 func FlatpakUninstallUnused() OwnerCommand {
 	return OwnerCommand{ID: "flatpak.unused", Argv: []string{"flatpak", "uninstall", "--unused", "-y"}, Timeout: TimeoutOwnerClean}
 }
@@ -308,18 +296,18 @@ func FlatpakRepair() OwnerCommand {
 
 // FlatpakListAppsProbe lists installed application ids (read-only).
 func FlatpakListAppsProbe() OwnerCommand {
-	return OwnerCommand{ID: "probe.flatpak.apps", Argv: []string{"flatpak", "list", "--app", "--columns=application"}, ReadOnly: true, Timeout: TimeoutSizeProbe}
+	return OwnerCommand{ID: "probe.flatpak.apps", Argv: []string{"flatpak", "list", "--app", "--columns=application"}, Timeout: TimeoutSizeProbe}
 }
 
 // SnapListProbe lists installed snaps (read-only).
 func SnapListProbe() OwnerCommand {
-	return OwnerCommand{ID: "probe.snap.list", Argv: []string{"snap", "list"}, ReadOnly: true, Timeout: TimeoutSizeProbe}
+	return OwnerCommand{ID: "probe.snap.list", Argv: []string{"snap", "list"}, Timeout: TimeoutSizeProbe}
 }
 
 // SnapListAllProbe lists installed snaps including disabled revisions
 // (read-only).
 func SnapListAllProbe() OwnerCommand {
-	return OwnerCommand{ID: "probe.snap.list-all", Argv: []string{"snap", "list", "--all"}, ReadOnly: true, Timeout: TimeoutSizeProbe}
+	return OwnerCommand{ID: "probe.snap.list-all", Argv: []string{"snap", "list", "--all"}, Timeout: TimeoutSizeProbe}
 }
 
 // SnapRemoveRevision purges one disabled revision. The name and revision come
@@ -375,67 +363,67 @@ func ValidSnapRevision(s string) bool {
 
 // NpmCacheProbe asks npm where its cache lives.
 func NpmCacheProbe() OwnerCommand {
-	return OwnerCommand{ID: "probe.npm.cache", Argv: []string{"npm", "config", "get", "cache"}, ReadOnly: true, Timeout: TimeoutQuickDetect}
+	return OwnerCommand{ID: "probe.npm.cache", Argv: []string{"npm", "config", "get", "cache"}, Timeout: TimeoutQuickDetect}
 }
 
 // PnpmStoreProbe asks pnpm where its store lives.
 func PnpmStoreProbe() OwnerCommand {
-	return OwnerCommand{ID: "probe.pnpm.store", Argv: []string{"pnpm", "store", "path"}, ReadOnly: true, Timeout: TimeoutQuickDetect}
+	return OwnerCommand{ID: "probe.pnpm.store", Argv: []string{"pnpm", "store", "path"}, Timeout: TimeoutQuickDetect}
 }
 
 // BunCacheProbe asks bun where its cache lives.
 func BunCacheProbe() OwnerCommand {
-	return OwnerCommand{ID: "probe.bun.cache", Argv: []string{"bun", "pm", "cache"}, ReadOnly: true, Timeout: TimeoutQuickDetect}
+	return OwnerCommand{ID: "probe.bun.cache", Argv: []string{"bun", "pm", "cache"}, Timeout: TimeoutQuickDetect}
 }
 
 // GoModCacheProbe reports GOMODCACHE.
 func GoModCacheProbe() OwnerCommand {
-	return OwnerCommand{ID: "probe.go.modcache", Argv: []string{"go", "env", "GOMODCACHE"}, ReadOnly: true, Timeout: TimeoutQuickDetect}
+	return OwnerCommand{ID: "probe.go.modcache", Argv: []string{"go", "env", "GOMODCACHE"}, Timeout: TimeoutQuickDetect}
 }
 
 // GoBuildCacheProbe reports GOCACHE.
 func GoBuildCacheProbe() OwnerCommand {
-	return OwnerCommand{ID: "probe.go.gocache", Argv: []string{"go", "env", "GOCACHE"}, ReadOnly: true, Timeout: TimeoutQuickDetect}
+	return OwnerCommand{ID: "probe.go.gocache", Argv: []string{"go", "env", "GOCACHE"}, Timeout: TimeoutQuickDetect}
 }
 
 // PipCacheDirProbe reports the pip cache directory.
 func PipCacheDirProbe() OwnerCommand {
-	return OwnerCommand{ID: "probe.pip.cache", Argv: []string{"pip3", "cache", "dir"}, ReadOnly: true, Timeout: TimeoutQuickDetect}
+	return OwnerCommand{ID: "probe.pip.cache", Argv: []string{"pip3", "cache", "dir"}, Timeout: TimeoutQuickDetect}
 }
 
 // UvCacheDirProbe reports the uv cache directory.
 func UvCacheDirProbe() OwnerCommand {
-	return OwnerCommand{ID: "probe.uv.cache", Argv: []string{"uv", "cache", "dir"}, ReadOnly: true, Timeout: TimeoutQuickDetect}
+	return OwnerCommand{ID: "probe.uv.cache", Argv: []string{"uv", "cache", "dir"}, Timeout: TimeoutQuickDetect}
 }
 
 // MiseCachePathProbe reports the mise cache directory.
 func MiseCachePathProbe() OwnerCommand {
-	return OwnerCommand{ID: "probe.mise.cache", Argv: []string{"mise", "cache", "path"}, ReadOnly: true, Timeout: TimeoutQuickDetect}
+	return OwnerCommand{ID: "probe.mise.cache", Argv: []string{"mise", "cache", "path"}, Timeout: TimeoutQuickDetect}
 }
 
 // AptOrphanProbe simulates an autoremove and reports what it would remove.
 func AptOrphanProbe() OwnerCommand {
-	return OwnerCommand{ID: "probe.apt.orphans", Argv: []string{"apt-get", "-s", "autoremove"}, ReadOnly: true, Timeout: TimeoutSizeProbe}
+	return OwnerCommand{ID: "probe.apt.orphans", Argv: []string{"apt-get", "-s", "autoremove"}, Timeout: TimeoutSizeProbe}
 }
 
 // DpkgListProbe lists installed and residual-config packages.
 func DpkgListProbe() OwnerCommand {
-	return OwnerCommand{ID: "probe.dpkg.list", Argv: []string{"dpkg", "-l"}, ReadOnly: true, Timeout: TimeoutSizeProbe}
+	return OwnerCommand{ID: "probe.dpkg.list", Argv: []string{"dpkg", "-l"}, Timeout: TimeoutSizeProbe}
 }
 
 // DpkgKernelProbe lists installed kernel image packages.
 func DpkgKernelProbe() OwnerCommand {
-	return OwnerCommand{ID: "probe.dpkg.kernels", Argv: []string{"dpkg-query", "-W", "-f=${Package}\n", "linux-image-*"}, ReadOnly: true, Timeout: TimeoutSizeProbe}
+	return OwnerCommand{ID: "probe.dpkg.kernels", Argv: []string{"dpkg-query", "-W", "-f=${Package}\n", "linux-image-*"}, Timeout: TimeoutSizeProbe}
 }
 
 // JournaldDiskUsageProbe reports the on-disk journal size.
 func JournaldDiskUsageProbe() OwnerCommand {
-	return OwnerCommand{ID: "probe.journald.disk", Argv: []string{"journalctl", "--disk-usage"}, ReadOnly: true, Timeout: TimeoutSizeProbe}
+	return OwnerCommand{ID: "probe.journald.disk", Argv: []string{"journalctl", "--disk-usage"}, Timeout: TimeoutSizeProbe}
 }
 
 // UnameProbe reports the running kernel release.
 func UnameProbe() OwnerCommand {
-	return OwnerCommand{ID: "probe.uname", Argv: []string{"uname", "-r"}, ReadOnly: true, Timeout: TimeoutQuickDetect}
+	return OwnerCommand{ID: "probe.uname", Argv: []string{"uname", "-r"}, Timeout: TimeoutQuickDetect}
 }
 
 // ValidPackageName reports whether s is a safe dpkg package name: lowercase
@@ -459,7 +447,7 @@ func ValidPackageName(s string) bool {
 
 // ValidatePackageSubset returns an error if any name in pkgs is absent from the
 // allow set. This is the check that keeps `dpkg --purge` bounded to packages
-// the tool itself parsed (I4 / plan 03 note).
+// the tool itself parsed (invariant I4).
 func ValidatePackageSubset(pkgs []string, allow map[string]bool) error {
 	var bad []string
 	for _, p := range pkgs {

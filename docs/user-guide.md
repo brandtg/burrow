@@ -5,7 +5,9 @@ work: a grouped preview of everything reclaimable, one review screen, one
 confirm. Every mutation is either a **Trash move** (recoverable via
 `burrow history --restore`) or an **allow-listed owner command** (permanent by
 nature, re-downloadable by definition). Nothing mutates before the preview,
-and any uncertainty skips the item and records why.
+and any uncertainty skips the item and records why. The one mutation that is
+permanent and unrecoverable — emptying the Trash, the `user-cache.trash` row —
+is labeled high-risk and default off.
 
 ```
 burrow                        # the product: scan -> one grouped review -> confirm
@@ -19,11 +21,21 @@ burrow docs --dir <dir>       # regenerate man pages (for packagers)
 burrow version
 ```
 
-Global flags: `--dry-run`, `-y/--yes`, `--json`, `--plain`, `--only`,
-`--exclude`, `--min-size`, `--no-owner`, `--color`/`--no-color`, `--config`,
-`--log-level`, `-v`, `--quiet`. Exit codes: `0` success, `1` error, `2` usage,
-`3` partial failure, `75` a safety guard stopped an action, `124` a subprocess
-timed out, `130` interrupted.
+Global flags: `--dry-run`, `-y/--yes`, `--json`, `--plain`, `--color`/`--no-color`,
+`--config`. The selection flags `--only`, `--exclude`, `--min-size`, `--no-owner`,
+and `--age` belong to `clean` (and the deprecated `purge` alias) — `analyze` and
+`history` do not accept them. `--all` exists only on the `clean` subcommand.
+Exit codes: `0` success, `1` error, `2` usage, `3` partial failure, `75` a
+safety guard stopped an action, `124` a subprocess timed out, `130`
+interrupted.
+
+`--json` has three shapes: `clean`, `analyze`, and `config` print one
+pretty-printed JSON document; `history --json` prints JSONL — one compact
+record per line, the shape meant for streaming; `version --json` prints a
+single line.
+
+Install: `install.sh` (SHA-256 verified, no `curl | sh`) or the native
+`.deb`/`.rpm`/`.apk`/Arch packages — see the README's Install section.
 
 ## Dry-run first
 
@@ -81,7 +93,7 @@ pre-selected, expensive ones (`node_modules`, virtualenvs) are shown but off.
 ## Selecting what to clean
 
 ```sh
-burrow --all                            # every category
+burrow clean --all                      # every category
 burrow --only dev,system                # categories or item ids
 burrow --only dev.npm                   # one item
 burrow --exclude containers             # drop a category
@@ -93,9 +105,11 @@ burrow --no-owner                       # trash user caches, skip owner commands
 The whitelist is a newline-delimited file at
 `$XDG_CONFIG_HOME/burrow/whitelist` (default `~/.config/burrow/whitelist`).
 Comments (`#`) and blank lines are preserved. A whitelisted path protects
-itself and its parent from the app-cache sweep. `k` in the preview adds the
-row's path (or every path in a group/category) and clears its selection, so
-the choice persists to future runs.
+itself and its parent from the app-cache sweep. `K` in the preview (uppercase;
+lowercase `k` is vim-up) adds the row's path (or every path in a
+group/category) and clears its selection, so the choice persists to future
+runs; it mutates nothing on the spot — the undo for actual deletes is
+`history --restore`.
 
 ```sh
 burrow clean --whitelist            # interactive add/remove loop on a terminal
@@ -104,13 +118,19 @@ burrow clean --whitelist --json     # print entries as JSON
 
 ## Projects (the deprecated `purge` alias)
 
-The Projects category finds rebuildable build artifacts (`node_modules`,
-`target`, `.venv`, `__pycache__`, ...) under the configured project roots and
-moves them to the Trash, one row per project. A candidate is kept when it is
+Step 1, before anything else: set your project roots. `[projects] paths =
+[...]` in `$XDG_CONFIG_HOME/burrow/config.toml` (the older `[purge]` section
+name is still read), or `BURROW_PROJECT_PATHS="/home/me/code,/home/me/src"`
+for a one-off; the built-in defaults (`~/Projects`, `~/src`, `~/dev`,
+`~/code`, `~/work`) are what gets scanned until you do.
+
+With roots set, the Projects category finds rebuildable build artifacts
+(`node_modules`, `target`, `.venv`, `__pycache__`, ...) under them and moves
+them to the Trash, one row per project. A candidate is kept when it is
 git-tracked, when git state cannot be determined, when it contains a git
 repository, when it belongs to an **active project** (the owning repo was
-committed within `[purge] active_within`, default 30d), or when it has seen
-activity within `[purge] max_age` (default 7d). With Trash recovery a wrong
+committed within `[projects] active_within`, default 30d), or when it has seen
+activity within `[projects] max_age` (default 7d). With Trash recovery a wrong
 guess costs disk space, not data, so there are no per-type windows or
 name-shape heuristics.
 
@@ -134,8 +154,11 @@ burrow history --restore --run <run_id>
 ```
 
 `--restore` moves the run's **trash-contract** items back from the freedesktop
-Trash (matching each `.trashinfo`). Owner-contract items are permanent and
-re-downloadable; they are reported but never restorable.
+Trash (the user's `$XDG_DATA_HOME/Trash`, default `~/.local/share/Trash`,
+matched by each `.trashinfo`). Owner-contract items are permanent and
+re-downloadable; they are reported but never restorable. An emptied Trash is
+not restorable either: once the `user-cache.trash` row has run, restore cannot
+bring those files back.
 
 ## Analyze
 
@@ -165,7 +188,8 @@ anyway. Reflinked copies (btrfs/xfs) count once.
 Config lives at `$XDG_CONFIG_HOME/burrow/config.toml` (override with
 `--config`). Precedence is CLI flag > `BURROW_*` environment > config file >
 built-in default. `burrow config` prints the effective config plus every
-resolved path; `--json` prints the same as JSON.
+resolved path; `--json` prints the same as one pretty JSON document. The
+Trash burrow writes to is resolved from XDG, not configured. The keys:
 
 ```toml
 [general]
@@ -174,15 +198,11 @@ log_level = "info"
 
 [clean]
 default_categories = ["projects","dev","user-cache","desktop-pkgs","downloads"]
-journald_max_size = "500M"      # or journald_max_age; exactly one
+journald_max_size = "500M"      # journald_max_age is the alternative; size wins if both set
 min_size = "0"
 protected_paths = ["/etc","/usr","/var/lib"]
 
-[trash]
-backend = "native"              # native|external
-external_command = ""
-
-[purge]                         # the Projects category
+[projects]                      # the Projects category; deprecated alias: [purge]
 paths = ["~/Projects","~/src","~/dev","~/code","~/work"]
 max_age = "7d"                  # untouched-for-this-long is a candidate
 active_within = "30d"           # keep artifacts in a recently-committed repo

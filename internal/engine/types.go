@@ -1,6 +1,5 @@
 // Package engine holds the run pipeline's shared contract: the resolved
-// environment and the Target/Action/Category/Guard types. Plan 01 ships the Env
-// and the type contract; the pipeline itself lands in Plan 03.
+// environment and the Target/Action/Category/Guard types.
 package engine
 
 import (
@@ -24,19 +23,30 @@ const (
 	RecoveryOwner
 )
 
+// RecoveryDelete is a permanent hand mutation with no owner command behind it
+// (emptying the Trash). It is neither recoverable nor re-downloadable, so it
+// must never be journaled as an owner cleanup. It carries no path requirement.
+const (
+	RecoveryDelete Recovery = iota + 3
+)
+
 func (r Recovery) String() string {
 	switch r {
 	case RecoveryTrash:
 		return "trash"
 	case RecoveryOwner:
 		return "owner"
+	case RecoveryDelete:
+		return "delete"
 	default:
 		return "invalid"
 	}
 }
 
 // Valid reports whether r is a known contract.
-func (r Recovery) Valid() bool { return r == RecoveryTrash || r == RecoveryOwner }
+func (r Recovery) Valid() bool {
+	return r == RecoveryTrash || r == RecoveryOwner || r == RecoveryDelete
+}
 
 // Risk drives default selection in the preview.
 type Risk int
@@ -137,7 +147,7 @@ type Guard interface {
 	Check(ctx context.Context, env *Env) error
 }
 
-// Target is one concrete thing the tool might act on (spec §6.2).
+// Target is one concrete thing the tool might act on.
 //
 // Group and GroupTitle are presentation-only: they let a category that produces
 // many similar targets (for example one per project's __pycache__) collapse into
@@ -181,7 +191,7 @@ func (t Target) Validate() error {
 		return errors.New("engine: target has no id")
 	}
 	if !t.Recovery.Valid() {
-		return errors.New("engine: target must declare a recovery contract (trash|owner)")
+		return errors.New("engine: target must declare a recovery contract (trash|owner|delete)")
 	}
 	if t.Action == nil {
 		return errors.New("engine: target has no action")
@@ -201,6 +211,21 @@ type Category interface {
 	Title() string
 	Discover(ctx context.Context, env *Env) ([]Target, error)
 	PreviewNote() string
+}
+
+// Reconciler is an optional category hook run after Build and before preview.
+// It lets a category drop items that became redundant given the user's
+// selection (for example a superset prune superseding its parts) without the
+// engine knowing any category's internals. Reconcile must be idempotent.
+type Reconciler interface {
+	Reconcile(*Plan)
+}
+
+// Warner is an optional category hook exposing non-fatal discovery notes (for
+// example a configured root that does not exist) for the plan's warning list.
+// Discovery never aborts on a bad input; the warning is the only signal.
+type Warner interface {
+	Warnings() []string
 }
 
 // Env carries the resolved user/root context and external command runners.

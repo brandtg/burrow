@@ -5,26 +5,68 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/brandtg/burrow/internal/owner"
 )
 
+// measureWorkers bounds concurrent size probes. Each directory probe forks a
+// `du -sk`, so the cap bounds both process count and disk contention.
+const measureWorkers = 8
+
 // Measure fills SizeBytes for targets that discovery left unknown. It is
 // read-only: directory trees are measured with `du -sk` under the size-probe
 // timeout, single files with a stat. A failure or timeout leaves the size
-// unknown rather than reporting a false zero (spec §8.8).
+// unknown rather than reporting a false zero.
+//
+// Probes run concurrently, capped at measureWorkers, and stop promptly when ctx
+// is cancelled. Each goroutine writes only its own target, so no lock is needed.
 func Measure(ctx context.Context, env *Env, targets []Target) {
+	var pending []*Target
 	for i := range targets {
 		t := &targets[i]
 		if t.SizeKnown || t.Path == "" {
 			continue
 		}
-		if size, ok := measurePath(ctx, env, t.Path); ok {
-			t.SizeBytes = size
-			t.SizeKnown = true
+		pending = append(pending, t)
+	}
+	if len(pending) == 0 {
+		return
+	}
+
+	workers := measureWorkers
+	if workers > len(pending) {
+		workers = len(pending)
+	}
+	work := make(chan *Target)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for t := range work {
+				if ctx.Err() != nil {
+					continue
+				}
+				if size, ok := measurePath(ctx, env, t.Path); ok {
+					t.SizeBytes = size
+					t.SizeKnown = true
+				}
+			}
+		}()
+	}
+	for _, t := range pending {
+		select {
+		case work <- t:
+		case <-ctx.Done():
+		}
+		if ctx.Err() != nil {
+			break
 		}
 	}
+	close(work)
+	wg.Wait()
 }
 
 func measurePath(ctx context.Context, env *Env, path string) (int64, bool) {

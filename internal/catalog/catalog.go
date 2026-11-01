@@ -1,6 +1,6 @@
 // Package catalog is the cleanup-catalog registry. The catalog is data plus a
-// small Discover per category; later plans add categories without reshaping
-// this framework (plan 03 risk note).
+// small Discover per category; later additions must not reshape this
+// framework.
 package catalog
 
 import "github.com/brandtg/burrow/internal/engine"
