@@ -394,7 +394,7 @@ func TestCleanSortNameKeepsSelectionAndCursor(t *testing.T) {
 	}
 
 	pressKey(t, m, runeKey('n'))
-	if !m.sortByName {
+	if m.sortMode != sortName {
 		t.Fatal("n must sort by name")
 	}
 	for _, it := range plan.Items {
@@ -418,11 +418,73 @@ func TestCleanSortNameKeepsSelectionAndCursor(t *testing.T) {
 	}
 
 	pressKey(t, m, runeKey('n'))
-	if m.sortByName {
+	if m.sortMode != sortDefault {
 		t.Fatal("n should toggle back to the natural order")
 	}
 	if got := m.rows[0].cat.Title; got != "System" {
 		t.Fatalf("natural order should put System first, got %q", got)
+	}
+}
+
+// TestCleanSortSizeDescending asserts s orders every level of the tree by
+// size, largest first, unknown sizes last, and pressing s again returns to the
+// discovery order.
+func TestCleanSortSizeDescending(t *testing.T) {
+	mk := func(cat, title, group, groupTitle, display string, size int64, known bool) *engine.PlannedItem {
+		return &engine.PlannedItem{
+			Target: engine.Target{
+				ID: display, Category: cat, Display: display,
+				Path: "/tmp/" + display, SizeBytes: size, SizeKnown: known,
+				Recovery: engine.RecoveryTrash, Risk: engine.RiskLow, DefaultOn: true,
+				Group: group, GroupTitle: groupTitle,
+			},
+			CategoryTitle: title,
+			Selected:      true,
+		}
+	}
+	plan := &engine.Plan{RunID: "T", Command: "clean", Items: []*engine.PlannedItem{
+		mk("dev", "Developer caches", "/p/a", "alpha", ".venv", 500, true),
+		mk("dev", "Developer caches", "/p/a", "alpha", "__pycache__", 5, true),
+		mk("dev", "Developer caches", "/p/b", "beta", "dist", 1000, true),
+		mk("system", "System", "", "", "journald", 100, true),
+		mk("system", "System", "", "", "mystery", 0, false),
+	}}
+	m := NewCleanModel(CleanConfig{Plan: plan})
+
+	pressKey(t, m, runeKey('s'))
+	if m.sortMode != sortSize {
+		t.Fatal("s must sort by size")
+	}
+	var got []string
+	for _, r := range m.rows {
+		switch r.kind {
+		case rowCategory:
+			got = append(got, r.cat.Title)
+		case rowGroup:
+			got = append(got, r.group.Title)
+		case rowItem:
+			got = append(got, r.item.Target.Display)
+		}
+	}
+	want := []string{
+		"Developer caches", "beta", "dist", "alpha", ".venv", "__pycache__",
+		"System", "journald", "mystery",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("size sort rows = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("size sort rows = %v, want %v", got, want)
+		}
+	}
+
+	pressKey(t, m, runeKey('s'))
+	if m.sortMode != sortDefault {
+		t.Fatal("s should toggle back to the discovery order")
+	}
+	if got := m.rows[0].cat.Title; got != "Developer caches" {
+		t.Fatalf("discovery order should lead with the plan's first category, got %q", got)
 	}
 }
 
@@ -434,7 +496,7 @@ func TestCleanFooterListsBindings(t *testing.T) {
 	m.help.Width = 120
 	footer := m.footer()
 	for _, want := range []string{
-		"toggle", "expand", "collapse", "sort name", "none", "all safe",
+		"toggle", "expand", "collapse", "sort name", "sort size", "none", "all safe",
 		"keep", "search", "review", "all keys", "quit",
 	} {
 		if !strings.Contains(footer, want) {
@@ -446,7 +508,7 @@ func TestCleanFooterListsBindings(t *testing.T) {
 	}
 
 	full := m.help.FullHelpView(m.keys.fullHelp())
-	for _, want := range []string{"page up", "page down", "top", "bottom", "sort name"} {
+	for _, want := range []string{"page up", "page down", "top", "bottom", "sort name", "sort size"} {
 		if !strings.Contains(full, want) {
 			t.Fatalf("full help hides %q:\n%s", want, full)
 		}

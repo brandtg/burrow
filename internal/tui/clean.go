@@ -274,6 +274,41 @@ func regenField(t engine.Target) string {
 	return regen
 }
 
+// itemCountSuffix renders the count shown after an aggregate name.
+func itemCountSuffix(n int) string {
+	if n == 1 {
+		return "(1 item)"
+	}
+	return fmt.Sprintf("(%d items)", n)
+}
+
+// headerField renders an aggregate row's name as "▾ title (N items)" padded
+// to content+2 columns (the arrow and its space add two), so the aggregate
+// size lands in the same column as item sizes across every indent level. The
+// count is faint when color is on; padding is computed on plain text so
+// styling cannot skew alignment.
+func headerField(arrow, title string, count, content int, color bool) string {
+	suffix := itemCountSuffix(count)
+	gap := content - displayWidth(title) - displayWidth(suffix)
+	if gap < 1 {
+		gap = 1
+	}
+	if color {
+		suffix = lipgloss.NewStyle().Faint(true).Render(suffix)
+	}
+	return arrow + " " + title + strings.Repeat(" ", gap) + suffix
+}
+
+// aggregateSize renders a folder or category total right-aligned in the size
+// column, faint when color is on so sums read differently from file sizes.
+func aggregateSize(bytes int64, width int, color bool) string {
+	s := fmt.Sprintf("%*s", width, config.FormatBytes(bytes))
+	if color {
+		return lipgloss.NewStyle().Faint(true).Render(s)
+	}
+	return s
+}
+
 func itemLine(it *engine.PlannedItem, cw colWidths, color bool) string {
 	check := "[ ]"
 	switch {
@@ -291,8 +326,26 @@ func itemLine(it *engine.PlannedItem, cw colWidths, color bool) string {
 	return line
 }
 
+// planItemWidths sizes the columns from every item plus the aggregate rows:
+// folder and category totals can be wider than any single item's size, and a
+// long project title must not push its aggregate out of the size column.
 func planItemWidths(plan *engine.Plan) colWidths {
-	return itemWidths(plan.Items)
+	cw := itemWidths(plan.Items)
+	fold := func(title string, count int, bytes int64) {
+		if n := displayWidth(title) + 1 + len(itemCountSuffix(count)); n > cw.display {
+			cw.display = n
+		}
+		if n := len(config.FormatBytes(bytes)); n > cw.size {
+			cw.size = n
+		}
+	}
+	for _, cat := range plan.GroupedTree() {
+		fold(cat.Title, len(cat.Items), cat.Bytes)
+		for _, g := range cat.Groups {
+			fold(g.Title, len(g.Items), g.Bytes)
+		}
+	}
+	return cw
 }
 
 func riskLabel(r engine.Risk, color bool) string {
@@ -377,7 +430,7 @@ type CleanModel struct {
 
 	collapsedCat map[string]bool
 	collapsedGrp map[string]bool
-	sortByName   bool
+	sortMode     sortMode
 
 	filter    textinput.Model
 	filtering bool
@@ -542,7 +595,9 @@ func (m *CleanModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, m.keys.Clear):
 		m.clearAll()
 	case key.Matches(msg, m.keys.SortName):
-		m.toggleSort()
+		m.toggleSort(sortName)
+	case key.Matches(msg, m.keys.SortSize):
+		m.toggleSort(sortSize)
 	case key.Matches(msg, m.keys.Keep):
 		m.keep()
 	case key.Matches(msg, m.keys.Filter):
@@ -755,11 +810,34 @@ func matchCleanItem(it *engine.PlannedItem, q string) bool {
 		strings.Contains(strings.ToLower(it.Target.Path), q)
 }
 
-// toggleSort switches the row order between name and the plan's natural order
-// (category, then discovery order). The cursor stays on the same row.
-func (m *CleanModel) toggleSort() {
-	m.sortByName = !m.sortByName
+// toggleSort applies the requested ordering; pressing the active sort's key
+// again returns to the plan's discovery order.
+func (m *CleanModel) toggleSort(mode sortMode) {
+	if m.sortMode == mode {
+		m.sortMode = sortDefault
+	} else {
+		m.sortMode = mode
+	}
 	m.rebuildRows()
+}
+
+// sortMode is the preview's row ordering. sortDefault keeps the plan's
+// discovery order (categories in scan order, projects by path); the other
+// modes re-sort every level of the tree.
+type sortMode int
+
+const (
+	sortDefault sortMode = iota
+	sortName
+	sortSize
+)
+
+// itemSize orders items by measured bytes; unknown sizes sort last.
+func itemSize(it *engine.PlannedItem) int64 {
+	if !it.Target.SizeKnown {
+		return -1
+	}
+	return it.Target.SizeBytes
 }
 
 func (m *CleanModel) rebuildRows() {
@@ -769,9 +847,14 @@ func (m *CleanModel) rebuildRows() {
 	for i := range catOrder {
 		catOrder[i] = i
 	}
-	if m.sortByName {
+	switch m.sortMode {
+	case sortName:
 		sort.SliceStable(catOrder, func(i, j int) bool {
 			return strings.ToLower(m.cats[catOrder[i]].Title) < strings.ToLower(m.cats[catOrder[j]].Title)
+		})
+	case sortSize:
+		sort.SliceStable(catOrder, func(i, j int) bool {
+			return m.cats[catOrder[i]].Bytes > m.cats[catOrder[j]].Bytes
 		})
 	}
 	m.rows = nil
@@ -798,13 +881,23 @@ func (m *CleanModel) rebuildRows() {
 		if len(vgs) == 0 {
 			continue
 		}
-		if m.sortByName {
+		switch m.sortMode {
+		case sortName:
 			sort.SliceStable(vgs, func(i, j int) bool {
 				return strings.ToLower(vgs[i].group.Title) < strings.ToLower(vgs[j].group.Title)
 			})
 			for _, v := range vgs {
 				sort.SliceStable(v.items, func(i, j int) bool {
 					return strings.ToLower(v.items[i].Target.Display) < strings.ToLower(v.items[j].Target.Display)
+				})
+			}
+		case sortSize:
+			sort.SliceStable(vgs, func(i, j int) bool {
+				return vgs[i].group.Bytes > vgs[j].group.Bytes
+			})
+			for _, v := range vgs {
+				sort.SliceStable(v.items, func(i, j int) bool {
+					return itemSize(v.items[i]) > itemSize(v.items[j])
 				})
 			}
 		}
@@ -924,8 +1017,11 @@ func (m *CleanModel) header() string {
 		mode = " \u00b7 dry-run"
 	}
 	sortLabel := "default"
-	if m.sortByName {
+	switch m.sortMode {
+	case sortName:
 		sortLabel = "name"
+	case sortSize:
+		sortLabel = "size"
 	}
 	line2 := m.styles.subtle.Render(fmt.Sprintf(
 		"%d category(ies) \u00b7 %d item(s) \u00b7 selected %s across %d \u00b7 sort %s%s",
@@ -964,21 +1060,27 @@ func (m *CleanModel) row(r cleanRow, cursor bool) string {
 		if m.collapsedCat[r.cat.ID] {
 			arrow = "\u25b8"
 		}
-		line = fmt.Sprintf("%s [%s] %s %s  %s / %d items", marker, selectionMark(r.cat.Items), arrow,
-			r.cat.Title, config.FormatBytes(r.cat.Bytes), len(r.cat.Items))
+		line = fmt.Sprintf("%s [%s] %s  %s", marker, selectionMark(r.cat.Items),
+			headerField(arrow, r.cat.Title, len(r.cat.Items), m.widths.display+2, m.color),
+			aggregateSize(r.cat.Bytes, m.widths.size, m.color))
 	case rowGroup:
 		arrow := "\u25be"
 		if m.collapsedGrp[groupKey(r.cat.ID, r.group.ID)] {
 			arrow = "\u25b8"
 		}
-		line = fmt.Sprintf("%s   [%s] %s %s  %s / %d items", marker, selectionMark(r.group.Items), arrow,
-			r.group.Title, config.FormatBytes(r.group.Bytes), len(r.group.Items))
+		line = fmt.Sprintf("%s   [%s] %s  %s", marker, selectionMark(r.group.Items),
+			headerField(arrow, r.group.Title, len(r.group.Items), m.widths.display, m.color),
+			aggregateSize(r.group.Bytes, m.widths.size, m.color))
 	case rowItem:
 		indent := "    "
+		w := m.widths
 		if r.group != nil && r.group.ID == "" {
 			indent = "  "
+			// One indent level shallower than grouped rows: widen the name
+			// field by the same two columns so every size shares one column.
+			w.display += 2
 		}
-		line = marker + " " + indent + itemLine(r.item, m.widths, m.color)
+		line = marker + " " + indent + itemLine(r.item, w, m.color)
 	}
 	if cursor {
 		return m.styles.cursor.Render(line)
@@ -1083,6 +1185,7 @@ type cleanKeyMap struct {
 	SelectAll key.Binding
 	Clear     key.Binding
 	SortName  key.Binding
+	SortSize  key.Binding
 	Keep      key.Binding
 	Filter    key.Binding
 	Review    key.Binding
@@ -1092,7 +1195,7 @@ type cleanKeyMap struct {
 
 // Shared keymap rationale: enter acts on the selected row (here: opens the
 // review screen) and →/← navigate the tree in both models. n means sort by name
-// in both models, so select-none moved to N.
+// and s means sort by size in both models, so select-none moved to N.
 func defaultCleanKeys() cleanKeyMap {
 	return cleanKeyMap{
 		Up:        key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("\u2191/k", "up")),
@@ -1107,6 +1210,7 @@ func defaultCleanKeys() cleanKeyMap {
 		SelectAll: key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "all safe")),
 		Clear:     key.NewBinding(key.WithKeys("N"), key.WithHelp("N", "none")),
 		SortName:  key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "sort name")),
+		SortSize:  key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "sort size")),
 		// Shift-K: lowercase k is the vim "up" binding, so the whitelist key
 		// must be distinct or it is unreachable.
 		Keep:   key.NewBinding(key.WithKeys("K"), key.WithHelp("K", "keep")),
@@ -1123,7 +1227,7 @@ func defaultCleanKeys() cleanKeyMap {
 func (k cleanKeyMap) shortHelp() []key.Binding {
 	return []key.Binding{
 		k.Up, k.Down, k.Toggle, k.Expand, k.Collapse,
-		k.SortName, k.SelectAll, k.Clear, k.Keep, k.Filter,
+		k.SortName, k.SortSize, k.SelectAll, k.Clear, k.Keep, k.Filter,
 		k.Review, k.Help, k.Quit,
 	}
 }
@@ -1132,7 +1236,7 @@ func (k cleanKeyMap) fullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.PageUp, k.PageDown, k.Top, k.Bottom},
 		{k.Expand, k.Collapse, k.Toggle, k.SelectAll, k.Clear},
-		{k.SortName, k.Keep, k.Filter, k.Review, k.Help, k.Quit},
+		{k.SortName, k.SortSize, k.Keep, k.Filter, k.Review, k.Help, k.Quit},
 	}
 }
 

@@ -123,8 +123,8 @@ func TestDiscoverGroupsPerProjectAndTrashes(t *testing.T) {
 	if got.Action == nil || got.Action.Recovery() != engine.RecoveryTrash {
 		t.Fatalf("action must carry the trash contract: %+v", got.Action)
 	}
-	if got.Group != root || got.GroupTitle != filepath.Base(root) {
-		t.Fatalf("group = %q/%q, want %q/%q", got.Group, got.GroupTitle, root, filepath.Base(root))
+	if got.Group != root || got.GroupTitle != root {
+		t.Fatalf("group = %q/%q, want %q/%q", got.Group, got.GroupTitle, root, root)
 	}
 	if got.Display != "node_modules" {
 		t.Fatalf("display = %q, want node_modules", got.Display)
@@ -137,6 +137,26 @@ func TestDiscoverGroupsPerProjectAndTrashes(t *testing.T) {
 	}
 	if _, err := os.Lstat(art); err != nil {
 		t.Fatalf("discovery must not mutate: %v", err)
+	}
+}
+
+func TestDiscoverRootProjectTitleCollapsesHome(t *testing.T) {
+	// An artifact directly in a scan root groups under the root itself; the
+	// title must render home-relative, not repeat the category name.
+	env := testEnv(t)
+	root := filepath.Join(env.Home, "Projects")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	makeArtifact(t, root, "node_modules")
+	env.Cfg.Purge.Paths = []string{root}
+
+	targets := discover(t, New(), env)
+	if len(targets) != 1 {
+		t.Fatalf("expected 1 target, got %d: %+v", len(targets), targets)
+	}
+	if got := targets[0].GroupTitle; got != "~/Projects" {
+		t.Fatalf("group title = %q, want ~/Projects", got)
 	}
 }
 
