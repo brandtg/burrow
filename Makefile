@@ -39,7 +39,8 @@ test: ## Run unit and safety tests.
 
 .PHONY: test-race
 test-race: ## Run tests with the race detector.
-	$(GO) test -race $(PKG)
+	# -race needs cgo; does not affect the static release binary.
+	CGO_ENABLED=1 $(GO) test -race $(PKG)
 
 .PHONY: fuzz
 fuzz: ## Fuzz the path validator for FUZZTIME (default 30s).

@@ -105,7 +105,9 @@ func TestPurgeAliasDryRunJSONGrouped(t *testing.T) {
 		`"recovery": "trash"`,
 		`"path": "` + art + `"`,
 		`"group": "` + root + `"`,
-		`"group_title": "` + filepath.Base(root) + `"`,
+		// The project is the scan root itself, so the title is the path,
+		// not filepath.Base (which would repeat the category title).
+		`"group_title": "` + root + `"`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("json missing %q:\n%s", want, out)

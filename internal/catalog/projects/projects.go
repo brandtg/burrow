@@ -16,6 +16,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -124,10 +125,37 @@ func (c *Category) target(env *engine.Env, roots []string, a Artifact, seen map[
 		DefaultOn:  regen <= engine.RegenCheap,
 		Evidence:   evidence(a),
 		Group:      a.Project,
-		GroupTitle: filepath.Base(a.Project),
+		GroupTitle: groupTitle(env, roots, a.Project),
 		Size:       a.Size,
 		SizeKnown:  a.SizeKnown,
 	})
+}
+
+// groupTitle names the artifact's owning project in the tree. When the owning
+// project is a scan root itself — an artifact directly in the root, or the
+// root is the owning repository — filepath.Base would repeat the category
+// title ("Projects > Projects"), so roots render as home-relative paths.
+func groupTitle(env *engine.Env, roots []string, project string) string {
+	if !slices.Contains(roots, project) {
+		return filepath.Base(project)
+	}
+	home := ""
+	if env != nil {
+		home = env.Home
+		if resolved, err := filepath.EvalSymlinks(home); err == nil {
+			home = resolved
+		}
+	}
+	if home == "" {
+		return project
+	}
+	if project == home {
+		return "~"
+	}
+	if strings.HasPrefix(project, home+string(filepath.Separator)) {
+		return "~" + project[len(home):]
+	}
+	return project
 }
 
 // regenFor classifies how expensive an artifact is to rebuild. It gates
