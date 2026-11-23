@@ -16,6 +16,9 @@ func (a *App) newConfigCmd() *cobra.Command {
 		Short: "print the effective config and resolved paths",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := a.rejectCleanFlowFlags(cmd); err != nil {
+				return err
+			}
 			env, err := a.Env()
 			if err != nil {
 				return &ExitError{Code: ExitUsage, Err: err}

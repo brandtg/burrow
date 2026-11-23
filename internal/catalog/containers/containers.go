@@ -9,11 +9,7 @@
 package containers
 
 import (
-	"bytes"
 	"context"
-	"os"
-	"path/filepath"
-	"strconv"
 	"strings"
 
 	"github.com/brandtg/burrow/internal/action"
@@ -114,9 +110,6 @@ func dockerItems(ctx context.Context, env *engine.Env) []engine.Target {
 	evidence := []string{"docker is installed; the daemon is re-checked before pruning"}
 	if dfKnown {
 		evidence = append(evidence, dockerEvidence(df)...)
-	}
-	if dockerBuildRunning() {
-		evidence = append(evidence, "a docker build is in progress")
 	}
 	guard := runtimeGuard{binary: "docker"}
 	total, totalKnown := df.reclaimableTotal()
@@ -262,34 +255,4 @@ func isAllDigits(s string) bool {
 		}
 	}
 	return true
-}
-
-// dockerBuildRunning reports whether a docker client build is in progress. It
-// is read-only and best-effort: a build does not necessarily make the prune
-// unsafe, but it is recorded in the item's evidence.
-func dockerBuildRunning() bool {
-	entries, err := os.ReadDir("/proc")
-	if err != nil {
-		return false
-	}
-	for _, de := range entries {
-		if !de.IsDir() {
-			continue
-		}
-		if _, err := strconv.Atoi(de.Name()); err != nil {
-			continue
-		}
-		comm, err := os.ReadFile(filepath.Join("/proc", de.Name(), "comm"))
-		if err != nil || strings.TrimSpace(string(comm)) != "docker" {
-			continue
-		}
-		args, err := os.ReadFile(filepath.Join("/proc", de.Name(), "cmdline"))
-		if err != nil {
-			continue
-		}
-		if bytes.Contains(args, []byte("build")) {
-			return true
-		}
-	}
-	return false
 }

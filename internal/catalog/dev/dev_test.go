@@ -314,23 +314,28 @@ func TestCPANKeepsSources(t *testing.T) {
 	}
 }
 
-func TestFrontendAndCloudCachesAreTrash(t *testing.T) {
+func TestCloudAndBuildxCachesAreTrash(t *testing.T) {
 	env := testEnv(t, true)
 	useTestbin(t, env)
 	mkdirs(t,
-		filepath.Join(env.XDGCache, "typescript"),
-		filepath.Join(env.XDGCache, "vite"),
 		filepath.Join(env.Home, ".kube", "cache"),
 		filepath.Join(env.Home, ".docker", "buildx", "cache"),
 	)
 	byID := discover(t, env)
-	for _, id := range []string{"dev.frontend-caches.typescript", "dev.frontend-caches.vite", "dev.cloud-cli.kube", "dev.docker-buildx"} {
+	// The frontend tool caches moved to the user-cache sweep (plain top-level
+	// XDG cache entries); only the cloud-cli logs and buildx remain dev rows.
+	for _, id := range []string{"dev.cloud-cli.kube", "dev.docker-buildx"} {
 		tg, ok := byID[id]
 		if !ok {
 			t.Fatalf("missing %s", id)
 		}
 		if tg.Recovery != engine.RecoveryTrash {
 			t.Fatalf("%s recovery = %v, want trash", id, tg.Recovery)
+		}
+	}
+	for _, id := range []string{"dev.frontend-caches.typescript", "dev.frontend-caches.vite"} {
+		if _, ok := byID[id]; ok {
+			t.Fatalf("%s must no longer exist (user-cache owns those entries)", id)
 		}
 	}
 }

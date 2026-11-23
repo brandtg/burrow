@@ -202,38 +202,6 @@ var itemSpecs = []itemSpec{
 		trash: &trashSpec{base: xdgCacheBase, paths: []string{"mise"}, evidence: "documented mise cache root"},
 	},
 	{
-		id: "dev.frontend-caches.typescript", display: "typescript cache", regen: engine.RegenFree, risk: engine.RiskLow, defaultOn: true,
-		trash: &trashSpec{base: xdgCacheBase, paths: []string{"typescript"}, evidence: "frontend tool caches are regenerable"},
-	},
-	{
-		id: "dev.frontend-caches.electron", display: "electron cache", regen: engine.RegenFree, risk: engine.RiskLow, defaultOn: true,
-		trash: &trashSpec{base: xdgCacheBase, paths: []string{"electron"}, evidence: "frontend tool caches are regenerable"},
-	},
-	{
-		id: "dev.frontend-caches.node-gyp", display: "node-gyp cache", regen: engine.RegenFree, risk: engine.RiskLow, defaultOn: true,
-		trash: &trashSpec{base: xdgCacheBase, paths: []string{"node-gyp"}, evidence: "frontend tool caches are regenerable"},
-	},
-	{
-		id: "dev.frontend-caches.vite", display: "vite cache", regen: engine.RegenFree, risk: engine.RiskLow, defaultOn: true,
-		trash: &trashSpec{base: xdgCacheBase, paths: []string{"vite"}, evidence: "frontend tool caches are regenerable"},
-	},
-	{
-		id: "dev.frontend-caches.webpack", display: "webpack cache", regen: engine.RegenFree, risk: engine.RiskLow, defaultOn: true,
-		trash: &trashSpec{base: xdgCacheBase, paths: []string{"webpack"}, evidence: "frontend tool caches are regenerable"},
-	},
-	{
-		id: "dev.frontend-caches.eslint", display: "eslint cache", regen: engine.RegenFree, risk: engine.RiskLow, defaultOn: true,
-		trash: &trashSpec{base: xdgCacheBase, paths: []string{"eslint"}, evidence: "frontend tool caches are regenerable"},
-	},
-	{
-		id: "dev.frontend-caches.prettier", display: "prettier cache", regen: engine.RegenFree, risk: engine.RiskLow, defaultOn: true,
-		trash: &trashSpec{base: xdgCacheBase, paths: []string{"prettier"}, evidence: "frontend tool caches are regenerable"},
-	},
-	{
-		id: "dev.frontend-caches.parcel-cache", display: "parcel-cache cache", regen: engine.RegenFree, risk: engine.RiskLow, defaultOn: true,
-		trash: &trashSpec{base: xdgCacheBase, paths: []string{"parcel-cache"}, evidence: "frontend tool caches are regenerable"},
-	},
-	{
 		id: "dev.docker-buildx", display: "Docker buildx cache", regen: engine.RegenFree, risk: engine.RiskLow, defaultOn: true,
 		trash: &trashSpec{base: homeBase, paths: []string{".docker/buildx/cache"}, evidence: "buildx cache is regenerable"},
 	},

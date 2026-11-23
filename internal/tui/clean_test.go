@@ -537,17 +537,20 @@ func TestCleanExplainLineAndLegend(t *testing.T) {
 	if got := m.explainLine(); got != "system policy note" {
 		t.Fatalf("category explain = %q", got)
 	}
-	// Cursor on an item shows its evidence.
+	// Cursor on an item shows its evidence (and, for owner rows, the exact
+	// argv — the review screen's per-row detail without leaving the preview).
 	for i, r := range m.rows {
 		if r.kind == rowItem && r.item.Target.ID == "system.journald" {
 			m.setCursor(i)
 			break
 		}
 	}
-	if got := m.explainLine(); got != "journald owns the journal" {
+	got := m.explainLine()
+	if !strings.HasPrefix(got, "runs sudo -- journalctl --vacuum-size=500M") ||
+		!strings.Contains(got, "journald owns the journal") {
 		t.Fatalf("item explain = %q", got)
 	}
-	if footer := m.footer(); !strings.Contains(footer, "\u00b7 journald owns the journal") {
+	if footer := m.footer(); !strings.Contains(footer, "\u00b7 runs sudo -- journalctl") {
 		t.Fatalf("footer must carry the explain line:\n%s", footer)
 	}
 
@@ -565,6 +568,36 @@ func TestCleanExplainLineAndLegend(t *testing.T) {
 	}
 }
 
+// TestCleanEnterConfirmsFromPreview pins the single-screen confirm: enter on
+// the preview confirms the run directly (no review round-trip), r still opens
+// the full review listing, and enter's help says what it will run.
+func TestCleanEnterConfirmsFromPreview(t *testing.T) {
+	plan := samplePlan()
+	m := NewCleanModel(CleanConfig{Plan: plan})
+	if cmd := pressKey(t, m, tea.KeyMsg{Type: tea.KeyEnter}); !isQuitCmd(cmd) {
+		t.Fatal("enter on the preview must confirm and quit")
+	}
+	if !m.confirmed || m.aborted {
+		t.Fatalf("confirmed=%v aborted=%v, want confirmed without abort", m.confirmed, m.aborted)
+	}
+
+	m2 := NewCleanModel(CleanConfig{Plan: samplePlan()})
+	pressKey(t, m2, runeKey('r'))
+	if m2.screen != 1 {
+		t.Fatal("r must open the review screen")
+	}
+	if cmd := pressKey(t, m2, tea.KeyMsg{Type: tea.KeyEnter}); !isQuitCmd(cmd) || !m2.confirmed {
+		t.Fatal("enter on the review must confirm")
+	}
+
+	// The enter help names the selection so the confirm is informed.
+	m3 := NewCleanModel(CleanConfig{Plan: samplePlan()})
+	m3.updateConfirmHelp()
+	if help := m3.keys.Confirm.Help(); !strings.Contains(help.Desc, "2 item(s)") {
+		t.Fatalf("enter help = %+v, want the selection summary", help)
+	}
+}
+
 // TestCleanFooterListsBindings asserts the footer names the keys it used to hide
 // and points at the full help for the rest.
 func TestCleanFooterListsBindings(t *testing.T) {
@@ -574,7 +607,7 @@ func TestCleanFooterListsBindings(t *testing.T) {
 	footer := m.footer()
 	for _, want := range []string{
 		"toggle", "expand", "collapse", "sort name", "sort size", "none", "all safe",
-		"keep", "search", "review", "all keys", "quit",
+		"keep", "search", "review", "run", "all keys", "quit",
 	} {
 		if !strings.Contains(footer, want) {
 			t.Fatalf("footer hides %q:\n%s", want, footer)

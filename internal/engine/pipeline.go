@@ -94,12 +94,15 @@ type Options struct {
 	MinSize    int64
 	// NoOwner leaves owner-contract items unselected (still shown).
 	NoOwner bool
-	// Progress, when non-nil, is called once per category as its discovery
-	// completes, in the same stable category order the plan is built in, with
-	// the category id and the number of targets discovered for it (0 when
-	// discovery failed). It is never called from the discovery goroutines, so
-	// the call order is deterministic. It is informational only: it may report
-	// progress, but it must not block the pipeline, mutate the plan, or panic.
+	// Progress, when non-nil, is called once per category with the category id
+	// and the number of targets discovered for it (0 when discovery failed).
+	// Calls come in the same stable category order the plan is built in, but
+	// they are incremental: a category's line fires as soon as its discovery
+	// completes and every earlier category has completed, rather than in one
+	// burst after the whole scan. Progress is never called from the discovery
+	// goroutines themselves, so the call order is deterministic. It is
+	// informational only: it may report progress, but it must not block the
+	// pipeline, mutate the plan, or panic.
 	Progress func(categoryID string, targets int)
 }
 
@@ -224,51 +227,98 @@ func Build(ctx context.Context, env *Env, opts Options) *Plan {
 	}
 
 	type discovered struct {
-		cat     Category
-		targets []Target
-		err     error
+		excluded bool
+		cat      Category
+		targets  []Target
+		err      error
 	}
-	results := make(map[string]discovered, len(cats))
-	ch := make(chan discovered, len(cats))
-	var wg sync.WaitGroup
-	for _, cat := range cats {
+	// Excluded categories hold a sentinel so the ordered progress drain can
+	// advance past them; they are never discovered or measured.
+	results := make([]*discovered, len(cats))
+	for i, cat := range cats {
 		if !categoryIncluded(cat.ID(), opts.Exclude) {
+			results[i] = &discovered{excluded: true, cat: cat}
+		}
+	}
+	type landing struct {
+		idx int
+		d   discovered
+	}
+	ch := make(chan landing, len(cats))
+	var wg sync.WaitGroup
+	for i, cat := range cats {
+		if results[i] != nil {
 			continue
 		}
 		wg.Add(1)
-		go func(c Category) {
+		go func(i int, c Category) {
 			defer wg.Done()
 			dctx, cancel := context.WithTimeout(ctx, owner.TimeoutScanPerRoot)
 			defer cancel()
 			ts, err := c.Discover(dctx, env)
-			ch <- discovered{cat: c, targets: ts, err: err}
-		}(cat)
+			ch <- landing{idx: i, d: discovered{cat: c, targets: ts, err: err}}
+		}(i, cat)
 	}
-	wg.Wait()
-	close(ch)
-	for d := range ch {
-		results[d.cat.ID()] = d
+	go func() {
+		wg.Wait()
+		close(ch)
+	}()
+
+	// Drain incrementally: fire Progress for category i the moment it and
+	// every category before it have landed, so the lines stream out in plan
+	// order while later categories are still scanning.
+	next := 0
+	pending := map[int]discovered{}
+	for l := range ch {
+		pending[l.idx] = l.d
+		for next < len(results) {
+			if results[next] != nil {
+				// Excluded sentinel: nothing to report, just advance.
+				next++
+				continue
+			}
+			d, ok := pending[next]
+			if !ok {
+				break
+			}
+			results[next] = &d
+			delete(pending, next)
+			if opts.Progress != nil {
+				opts.Progress(d.cat.ID(), len(d.targets))
+			}
+			next++
+		}
 	}
 
-	// Step 2/3/4/5 in category order for a stable plan.
-	for _, cat := range cats {
+	// One measure over the union of targets: the du probes from every
+	// category share the worker pool instead of running back-to-back per
+	// category. Pointers, so the measured sizes land on the targets the plan
+	// loop reads.
+	var all []*Target
+	for _, r := range results {
+		if r == nil || r.excluded {
+			continue
+		}
+		for i := range r.targets {
+			all = append(all, &r.targets[i])
+		}
+	}
+	measure(ctx, env, all)
+
+	// Step 3/4/5 in category order for a stable plan.
+	for i, cat := range cats {
 		if !categoryIncluded(cat.ID(), opts.Exclude) {
 			continue
 		}
-		d, ok := results[cat.ID()]
-		if !ok {
+		d := results[i]
+		if d == nil {
 			continue
-		}
-		if opts.Progress != nil {
-			opts.Progress(cat.ID(), len(d.targets))
 		}
 		if d.err != nil {
 			plan.Warnings = append(plan.Warnings, fmt.Sprintf("%s: discovery failed: %v", cat.ID(), d.err))
 			continue
 		}
-		targets := d.targets
-		measure(ctx, env, targets)
-		for _, t := range targets {
+		for _, t := range d.targets {
 			if !includeTarget(t, opts, env.Whitelist) {
 				continue
 			}

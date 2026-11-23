@@ -1,8 +1,8 @@
 # burrow user guide
 
 `burrow` finds where disk space went and reclaims it safely. One flow does the
-work: a grouped preview of everything reclaimable, one review screen, one
-confirm. Every mutation is either a **Trash move** (recoverable via
+work: a grouped preview of everything reclaimable, one confirm. Every mutation
+is either a **Trash move** (recoverable via
 `burrow history --restore`) or an **allow-listed owner command** (permanent by
 nature, re-downloadable by definition). Nothing mutates before the preview,
 and any uncertainty skips the item and records why. The one mutation that is
@@ -73,9 +73,12 @@ toggle anything before confirming.
 Keys: `space` toggles a row/group/category, `a` selects every auto-selectable
 row, `N` clears, `pgup`/`pgdn` (`ctrl+b`/`ctrl+f`) page, `g`/`G` jump to the
 top/bottom, `/` filters, `→`/`←` expand and collapse, `K` keeps
-(whitelists), `enter` moves to the review screen, `q` quits. After you
-choose, the review screen lists the exact owner argv and trash paths; large
-trash selections are summarized by group. Only then does anything execute.
+(whitelists), `r` lists the exact owner argv and trash paths for the whole
+selection (large trash selections are summarized by group), `enter` runs the
+current selection, `q` quits. The `enter` key help always names what it will
+run (count and bytes), and the line above the footer explains the row under
+the cursor — what it is, why it exists, and for owner rows the exact command.
+Only then does anything execute.
 
 `--plain`, `--json`, `--yes`, or a non-TTY stdout skip the TUI. `--plain`
 prints a bounded preview (each group capped, with a pointer to `--json`).
@@ -209,7 +212,7 @@ Trash burrow writes to is resolved from XDG, not configured. The keys:
 color = "auto"                  # auto|always|never
 
 [clean]
-default_categories = ["projects","dev","user-cache","desktop-pkgs","downloads"]
+default_categories = ["projects","dev","user-cache","downloads"]
 journald_max_size = "500M"      # journald_max_age is the alternative; size wins if both set
 min_size = "0"
 protected_paths = ["/etc","/usr","/var/lib"]

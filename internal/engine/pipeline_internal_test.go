@@ -22,3 +22,21 @@ func TestCommonAncestor(t *testing.T) {
 		}
 	}
 }
+
+// TestEstimateFreedPrecedence pins the freed-bytes rule: an action-reported
+// byte count wins (it knows what its command actually reclaimed), the
+// measured target size is the fallback, and an unknown size estimates 0
+// rather than guessing.
+func TestEstimateFreedPrecedence(t *testing.T) {
+	it := &PlannedItem{Target: Target{SizeKnown: true, SizeBytes: 100}}
+	if got := estimateFreed(it, Result{Bytes: 7}); got != 7 {
+		t.Fatalf("action bytes must win: got %d, want 7", got)
+	}
+	if got := estimateFreed(it, Result{}); got != 100 {
+		t.Fatalf("measured size is the fallback: got %d, want 100", got)
+	}
+	unknown := &PlannedItem{Target: Target{SizeKnown: false}}
+	if got := estimateFreed(unknown, Result{}); got != 0 {
+		t.Fatalf("unknown size must estimate 0, got %d", got)
+	}
+}

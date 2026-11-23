@@ -22,10 +22,9 @@ const measureWorkers = 8
 //
 // Probes run concurrently, capped at measureWorkers, and stop promptly when ctx
 // is cancelled. Each goroutine writes only its own target, so no lock is needed.
-func measure(ctx context.Context, env *Env, targets []Target) {
+func measure(ctx context.Context, env *Env, targets []*Target) {
 	var pending []*Target
-	for i := range targets {
-		t := &targets[i]
+	for _, t := range targets {
 		if t.SizeKnown || t.Path == "" {
 			continue
 		}

@@ -3,8 +3,11 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/brandtg/burrow/internal/safe"
+	"github.com/spf13/cobra"
 )
 
 const (
@@ -44,6 +47,26 @@ func (e *ExitError) Error() string {
 }
 
 func (e *ExitError) Unwrap() error { return e.Err }
+
+// noEffect rejects persistent flags that do nothing on the invoking command,
+// so `burrow history --dry-run` is a usage error instead of a silently
+// ignored flag. Call it at the top of a command's RunE with the names that
+// command does not read.
+func noEffect(cmd *cobra.Command, names ...string) error {
+	for _, name := range names {
+		if cmd.Flags().Changed(name) {
+			return &ExitError{Code: ExitUsage, Err: fmt.Errorf("flag --%s has no effect on 'burrow %s'", name, cmd.Name())}
+		}
+	}
+	return nil
+}
+
+// cleanFlowOnlyFlags are the persistent flags that only the clean flow reads.
+const cleanFlowOnlyFlags = "dry-run yes plain color no-color"
+
+func (a *App) rejectCleanFlowFlags(cmd *cobra.Command, extra ...string) error {
+	return noEffect(cmd, append(strings.Fields(cleanFlowOnlyFlags), extra...)...)
+}
 
 // ExitCode maps an error to a process exit code.
 func ExitCode(err error) int {

@@ -33,7 +33,6 @@ import (
 type cleanFlags struct {
 	all        bool
 	whitelist  bool
-	age        string
 	minSizeSet bool
 }
 
@@ -50,7 +49,6 @@ func (a *App) newCleanCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&f.all, "all", false, "include every category (still respects whitelist and guards)")
 	cmd.Flags().BoolVar(&f.whitelist, "whitelist", false, "manage the whitelist")
-	cmd.Flags().StringVar(&f.age, "age", "", "only artifacts with no activity in this window (default 7d)")
 	a.addSelectionFlags(cmd)
 	return cmd
 }
@@ -70,12 +68,12 @@ func (a *App) runClean(f cleanFlags) error {
 	if err != nil {
 		return &ExitError{Code: ExitUsage, Err: err}
 	}
-	if f.age != "" {
-		if _, err := config.ParseDuration(f.age); err != nil {
+	if a.Flags.Age != "" {
+		if _, err := config.ParseDuration(a.Flags.Age); err != nil {
 			return &ExitError{Code: ExitUsage, Err: err}
 		}
 		// An explicit --age overrides the configured inactivity window.
-		env.Cfg.Purge.MaxAge = f.age
+		env.Cfg.Purge.MaxAge = a.Flags.Age
 	}
 
 	reg := catalog.NewRegistry(system.New(), projects.New(), dev.New(), usercache.New(), downloads.New(), containers.New(), desktoppkgs.New())

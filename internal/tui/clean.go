@@ -637,6 +637,12 @@ func (m *CleanModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, m.keys.Review):
 		m.screen = 1
 		m.reviewOffset = 0
+	case key.Matches(msg, m.keys.Confirm):
+		// Single-screen confirm: enter runs the current selection from the
+		// preview. The exact argv is one cursor-move away (the explain line),
+		// and the full review listing stays on r for those who want it.
+		m.confirmed = true
+		return m, tea.Quit
 	}
 	return m, nil
 }
@@ -1026,6 +1032,7 @@ func (m *CleanModel) listHeight() int {
 
 // View implements tea.Model.
 func (m *CleanModel) View() string {
+	m.updateConfirmHelp()
 	if m.help.ShowAll {
 		return m.legend() + "\n\n" + m.help.FullHelpView(m.keys.fullHelp())
 	}
@@ -1039,6 +1046,21 @@ func (m *CleanModel) View() string {
 	b.WriteString("\n")
 	b.WriteString(m.footer())
 	return b.String()
+}
+
+// updateConfirmHelp makes the enter binding say what it will run: the count
+// and bytes of the current selection, so the single-screen confirm is an
+// informed keystroke rather than a leap of faith.
+func (m *CleanModel) updateConfirmHelp() {
+	t := m.plan.SelectedTotals()
+	switch {
+	case m.dryRun:
+		m.keys.Confirm.SetHelp("enter", "confirm (dry-run)")
+	case t.Count == 0:
+		m.keys.Confirm.SetHelp("enter", "run (nothing selected)")
+	default:
+		m.keys.Confirm.SetHelp("enter", fmt.Sprintf("run %d item(s), %s", t.Count, config.FormatBytes(t.Bytes)))
+	}
 }
 
 func (m *CleanModel) header() string {
@@ -1201,16 +1223,29 @@ func (m *CleanModel) footer() string {
 }
 
 // explainLine is the why-line for whatever the cursor is on: an item's
-// evidence (what this is and why the tool thinks it exists) or a category's
-// note (its selection policy). It keeps the list one row per item while the
-// explanation stays one glance away.
+// evidence plus its path (and, for an owner item, the exact argv it will
+// run — the review screen's per-row detail, available without leaving the
+// preview), or a category's note (its selection policy).
 func (m *CleanModel) explainLine() string {
 	if m.cursor < 0 || m.cursor >= len(m.rows) {
 		return ""
 	}
 	switch r := m.rows[m.cursor]; r.kind {
 	case rowItem:
-		return strings.Join(r.item.Target.Evidence, "; ")
+		var parts []string
+		if len(r.item.Argv) > 0 {
+			parts = append(parts, "runs "+strings.Join(r.item.Argv, " "))
+		}
+		parts = append(parts, r.item.Target.Evidence...)
+		line := strings.Join(parts, "; ")
+		if p := r.item.Target.Path; p != "" {
+			if line == "" {
+				line = p
+			} else {
+				line += " \u00b7 " + p
+			}
+		}
+		return line
 	case rowCategory:
 		return r.cat.Note
 	default:
@@ -1266,13 +1301,16 @@ type cleanKeyMap struct {
 	Keep      key.Binding
 	Filter    key.Binding
 	Review    key.Binding
+	Confirm   key.Binding
 	Help      key.Binding
 	Quit      key.Binding
 }
 
-// Shared keymap rationale: enter acts on the selected row (here: opens the
-// review screen) and →/← navigate the tree in both models. n means sort by name
-// and s means sort by size in both models, so select-none moved to N.
+// Shared keymap rationale: enter acts on the selected row — in the preview it
+// confirms the run (the exact argv for the cursor row is in the explain line;
+// the full review listing is one key away on r), on the review screen it
+// confirms. n means sort by name and s means sort by size in both models, so
+// select-none moved to N.
 func defaultCleanKeys() cleanKeyMap {
 	return cleanKeyMap{
 		Up:        key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("\u2191/k", "up")),
@@ -1290,11 +1328,12 @@ func defaultCleanKeys() cleanKeyMap {
 		SortSize:  key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "sort size")),
 		// Shift-K: lowercase k is the vim "up" binding, so the whitelist key
 		// must be distinct or it is unreachable.
-		Keep:   key.NewBinding(key.WithKeys("K"), key.WithHelp("K", "keep")),
-		Filter: key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search")),
-		Review: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "review")),
-		Help:   key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "all keys")),
-		Quit:   key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
+		Keep:    key.NewBinding(key.WithKeys("K"), key.WithHelp("K", "keep")),
+		Filter:  key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search")),
+		Review:  key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "review")),
+		Confirm: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "run")),
+		Help:    key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "all keys")),
+		Quit:    key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
 	}
 }
 
@@ -1305,7 +1344,7 @@ func (k cleanKeyMap) shortHelp() []key.Binding {
 	return []key.Binding{
 		k.Up, k.Down, k.Toggle, k.Expand, k.Collapse,
 		k.SortName, k.SortSize, k.SelectAll, k.Clear, k.Keep, k.Filter,
-		k.Review, k.Help, k.Quit,
+		k.Review, k.Confirm, k.Help, k.Quit,
 	}
 }
 
@@ -1313,7 +1352,7 @@ func (k cleanKeyMap) fullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.PageUp, k.PageDown, k.Top, k.Bottom},
 		{k.Expand, k.Collapse, k.Toggle, k.SelectAll, k.Clear},
-		{k.SortName, k.SortSize, k.Keep, k.Filter, k.Review, k.Help, k.Quit},
+		{k.SortName, k.SortSize, k.Keep, k.Filter, k.Review, k.Confirm, k.Help, k.Quit},
 	}
 }
 

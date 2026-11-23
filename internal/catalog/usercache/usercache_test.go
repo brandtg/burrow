@@ -81,10 +81,14 @@ func TestAppCachesExcludeDevAndProtected(t *testing.T) {
 		filepath.Join(env.XDGCache, "randomcache"),
 	)
 	got := ids(t, env)
-	if _, ok := got["user-cache.app-caches.randomcache"]; !ok {
-		t.Fatalf("randomcache should be an app-cache row: %v", keys(got))
+	// Frontend tool caches are plain top-level XDG cache entries now that dev
+	// no longer owns rows for them, so the sweep lists them.
+	for _, id := range []string{"user-cache.app-caches.typescript", "user-cache.app-caches.vite", "user-cache.app-caches.randomcache"} {
+		if _, ok := got[id]; !ok {
+			t.Fatalf("expected row %s: %v", id, keys(got))
+		}
 	}
-	for _, id := range []string{"user-cache.app-caches.typescript", "user-cache.app-caches.vite", "user-cache.app-caches.thumbnails", "user-cache.app-caches.burrow", "user-cache.app-caches.dconf"} {
+	for _, id := range []string{"user-cache.app-caches.thumbnails", "user-cache.app-caches.burrow", "user-cache.app-caches.dconf"} {
 		if _, ok := got[id]; ok {
 			t.Fatalf("unexpected row %s", id)
 		}
@@ -178,11 +182,13 @@ func keys(m map[string]engine.Target) []string {
 
 // TestNoOverlapWithDevCategory proves dev items win: a cache owned by dev is
 // not also offered by the generic sweep, so it is never double-counted or
-// trashed twice.
+// trashed twice. pip is a dev-owned cache root (CacheRoots); typescript is a
+// plain XDG cache entry that the sweep does own.
 func TestNoOverlapWithDevCategory(t *testing.T) {
 	env := testEnv(t)
 	t.Setenv("PATH", t.TempDir())
 	mkdir(t,
+		filepath.Join(env.XDGCache, "pip"),
 		filepath.Join(env.XDGCache, "typescript"),
 		filepath.Join(env.XDGCache, "randomcache"),
 	)
@@ -193,14 +199,14 @@ func TestNoOverlapWithDevCategory(t *testing.T) {
 	for _, it := range plan.Items {
 		seen[it.Target.ID] = true
 	}
-	if !seen["dev.frontend-caches.typescript"] {
-		t.Fatalf("dev should own the typescript cache: %v", keys2(plan))
+	if !seen["dev.pip"] {
+		t.Fatalf("dev should own the pip cache: %v", keys2(plan))
 	}
-	if seen["user-cache.app-caches.typescript"] {
+	if seen["user-cache.app-caches.pip"] {
 		t.Fatal("user-cache must not double-count a dev-owned cache")
 	}
-	if !seen["user-cache.app-caches.randomcache"] {
-		t.Fatalf("randomcache should remain a user-cache row: %v", keys2(plan))
+	if !seen["user-cache.app-caches.typescript"] || !seen["user-cache.app-caches.randomcache"] {
+		t.Fatalf("plain XDG cache entries should remain user-cache rows: %v", keys2(plan))
 	}
 }
 

@@ -50,6 +50,11 @@ When stdout is not a terminal (or --json is set), analyze behaves like
 --json and never waits for input. --json accepts a single path.`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// analyze reads --plain/--json/--color but not the clean-flow
+			// dry-run/--yes; a silent no-op is a usage error.
+			if err := noEffect(cmd, "dry-run", "yes"); err != nil {
+				return err
+			}
 			if err := validateMountFlags(cmd); err != nil {
 				return err
 			}

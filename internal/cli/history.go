@@ -27,6 +27,9 @@ func (a *App) newHistoryCmd() *cobra.Command {
 		Short: "read the operation journal",
 		Args:  noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := a.rejectCleanFlowFlags(cmd); err != nil {
+				return err
+			}
 			env, err := a.Env()
 			if err != nil {
 				return &ExitError{Code: ExitUsage, Err: err}

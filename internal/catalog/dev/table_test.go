@@ -44,11 +44,12 @@ func TestCacheRootsMatchTable(t *testing.T) {
 		}
 	}
 
-	// Pin the exercised set so an accidental table edit is visible.
+	// Pin the exercised set so an accidental table edit is visible. The
+	// frontend tool caches (typescript, vite, ...) are not here: they are
+	// plain top-level XDG cache entries, so the user-cache sweep lists them
+	// without dev owning an exclusion row for each.
 	expected := []string{
-		"yarn", "go-build", "pip", "uv", "pypoetry", "mise",
-		"typescript", "electron", "node-gyp", "vite", "webpack", "eslint",
-		"prettier", "parcel-cache", "node", "gh",
+		"yarn", "go-build", "pip", "uv", "pypoetry", "mise", "node", "gh",
 	}
 	for _, name := range expected {
 		if !got[name] {
@@ -75,41 +76,33 @@ func TestCacheRootsEmptyWithoutXDGCache(t *testing.T) {
 // to free (the most pre-selectable classification).
 func TestRegenPinnedForEverySpec(t *testing.T) {
 	want := map[string]engine.Regen{
-		"dev.npm":                          engine.RegenCheap,
-		"dev.pnpm":                         engine.RegenCheap,
-		"dev.yarn":                         engine.RegenFree,
-		"dev.yarn-cache":                   engine.RegenFree,
-		"dev.bun":                          engine.RegenCheap,
-		"dev.go-mod":                       engine.RegenExpensive,
-		"dev.go-build":                     engine.RegenFree,
-		"dev.rust-registry-cache":          engine.RegenExpensive,
-		"dev.rustup-downloads":             engine.RegenExpensive,
-		"dev.pip":                          engine.RegenCheap,
-		"dev.uv":                           engine.RegenCheap,
-		"dev.poetry.artifacts":             engine.RegenCheap,
-		"dev.poetry.cache":                 engine.RegenCheap,
-		"dev.conda":                        engine.RegenExpensive,
-		"dev.gem":                          engine.RegenCheap,
-		"dev.gem-bundle":                   engine.RegenCheap,
-		"dev.rbenv":                        engine.RegenFree,
-		"dev.cpan-build":                   engine.RegenFree,
-		"dev.nix":                          engine.RegenExpensive,
-		"dev.corepack":                     engine.RegenCheap,
-		"dev.mise":                         engine.RegenCheap,
-		"dev.frontend-caches.typescript":   engine.RegenFree,
-		"dev.frontend-caches.electron":     engine.RegenFree,
-		"dev.frontend-caches.node-gyp":     engine.RegenFree,
-		"dev.frontend-caches.vite":         engine.RegenFree,
-		"dev.frontend-caches.webpack":      engine.RegenFree,
-		"dev.frontend-caches.eslint":       engine.RegenFree,
-		"dev.frontend-caches.prettier":     engine.RegenFree,
-		"dev.frontend-caches.parcel-cache": engine.RegenFree,
-		"dev.docker-buildx":                engine.RegenFree,
-		"dev.cloud-cli.kube":               engine.RegenFree,
-		"dev.cloud-cli.aws":                engine.RegenFree,
-		"dev.cloud-cli.gcloud":             engine.RegenFree,
-		"dev.cloud-cli.azure":              engine.RegenFree,
-		"dev.gh-cli":                       engine.RegenCheap,
+		"dev.npm":                 engine.RegenCheap,
+		"dev.pnpm":                engine.RegenCheap,
+		"dev.yarn":                engine.RegenFree,
+		"dev.yarn-cache":          engine.RegenFree,
+		"dev.bun":                 engine.RegenCheap,
+		"dev.go-mod":              engine.RegenExpensive,
+		"dev.go-build":            engine.RegenFree,
+		"dev.rust-registry-cache": engine.RegenExpensive,
+		"dev.rustup-downloads":    engine.RegenExpensive,
+		"dev.pip":                 engine.RegenCheap,
+		"dev.uv":                  engine.RegenCheap,
+		"dev.poetry.artifacts":    engine.RegenCheap,
+		"dev.poetry.cache":        engine.RegenCheap,
+		"dev.conda":               engine.RegenExpensive,
+		"dev.gem":                 engine.RegenCheap,
+		"dev.gem-bundle":          engine.RegenCheap,
+		"dev.rbenv":               engine.RegenFree,
+		"dev.cpan-build":          engine.RegenFree,
+		"dev.nix":                 engine.RegenExpensive,
+		"dev.corepack":            engine.RegenCheap,
+		"dev.mise":                engine.RegenCheap,
+		"dev.docker-buildx":       engine.RegenFree,
+		"dev.cloud-cli.kube":      engine.RegenFree,
+		"dev.cloud-cli.aws":       engine.RegenFree,
+		"dev.cloud-cli.gcloud":    engine.RegenFree,
+		"dev.cloud-cli.azure":     engine.RegenFree,
+		"dev.gh-cli":              engine.RegenCheap,
 	}
 	seen := map[string]bool{}
 	for _, s := range itemSpecs {

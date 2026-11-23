@@ -13,7 +13,6 @@ import (
 // purgeOptions are the flags the deprecated purge alias still accepts.
 type purgeOptions struct {
 	paths bool
-	age   string
 }
 
 // newPurgeCmd builds the deprecated `burrow purge` alias. It behaves exactly
@@ -47,12 +46,11 @@ permanently deleted.`,
 			// Append rather than replace: `burrow purge --only dev` keeps the
 			// user's selection and adds the projects category.
 			a.Flags.Only = append(a.Flags.Only, projects.ID)
-			return a.runClean(cleanFlags{age: opts.age, minSizeSet: cmd.Flags().Changed("min-size")})
+			return a.runClean(cleanFlags{minSizeSet: cmd.Flags().Changed("min-size")})
 		},
 	}
 	f := cmd.Flags()
 	f.BoolVar(&opts.paths, "paths", false, "print the configured project roots")
-	f.StringVar(&opts.age, "age", "", "only artifacts with no activity in this window (default 7d)")
 	a.addSelectionFlags(cmd)
 	return cmd
 }
