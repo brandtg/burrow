@@ -63,8 +63,12 @@ On a terminal, the flow opens a preview TUI grouped by category, with a
 sub-group level where it helps (Projects are one collapsed row per project).
 Each row shows its size, recovery contract (`[trash]`/`[owner]`), a `(root)`
 marker, regeneration cost (`free`/`cheap`/`expensive`/`data`, plus `,active`
-when the cache was used recently), and risk. Whether a row starts selected
-follows its category defaults; toggle anything before confirming.
+when the cache was used recently), and risk. What a row is and why it exists
+sits one glance away: `--plain` prints the reason under each row, the TUI
+shows it for the cursor row above the footer, and `--json` carries it as the
+`evidence` field. The full help overlay (`?`) carries a legend for every mark
+and column. Whether a row starts selected follows its category defaults;
+toggle anything before confirming.
 
 Keys: `space` toggles a row/group/category, `a` selects every auto-selectable
 row, `N` clears, `pgup`/`pgdn` (`ctrl+b`/`ctrl+f`) page, `g`/`G` jump to the
@@ -79,15 +83,19 @@ prints a bounded preview (each group capped, with a pointer to `--json`).
 ## What gets selected by default
 
 Only free/cheap rows are ever pre-selected. Expensive rows (model caches,
-browser downloads, Go module cache, Nix store, conda) are shown but off.
-A row touched within its idle window is marked `,active` and left off so you
-do not churn something you are using.
+browser downloads, Go module cache, Nix store, conda) are shown but off, and
+are never turned on without a keystroke — but they are no longer walled off:
+an idle expensive row is selectable with `a` or individually, because a cache
+you have not touched in months is the safest large target in the catalog. A
+row touched within its idle window is marked `,active` and left off
+regardless of cost, so you do not churn something you are using.
 
 Dev caches go one step further: **nothing in the dev category is
 pre-selected, ever, by default** — you opt in per run (`--only dev` or by
 toggling rows) or with `[dev] preselect = true`. With the opt-in, the
-regen-cost and idle-gate policy applies again. Projects artifacts keep their
-own policy: free/cheap artifacts (`__pycache__`, `_cacache`) are
+idle-gate policy applies again and the pre-selection cost rule holds
+(free/cheap on, expensive off but bulk-selectable). Projects artifacts keep
+their own policy: free/cheap artifacts (`__pycache__`, `_cacache`) are
 pre-selected, expensive ones (`node_modules`, virtualenvs) are shown but off.
 
 ## Selecting what to clean

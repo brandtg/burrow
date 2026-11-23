@@ -17,6 +17,9 @@
       "default_on": true,
       "selected": true,
       "status": "pending",
+      "evidence": [
+        "apt owns /var/cache/apt/archives"
+      ],
       "argv": [
         "sudo",
         "--",

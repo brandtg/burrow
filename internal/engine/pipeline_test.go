@@ -131,6 +131,9 @@ func TestBuildFilterSelectAndTotals(t *testing.T) {
 	if tot := plan.SelectedTotals(); tot.Count != 1 || tot.Bytes != 100 {
 		t.Fatalf("unexpected totals %+v", tot)
 	}
+	if tot := plan.Totals(); tot.Count != 3 || tot.Bytes != 300 {
+		t.Fatalf("all-items totals must count every shown row: %+v", tot)
+	}
 	if len(plan.Scanned) != 1 || plan.Scanned[0].ID != "fake" {
 		t.Fatalf("Scanned should record the category, got %+v", plan.Scanned)
 	}
@@ -488,10 +491,14 @@ func TestAutoSelectable(t *testing.T) {
 	}{
 		{"free-low", engine.Target{Risk: engine.RiskLow, Regen: engine.RegenFree}, true},
 		{"cheap-low", engine.Target{Risk: engine.RiskLow, Regen: engine.RegenCheap}, true},
-		{"expensive-low", engine.Target{Risk: engine.RiskLow, Regen: engine.RegenExpensive}, false},
+		// The cost × activity fix: expensive is a rating that binds when the
+		// cache is active (gated), not a permanent veto. An idle expensive
+		// cache is bulk-selectable.
+		{"expensive-low", engine.Target{Risk: engine.RiskLow, Regen: engine.RegenExpensive}, true},
 		{"data-low", engine.Target{Risk: engine.RiskLow, Regen: engine.RegenData}, false},
 		{"high-free", engine.Target{Risk: engine.RiskHigh, Regen: engine.RegenFree}, false},
 		{"gated-cheap", engine.Target{Risk: engine.RiskLow, Regen: engine.RegenCheap, Gated: true}, false},
+		{"gated-expensive", engine.Target{Risk: engine.RiskLow, Regen: engine.RegenExpensive, Gated: true}, false},
 	}
 	for _, c := range cases {
 		if got := c.tgt.AutoSelectable(); got != c.want {
@@ -517,7 +524,7 @@ func TestBuildNeverPreselectsExpensiveOrGated(t *testing.T) {
 		t.Fatalf("free item must be pre-selected; got %v", ids(plan.Selected()))
 	}
 	if sel["fake.expensive"] {
-		t.Fatal("expensive item must not be pre-selected")
+		t.Fatal("expensive item must not be pre-selected (one keystroke away, not on)")
 	}
 	if sel["fake.gated"] {
 		t.Fatal("gated item must not be pre-selected")

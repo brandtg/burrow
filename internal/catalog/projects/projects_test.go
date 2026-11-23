@@ -173,6 +173,94 @@ func TestDiscoverOmitsKeptArtifacts(t *testing.T) {
 	if len(targets) != 0 {
 		t.Fatalf("a git-tracked artifact must produce no target, got %+v", targets)
 	}
+	// The keep decision is not silent: the category note carries the tally so
+	// the bulk of a machine's footprint is visible even though these
+	// artifacts never become rows.
+	note := cat.PreviewNote()
+	if !strings.Contains(note, "Kept by policy:") || !strings.Contains(note, "1 artifact") {
+		t.Fatalf("kept-by-policy tally missing from note: %q", note)
+	}
+}
+
+// TestDiscoverKeptTallyAbsentWhenNothingKept pins that the tally is added
+// only when something was actually kept, so an empty workspace note stays
+// clean.
+func TestDiscoverKeptTallyAbsentWhenNothingKept(t *testing.T) {
+	root := t.TempDir()
+	makeArtifact(t, root, "node_modules")
+	env := testEnv(t, root)
+	cat := New()
+	discover(t, cat, env)
+	if strings.Contains(cat.PreviewNote(), "Kept by policy") {
+		t.Fatalf("nothing was kept; tally must be absent: %q", cat.PreviewNote())
+	}
+}
+
+// mapGit routes TopLevel through a dir -> repo map so one Discover call can
+// cover several repositories.
+type mapGit struct {
+	roots  map[string]string
+	commit time.Time
+}
+
+func (m mapGit) TopLevel(_ context.Context, dir string) (string, error) {
+	if root, ok := m.roots[dir]; ok {
+		return root, nil
+	}
+	return "", ErrNoRepo
+}
+
+func (m mapGit) LsFiles(context.Context, string) ([]string, error) { return nil, nil }
+
+func (m mapGit) LastCommit(context.Context, string) (time.Time, error) { return m.commit, nil }
+
+// TestDiscoverDisambiguatesCollidingGroupTitles pins the collision fix: two
+// repositories both named "logiops" must not render as two identical group
+// headers in the preview; each gains a distinguishing parent path, and every
+// target of one project shares the same replacement title.
+func TestDiscoverDisambiguatesCollidingGroupTitles(t *testing.T) {
+	env := testEnv(t)
+	root := filepath.Join(env.Home, "Projects")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	env.Cfg.Purge.Paths = []string{root}
+
+	a := makeArtifact(t, filepath.Join(root, "a", "logiops"), "node_modules")
+	b := makeArtifact(t, filepath.Join(root, "b", "logiops"), "node_modules")
+	// findGitMarker requires a real .git entry before it consults the Git
+	// implementation, so each fake repo needs the marker directory.
+	for _, repo := range []string{filepath.Dir(a), filepath.Dir(b)} {
+		if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	git := mapGit{roots: map[string]string{
+		filepath.Dir(a): filepath.Dir(a),
+		filepath.Dir(b): filepath.Dir(b),
+	}}
+	cat := &Category{git: git}
+
+	targets := discover(t, cat, env)
+	if len(targets) != 2 {
+		t.Fatalf("expected 2 targets, got %+v", targets)
+	}
+	titles := map[string]string{}
+	for _, tg := range targets {
+		if tg.GroupTitle == "logiops" {
+			t.Fatalf("colliding title left undisambiguated: %+v", tg)
+		}
+		titles[tg.Group] = tg.GroupTitle
+	}
+	if len(titles) != 2 {
+		t.Fatalf("expected two distinct titles, got %v", titles)
+	}
+	for _, tg := range targets {
+		want := titles[tg.Group]
+		if tg.GroupTitle != want {
+			t.Fatalf("targets of one project must share a title: %q vs %q", tg.GroupTitle, want)
+		}
+	}
 }
 
 func TestDiscoverUnknownGitStateKeepsArtifacts(t *testing.T) {

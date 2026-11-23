@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/brandtg/burrow/internal/catalog/dev"
 	"github.com/brandtg/burrow/internal/catalog/usercache"
@@ -227,8 +228,10 @@ func TestSweepCuratesUnknownAndExpensive(t *testing.T) {
 	if hf.Regen != engine.RegenExpensive || hf.Risk != engine.RiskMed {
 		t.Fatalf("huggingface classification wrong: regen=%v risk=%v", hf.Regen, hf.Risk)
 	}
-	if hf.AutoSelectable() {
-		t.Fatal("expensive huggingface must not be auto-selectable")
+	// A freshly touched expensive cache is gated (in use) and stays out of
+	// bulk selection regardless of cost.
+	if !hf.Gated || hf.AutoSelectable() {
+		t.Fatalf("active expensive cache must stay gated: %+v", hf)
 	}
 
 	unknown := got["user-cache.app-caches.randomcache"]
@@ -239,6 +242,28 @@ func TestSweepCuratesUnknownAndExpensive(t *testing.T) {
 	cheap := got["user-cache.app-caches.fontconfig"]
 	if !cheap.DefaultOn || !cheap.AutoSelectable() {
 		t.Fatalf("allowlisted cheap cache should be pre-selected: %+v", cheap)
+	}
+}
+
+// TestExpensiveCacheIdleIsSelectable pins the cost × activity fix on the
+// sweep side: an idle expensive cache is bulk-selectable (one keystroke
+// away), never pre-selected, and an active one stays gated.
+func TestExpensiveCacheIdleIsSelectable(t *testing.T) {
+	env := testEnv(t)
+	hf := filepath.Join(env.XDGCache, "huggingface")
+	mkdir(t, hf)
+	stale := time.Now().Add(-90 * 24 * time.Hour)
+	if err := filepath.WalkDir(hf, func(path string, _ os.DirEntry, _ error) error {
+		return os.Chtimes(path, stale, stale)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	hfRow := ids(t, env)["user-cache.app-caches.huggingface"]
+	if hfRow.Gated {
+		t.Fatalf("stale cache must not be gated: %+v", hfRow)
+	}
+	if !hfRow.AutoSelectable() {
+		t.Fatalf("idle expensive cache must be bulk-selectable: %+v", hfRow)
 	}
 }
 

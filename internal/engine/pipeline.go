@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -129,6 +130,11 @@ func totalsOf(items []*PlannedItem) Totals {
 // SelectedTotals sums the selected items.
 func (p *Plan) SelectedTotals() Totals { return totalsOf(p.Selected()) }
 
+// Totals sums every item in the plan, selected or not. Presentation layers
+// use it next to SelectedTotals so the headline can say what each number
+// counts instead of leaving two unlabeled sums two lines apart.
+func (p *Plan) Totals() Totals { return totalsOf(p.Items) }
+
 // GroupedTree returns items as category -> optional group -> item, preserving
 // plan order at every level. The grouping is presentation-only; it never
 // changes which targets execute or how.
@@ -174,7 +180,31 @@ func (p *Plan) GroupedTree() []CategoryGroup {
 			ig.Unknown++
 		}
 	}
+	// Biggest rows first within every group (and within the category's flat
+	// list), unknown sizes last: a space tool's default order should put the
+	// 88.8 GiB row where the eye lands, not below a 100 MiB one. Groups and
+	// categories keep their plan order; this is presentation-only.
+	for i := range groups {
+		sortItemsBySize(groups[i].Items)
+		for j := range groups[i].Groups {
+			sortItemsBySize(groups[i].Groups[j].Items)
+		}
+	}
 	return groups
+}
+
+// sortItemsBySize orders items largest-first; unknown sizes sort last.
+func sortItemsBySize(items []*PlannedItem) {
+	sort.SliceStable(items, func(i, j int) bool {
+		return itemSizeKey(items[i]) > itemSizeKey(items[j])
+	})
+}
+
+func itemSizeKey(it *PlannedItem) int64 {
+	if !it.Target.SizeKnown {
+		return -1
+	}
+	return it.Target.SizeBytes
 }
 
 // Build runs steps 2-5: discover (parallel, per-category timeout), measure,
@@ -245,7 +275,11 @@ func Build(ctx context.Context, env *Env, opts Options) *Plan {
 				plan.Warnings = append(plan.Warnings, fmt.Sprintf("%s: %v", t.ID, err))
 				continue
 			}
-			selected := t.DefaultOn && t.AutoSelectable()
+			// Pre-selection stays conservative: only free/cheap regen costs
+			// are turned on without a keystroke. Expensive-but-idle rows are
+			// bulk-selectable (AutoSelectable) but never pre-selected — a
+			// surprise multi-GiB re-download must not hide behind enter.
+			selected := t.DefaultOn && t.AutoSelectable() && t.Regen <= RegenCheap
 			if opts.NoOwner && t.Recovery == RecoveryOwner {
 				selected = false
 			}

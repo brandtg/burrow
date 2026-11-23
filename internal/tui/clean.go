@@ -36,19 +36,29 @@ const reviewItemCap = 20
 // group starts collapsed in the TUI.
 const collapseThreshold = 20
 
-// RenderPreview writes the grouped preview table. The reclaimable total leads
-// (one honest number, details below); large groups are capped so a category
-// with hundreds of similar entries does not swamp the output.
+// RenderPreview writes the grouped preview table. The headline leads with the
+// two numbers that matter and names what each counts: what is pre-selected
+// (what runs if you confirm) and what is shown (everything the scan found).
+// Large groups are capped so a category with hundreds of similar entries does
+// not swamp the output.
 func RenderPreview(w io.Writer, plan *engine.Plan, platform string, color bool) {
 	if platform != "" {
 		fmt.Fprintln(w, platform)
 	}
 	t := plan.SelectedTotals()
-	fmt.Fprintf(w, "Reclaimable now: %s across %d items\n", config.FormatBytes(t.Bytes), t.Count)
+	all := plan.Totals()
+	head := config.FormatBytes(t.Bytes) + " pre-selected"
+	if t.Count == 0 {
+		head = "nothing pre-selected"
+	}
+	fmt.Fprintf(w, "Reclaimable now: %s; %s shown across %d items\n", head, config.FormatBytes(all.Bytes), all.Count)
 	cw := planItemWidths(plan)
 	unknown := 0
 	for _, g := range plan.GroupedTree() {
 		fmt.Fprintf(w, "\u25b8 %s  %s / %d items\n", g.Title, config.FormatBytes(g.Bytes), len(g.Items))
+		if g.Note != "" {
+			fmt.Fprintf(w, "  %s\n", faint(g.Note, color))
+		}
 		for _, ig := range g.Groups {
 			for _, it := range ig.Items {
 				if !it.Target.SizeKnown {
@@ -73,6 +83,9 @@ func RenderPreview(w io.Writer, plan *engine.Plan, platform string, color bool) 
 					indent = "    "
 				}
 				fmt.Fprintf(w, "%s%s\n", indent, itemLine(it, cw, color))
+				if ev := evidenceLine(it); ev != "" {
+					fmt.Fprintf(w, "%s    %s\n", indent, faint("\u00b7 "+ev, color))
+				}
 				shown++
 			}
 			if extra := len(ig.Items) - shown; extra > 0 {
@@ -95,6 +108,20 @@ func RenderPreview(w io.Writer, plan *engine.Plan, platform string, color bool) 
 	if unknown > 0 {
 		fmt.Fprintf(w, "%d item(s) report size after the owner command runs (unknown now)\n", unknown)
 	}
+}
+
+// evidenceLine joins a target's evidence into the one-line why that sits under
+// the row: what this is and why the tool thinks it exists.
+func evidenceLine(it *engine.PlannedItem) string {
+	return strings.Join(it.Target.Evidence, "; ")
+}
+
+// faint dims text when color is on; plain output keeps it verbatim.
+func faint(s string, color bool) string {
+	if !color {
+		return s
+	}
+	return lipgloss.NewStyle().Faint(true).Render(s)
 }
 
 // RenderReview writes the exact argv/path that will run, aggregating large
@@ -822,8 +849,8 @@ func (m *CleanModel) toggleSort(mode sortMode) {
 }
 
 // sortMode is the preview's row ordering. sortDefault keeps the plan's
-// discovery order (categories in scan order, projects by path); the other
-// modes re-sort every level of the tree.
+// category and group order with items largest-first inside each group (the
+// GroupedTree order); the other modes re-sort every level of the tree.
 type sortMode int
 
 const (
@@ -977,8 +1004,12 @@ func (m *CleanModel) ensureVisible() {
 
 func (m *CleanModel) listHeight() int {
 	// Two header lines, a blank line before the list, a blank line before the
-	// footer, and the footer (plus the status line when there is one).
+	// footer, the explain line (when the cursor row has one to show), the
+	// footer, and the status line when there is one.
 	overhead := 4 + len(m.footerLines())
+	if m.explainLine() != "" {
+		overhead++
+	}
 	if m.status != "" {
 		overhead++
 	}
@@ -992,7 +1023,7 @@ func (m *CleanModel) listHeight() int {
 // View implements tea.Model.
 func (m *CleanModel) View() string {
 	if m.help.ShowAll {
-		return m.help.FullHelpView(m.keys.fullHelp())
+		return m.legend() + "\n\n" + m.help.FullHelpView(m.keys.fullHelp())
 	}
 	if m.screen == 1 {
 		return m.reviewView()
@@ -1012,6 +1043,7 @@ func (m *CleanModel) header() string {
 		line1 = m.styles.header.Render(m.platform)
 	}
 	t := m.plan.SelectedTotals()
+	all := m.plan.Totals()
 	mode := ""
 	if m.dryRun {
 		mode = " \u00b7 dry-run"
@@ -1024,8 +1056,9 @@ func (m *CleanModel) header() string {
 		sortLabel = "size"
 	}
 	line2 := m.styles.subtle.Render(fmt.Sprintf(
-		"%d category(ies) \u00b7 %d item(s) \u00b7 selected %s across %d \u00b7 sort %s%s",
-		len(m.cats), len(m.plan.Items), config.FormatBytes(t.Bytes), t.Count, sortLabel, mode))
+		"%d category(ies) \u00b7 pre-selected %s across %d \u00b7 shown %s across %d \u00b7 sort %s%s",
+		len(m.cats), config.FormatBytes(t.Bytes), t.Count,
+		config.FormatBytes(all.Bytes), all.Count, sortLabel, mode))
 	return line1 + "\n" + line2
 }
 
@@ -1152,11 +1185,51 @@ func (m *CleanModel) clampReviewOffset(n, height int) {
 }
 
 func (m *CleanModel) footer() string {
-	out := strings.Join(m.footerLines(), "\n")
+	lines := m.footerLines()
+	if explain := m.explainLine(); explain != "" {
+		lines = append([]string{m.styles.subtle.Render("\u00b7 " + explain)}, lines...)
+	}
+	out := strings.Join(lines, "\n")
 	if m.status != "" {
 		out += "\n" + m.styles.subtle.Render(m.status)
 	}
 	return out
+}
+
+// explainLine is the why-line for whatever the cursor is on: an item's
+// evidence (what this is and why the tool thinks it exists) or a category's
+// note (its selection policy). It keeps the list one row per item while the
+// explanation stays one glance away.
+func (m *CleanModel) explainLine() string {
+	if m.cursor < 0 || m.cursor >= len(m.rows) {
+		return ""
+	}
+	switch r := m.rows[m.cursor]; r.kind {
+	case rowItem:
+		return strings.Join(r.item.Target.Evidence, "; ")
+	case rowCategory:
+		return r.cat.Note
+	default:
+		return ""
+	}
+}
+
+// legend explains the row vocabulary the key help cannot carry: the marks,
+// the contracts, the cost and risk columns, and the whitelist key. It is
+// shown above the full help overlay (?).
+func (m *CleanModel) legend() string {
+	lines := []string{
+		"[x] selected   [~] partly selected   [ ] off   [kept] whitelisted",
+		"[trash] recoverable from the Trash   [owner] re-runnable owner command",
+		"free/cheap/expensive = rebuild cost;  ,active = used within the idle window",
+		"low/med/high = blast radius if this guess is wrong",
+	}
+	if m.whitelist != nil {
+		lines = append(lines, "K writes the whitelist; undo by editing "+m.whitelist.Path())
+	} else {
+		lines = append(lines, "K writes the whitelist (unavailable this run)")
+	}
+	return m.styles.subtle.Render(strings.Join(lines, "\n"))
 }
 
 // footerLines renders the short help as at most two lines so the list keeps a

@@ -466,6 +466,7 @@ type cleanItemJSON struct {
 	Kept       bool     `json:"kept,omitempty"`
 	Status     string   `json:"status"`
 	Reason     string   `json:"reason,omitempty"`
+	Evidence   []string `json:"evidence,omitempty"`
 	Argv       []string `json:"argv,omitempty"`
 	Group      string   `json:"group,omitempty"`
 	GroupTitle string   `json:"group_title,omitempty"`
@@ -518,6 +519,7 @@ func (a *App) cleanJSON(plan *engine.Plan, sum *engine.Summary, dryRun bool) err
 			Kept:       it.Kept,
 			Status:     it.Status,
 			Reason:     it.Reason,
+			Evidence:   it.Target.Evidence,
 			Argv:       it.Argv,
 			Group:      it.Target.Group,
 			GroupTitle: it.Target.GroupTitle,

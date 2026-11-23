@@ -177,11 +177,16 @@ type Target struct {
 	GroupTitle string
 }
 
-// AutoSelectable reports whether the target may be pre-selected or selected in
-// bulk. Expensive/data items and policy-gated items are excluded; the user can
-// still toggle them individually.
+// AutoSelectable reports whether the target may be selected in bulk (the `a`
+// key) or toggled as part of a group. Policy-gated items (a cache touched
+// within its idle window — the user is using it) and data items (not
+// regenerable at all) are excluded; everything else is fair game, including
+// expensive caches that have gone idle: an unused toolchain cache is the
+// safest large target in the catalog. Pre-selection (engine.Build) is
+// stricter: only free/cheap regen costs are ever turned on without a
+// keystroke. The user can always toggle a row individually.
 func (t Target) AutoSelectable() bool {
-	return !t.Gated && t.Risk != RiskHigh && t.Regen <= RegenCheap
+	return !t.Gated && t.Risk != RiskHigh && t.Regen != RegenData
 }
 
 // Validate enforces invariant I2: every mutation declares a valid recovery

@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/brandtg/burrow/internal/action"
 	"github.com/brandtg/burrow/internal/catalog"
@@ -309,17 +310,27 @@ func applyIdleGate(env *engine.Env, targets []engine.Target) []engine.Target {
 		recent, known := catalog.IsRecent(t.Path, within)
 		if known && recent {
 			t.Gated = true
-			t.Evidence = append(t.Evidence, fmt.Sprintf("active within %s; shown but not pre-selected", within))
+			t.Evidence = append(t.Evidence, "active within "+humanWindow(within))
 		}
 	}
 	return targets
 }
 
+// humanWindow renders a policy window as whole days when it is a multiple of
+// 24h, else hours — evidence reads "active within 30d", not "720h0m0s".
+func humanWindow(d time.Duration) string {
+	if d%(24*time.Hour) == 0 {
+		return fmt.Sprintf("%dd", d/(24*time.Hour))
+	}
+	return d.String()
+}
+
 // applyPreselect implements the v2 default: the owner of the machine actively
 // uses their toolchain caches, so nothing in this category is pre-selected
 // unless [dev] preselect opts in. Rows stay visible and individually
-// toggleable; the idle gate and regen cost still apply to bulk selection when
-// preselect is enabled.
+// toggleable; the idle gate still applies to bulk selection when preselect is
+// enabled, and expensive rows stay out of pre-selection (they are one
+// keystroke away, not walled off).
 func applyPreselect(env *engine.Env, targets []engine.Target) []engine.Target {
 	if env == nil || env.Cfg == nil || env.Cfg.Dev.Preselect {
 		return targets
