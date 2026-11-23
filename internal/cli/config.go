@@ -18,7 +18,7 @@ func (a *App) newConfigCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			env, err := a.Env()
 			if err != nil {
-				return err
+				return &ExitError{Code: ExitUsage, Err: err}
 			}
 			if a.Flags.JSON {
 				return a.printConfigJSON(env)

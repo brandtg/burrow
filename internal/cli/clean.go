@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -139,7 +140,9 @@ func (a *App) runClean(f cleanFlags) error {
 			return err
 		}
 		if aborted || !confirmed {
-			return nil
+			// Backing out is not a clean exit: scripts must be able to tell
+			// "the user quit" from "nothing was selected".
+			return &ExitError{Code: ExitAborted, Err: errors.New("aborted; nothing was changed")}
 		}
 		if env.DryRun {
 			// The read-only TUI showed the plan; nothing may run.
@@ -433,7 +436,14 @@ func (a *App) platformHeader(env *engine.Env) string {
 	if name == "" {
 		name = "unknown"
 	}
-	return fmt.Sprintf("%s \u00b7 %s \u00b7 %s free", name, env.Adapter.ID(), config.FormatBytes(int64(engine.FreeBytes("/"))))
+	// The headline free space is the filesystem burrow actually cleans — the
+	// user's home — not the root filesystem, which lies on machines with a
+	// separate /home.
+	free := engine.FreeBytes(env.Home)
+	if free == 0 {
+		free = engine.FreeBytes("/")
+	}
+	return fmt.Sprintf("%s \u00b7 %s \u00b7 %s free", name, env.Adapter.ID(), config.FormatBytes(int64(free)))
 }
 
 func cleanExit(sum *engine.Summary) error {
@@ -493,6 +503,9 @@ type cleanSummary struct {
 	DFAfter     uint64 `json:"df_after"`
 	JournalPath string `json:"journal_path,omitempty"`
 	Interrupted bool   `json:"interrupted"`
+	// JournalErrors is nonzero when the undo trail is incomplete for this run.
+	JournalErrors int    `json:"journal_errors,omitempty"`
+	JournalErr    string `json:"journal_error,omitempty"`
 }
 
 func (a *App) cleanJSON(plan *engine.Plan, sum *engine.Summary, dryRun bool) error {
@@ -532,6 +545,10 @@ func (a *App) cleanJSON(plan *engine.Plan, sum *engine.Summary, dryRun bool) err
 			Freed: sum.Freed, FreedKnown: sum.FreedKnown,
 			DFBefore: sum.DFBefore, DFAfter: sum.DFAfter,
 			JournalPath: sum.JournalPath, Interrupted: sum.Interrupted,
+			JournalErrors: sum.JournalErrors,
+		}
+		if sum.JournalErr != nil {
+			doc.Summary.JournalErr = sum.JournalErr.Error()
 		}
 	}
 	enc := json.NewEncoder(a.Out)

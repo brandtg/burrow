@@ -203,6 +203,10 @@ func RenderSummary(w io.Writer, sum *engine.Summary, color bool) {
 	}
 	fmt.Fprintf(w, "Freed %s (df: %s -> %s)\n",
 		freed, config.FormatBytes(int64(sum.DFBefore)), config.FormatBytes(int64(sum.DFAfter)))
+	if sum.JournalErrors > 0 {
+		fmt.Fprintf(w, "warning: %d journal record(s) could not be written: %v; this run may not be restorable\n",
+			sum.JournalErrors, sum.JournalErr)
+	}
 	fmt.Fprintf(w, "ok %d  skipped %d  failed %d\n", sum.OK, sum.Skipped, sum.Failed)
 	if sum.JournalPath != "" {
 		fmt.Fprintf(w, "journal: %s\n", sum.JournalPath)

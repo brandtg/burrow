@@ -140,10 +140,16 @@ func (t *Trash) PutContext(ctx context.Context, path string) (Entry, error) {
 }
 
 // List returns the entries in the home trash. Entries whose files/ counterpart
-// is missing are skipped.
+// is missing are skipped. This is the trash the `user-cache.trash` row empties;
+// use ListAll to see every trash burrow may have written.
 func (t *Trash) List() ([]Entry, error) {
-	infoDir := filepath.Join(t.home, "info")
-	filesDir := filepath.Join(t.home, "files")
+	return t.listDir(t.home)
+}
+
+// listDir reads one trash directory (home or per-mount).
+func (t *Trash) listDir(dir string) ([]Entry, error) {
+	infoDir := filepath.Join(dir, "info")
+	filesDir := filepath.Join(dir, "files")
 	dirents, err := os.ReadDir(infoDir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -178,10 +184,111 @@ func (t *Trash) List() ([]Entry, error) {
 	return out, nil
 }
 
-// Restore moves an entry back to its original path. It refuses if the target
-// already exists (fail closed) or the entry is no longer present.
-func (t *Trash) Restore(e Entry) error {
-	filesPath := filepath.Join(t.home, "files", e.Name)
+// ListAll returns the entries in the home trash plus every per-mount trash
+// burrow may have created (Put writes cross-device items to a topdir trash on
+// the item's own filesystem). Without this, history --restore could not see —
+// and so could not undo — anything trashed from another filesystem. Entries
+// whose files/ counterpart is missing are skipped.
+func (t *Trash) ListAll() ([]Entry, error) {
+	out, err := t.List()
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	for _, e := range out {
+		seen[e.InfoPath] = true
+	}
+	for _, dir := range mountTrashes(t.uid) {
+		entries, err := t.listDir(dir)
+		if err != nil {
+			continue // an unreadable trash dir must not hide the others
+		}
+		for _, e := range entries {
+			if !seen[e.InfoPath] {
+				seen[e.InfoPath] = true
+				out = append(out, e)
+			}
+		}
+	}
+	return out, nil
+}
+
+// mountTrashes returns every per-mount trash directory that exists for uid:
+// $topdir/.Trash-$uid and $topdir/.Trash/$uid (the shared form, only when the
+// .Trash directory carries the sticky bit, per the Trash Specification).
+// mountPoints is injectable for tests.
+func mountTrashes(uid int) []string {
+	var out []string
+	for _, top := range mountPoints() {
+		if perMount := filepath.Join(top, ".Trash-"+strconv.Itoa(uid)); isDir(perMount) {
+			out = append(out, perMount)
+		}
+		shared := filepath.Join(top, ".Trash")
+		if hasStickyBit(shared) {
+			if shared := filepath.Join(shared, strconv.Itoa(uid)); isDir(shared) {
+				out = append(out, shared)
+			}
+		}
+	}
+	return out
+}
+
+// mountPoints lists mounted filesystem roots from /proc/self/mountinfo. Best
+// effort: an unreadable mountinfo yields nothing and ListAll still covers the
+// home trash.
+var mountPoints = func() []string {
+	data, err := os.ReadFile("/proc/self/mountinfo")
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Split(line, " ")
+		if len(fields) < 5 {
+			continue
+		}
+		mp := unescapeMount(fields[4])
+		if mp == "" {
+			continue
+		}
+		out = append(out, mp)
+	}
+	return out
+}
+
+// unescapeMount reverses the octal escapes mountinfo uses for space, tab,
+// newline, and backslash in mount points.
+func unescapeMount(s string) string {
+	if !strings.Contains(s, "\\") {
+		return s
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		// An escape is a backslash plus exactly three octal digits.
+		if s[i] == '\\' && i+4 <= len(s) {
+			if v, err := strconv.ParseUint(s[i+1:i+4], 8, 8); err == nil {
+				b.WriteByte(byte(v))
+				i += 3
+				continue
+			}
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
+func isDir(path string) bool {
+	fi, err := os.Lstat(path)
+	return err == nil && fi.IsDir()
+}
+
+// Restore moves an entry back to its original path, honoring ctx cancellation
+// through the cross-device copy fallback. It refuses if the target already
+// exists (fail closed) or the entry is no longer present. The entry's files/
+// location is derived from its .trashinfo path, so per-mount trash entries
+// restore from their own filesystem's trash.
+func (t *Trash) Restore(ctx context.Context, e Entry) error {
+	filesPath := filepath.Join(filepath.Dir(filepath.Dir(e.InfoPath)), "files", e.Name)
 	fi, err := os.Lstat(filesPath)
 	if err != nil {
 		return fmt.Errorf("item is not present in the trash: %w", err)
@@ -194,7 +301,7 @@ func (t *Trash) Restore(e Entry) error {
 	if err := os.MkdirAll(filepath.Dir(e.Path), 0o700); err != nil {
 		return err
 	}
-	if err := move(context.Background(), filesPath, e.Path, fi); err != nil {
+	if err := move(ctx, filesPath, e.Path, fi); err != nil {
 		return err
 	}
 	_ = os.Remove(e.InfoPath)

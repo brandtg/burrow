@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -434,6 +435,11 @@ type Summary struct {
 	DFAfter     uint64
 	JournalPath string
 	Interrupted bool
+	// JournalErrors counts journal records that could not be written, with the
+	// last error. The journal is what history --restore reads, so a failed
+	// write means the run is not fully undoable and must be visible.
+	JournalErrors int
+	JournalErr    error
 }
 
 // Executed returns the items that were attempted.
@@ -473,14 +479,14 @@ func ExecuteWithProgress(ctx context.Context, env *Env, plan *Plan, jw *journal.
 	sum := &Summary{RunID: plan.RunID, Plan: plan}
 	if jw != nil {
 		sum.JournalPath = jw.Path()
-		_ = jw.Append(journal.Record{
+		sum.noteJournal(jw.Append(journal.Record{
 			RunID:   plan.RunID,
 			Command: plan.Command,
 			Action:  journal.ActionRunStart,
 			Status:  journal.StatusStart,
-		})
+		}))
 	}
-	sum.DFBefore = FreeBytes("/")
+	sum.DFBefore = freeBytesFor(dfPaths(plan))
 
 	for _, it := range plan.Items {
 		if !it.Selected || it.Kept {
@@ -491,26 +497,93 @@ func ExecuteWithProgress(ctx context.Context, env *Env, plan *Plan, jw *journal.
 			break
 		}
 		res := executeItem(ctx, env, it, sum)
-		appendRecord(jw, plan, it)
+		sum.noteJournal(appendRecord(jw, plan, it))
 		if progress != nil {
 			progress(it, res)
 		}
 	}
-	sum.DFAfter = FreeBytes("/")
+	sum.DFAfter = freeBytesFor(dfPaths(plan))
 	if ctx.Err() != nil {
 		sum.Interrupted = true
 	}
 
 	if jw != nil {
-		_ = jw.Append(journal.Record{
+		sum.noteJournal(jw.Append(journal.Record{
 			RunID:   plan.RunID,
 			Command: plan.Command,
 			Action:  journal.ActionRunEnd,
 			Status:  journal.StatusEnd,
 			Bytes:   sum.Freed,
-		})
+		}))
 	}
 	return sum
+}
+
+// noteJournal records a journal write outcome. A failed append is not fatal
+// (the run continues — stopping mid-run would leave the tree in a worse,
+// less-traceable state), but it must be visible: the journal is the undo trail.
+func (s *Summary) noteJournal(err error) {
+	if err == nil {
+		return
+	}
+	s.JournalErrors++
+	s.JournalErr = err
+}
+
+// dfPaths returns the paths whose common filesystem should back the df
+// before/after numbers: the run's own targets, not the root filesystem.
+func dfPaths(plan *Plan) []string {
+	var paths []string
+	for _, it := range plan.Items {
+		if it.Selected && !it.Kept && it.Target.Path != "" {
+			paths = append(paths, it.Target.Path)
+		}
+	}
+	return paths
+}
+
+// freeBytesFor stats the common ancestor of paths (the filesystem holding the
+// run's targets). It falls back to the home directory, then to /, so a run
+// with no paths still reports something meaningful.
+func freeBytesFor(paths []string) uint64 {
+	if p := commonAncestor(paths); p != "" {
+		if n := FreeBytes(p); n > 0 {
+			return n
+		}
+	}
+	if n := FreeBytes("/home"); n > 0 {
+		return n
+	}
+	return FreeBytes("/")
+}
+
+// commonAncestor returns the longest directory that contains every path, or ""
+// when there are no paths. Paths must be absolute; they are cleaned first.
+func commonAncestor(paths []string) string {
+	var prefix []string
+	for _, p := range paths {
+		if p == "" {
+			continue
+		}
+		parts := strings.Split(filepath.Clean(p), string(filepath.Separator))
+		if prefix == nil {
+			prefix = parts
+			continue
+		}
+		n := len(prefix)
+		if len(parts) < n {
+			n = len(parts)
+		}
+		i := 0
+		for i < n && prefix[i] == parts[i] {
+			i++
+		}
+		prefix = prefix[:i]
+	}
+	if len(prefix) == 0 {
+		return ""
+	}
+	return strings.Join(prefix, string(filepath.Separator))
 }
 
 // executeItem runs one planned item and returns the action's result (zero when
@@ -582,9 +655,9 @@ func estimateFreed(it *PlannedItem, res Result) int64 {
 	return 0
 }
 
-func appendRecord(jw *journal.Writer, plan *Plan, it *PlannedItem) {
+func appendRecord(jw *journal.Writer, plan *Plan, it *PlannedItem) error {
 	if jw == nil {
-		return
+		return nil
 	}
 	action := journal.ActionOwner
 	recovery := journal.RecoveryOwner
@@ -605,7 +678,7 @@ func appendRecord(jw *journal.Writer, plan *Plan, it *PlannedItem) {
 	case StatusDryRun:
 		status = journal.StatusDryRun
 	}
-	_ = jw.Append(journal.Record{
+	return jw.Append(journal.Record{
 		RunID:    plan.RunID,
 		Command:  plan.Command,
 		Item:     it.Target.ID,

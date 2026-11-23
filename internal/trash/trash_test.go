@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -56,7 +57,7 @@ func TestPutListRestoreRoundTrip(t *testing.T) {
 		t.Fatalf("listed path %q != %q", entries[0].Path, src)
 	}
 
-	if err := tr.Restore(entries[0]); err != nil {
+	if err := tr.Restore(context.Background(), entries[0]); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(src)
@@ -168,8 +169,89 @@ func TestRestoreRefusesExistingTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeFile(t, src, "new occupant")
-	if err := tr.Restore(entry); err == nil {
+	if err := tr.Restore(context.Background(), entry); err == nil {
 		t.Fatal("expected restore to refuse an existing target")
+	}
+}
+
+// TestListAllCoversPerMountTrashes pins the cross-mount undo fix: an item
+// trashed from another filesystem (Put writes it to a topdir trash on that
+// filesystem) is visible to ListAll and restorable through the home-trash
+// handle, which history --restore uses.
+func TestListAllCoversPerMountTrashes(t *testing.T) {
+	tr, home := newTestTrash(t)
+	mount := t.TempDir()
+
+	// A per-mount trash as dirFor would create it, holding one item.
+	perMount := filepath.Join(mount, ".Trash-"+strconv.Itoa(os.Getuid()))
+	otherFS := New(perMount, os.Getuid())
+	orig := filepath.Join(mount, "other-fs-item")
+	writeFile(t, orig, "cross-device payload")
+	if _, err := otherFS.PutContext(context.Background(), orig); err != nil {
+		t.Fatal(err)
+	}
+
+	// And one ordinary item in the home trash.
+	homeSrc := filepath.Join(t.TempDir(), "home-item")
+	writeFile(t, homeSrc, "home payload")
+	if _, err := tr.PutContext(context.Background(), homeSrc); err != nil {
+		t.Fatal(err)
+	}
+
+	restore := mountPoints
+	mountPoints = func() []string { return []string{mount, home} }
+	defer func() { mountPoints = restore }()
+
+	entries, err := tr.ListAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("ListAll should see both trashes, got %d entries: %+v", len(entries), entries)
+	}
+	byPath := map[string]Entry{}
+	for _, e := range entries {
+		byPath[e.Path] = e
+	}
+	cross, ok := byPath[orig]
+	if !ok {
+		t.Fatalf("per-mount entry missing: %+v", entries)
+	}
+	// The files/ half of a per-mount entry lives on the other filesystem; the
+	// restore must move it from there, not look in the home trash.
+	if err := tr.Restore(context.Background(), cross); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(orig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "cross-device payload" {
+		t.Fatalf("restored content = %q", data)
+	}
+	if entries2, _ := otherFS.List(); len(entries2) != 0 {
+		t.Fatalf("per-mount trash should be empty after restore: %+v", entries2)
+	}
+}
+
+// TestListAllSurvivesUnreadableMount pins the fault isolation: one unreadable
+// per-mount trash must not hide the entries in the readable ones.
+func TestListAllSurvivesUnreadableMount(t *testing.T) {
+	tr, _ := newTestTrash(t)
+	src := filepath.Join(t.TempDir(), "item")
+	writeFile(t, src, "x")
+	if _, err := tr.PutContext(context.Background(), src); err != nil {
+		t.Fatal(err)
+	}
+	restore := mountPoints
+	mountPoints = func() []string { return []string{"/proc/nonexistent-mount"} }
+	defer func() { mountPoints = restore }()
+	entries, err := tr.ListAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("home entry must survive a bad mount dir, got %+v", entries)
 	}
 }
 

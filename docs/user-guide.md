@@ -108,6 +108,10 @@ burrow --exclude containers             # drop a category
 burrow --min-size 100M                  # only items at/above a size
 burrow --no-owner                       # trash user caches, skip owner commands
 ```
+
+`--min-size` filters items whose size is known; items that report size only
+after their owner command runs (unknown now) are always shown, because hiding
+them could hide the largest rows on the machine.
 ## Whitelist
 
 The whitelist is a newline-delimited file at
@@ -238,3 +242,11 @@ burrow completion zsh  > "${fpath[1]}/_burrow"
 burrow completion fish > ~/.config/fish/completions/burrow.fish
 go run ./cmd/burrow docs --dir docs/man   # regenerate the shipped man pages
 ```
+
+## Exit codes
+
+`0` clean run (including "nothing was selected"), `1` operational failure,
+`2` usage error (bad flags, bad config, root without `SUDO_USER`),
+`3` at least one item failed, `4` you backed out of the interactive preview
+or review, `75` every attempt was stopped by a safety guard, `124` every
+attempt timed out, `130` interrupted by SIGINT/SIGTERM.

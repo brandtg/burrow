@@ -300,6 +300,59 @@ func TestBuildOnlyWarnsWhenNothingMatched(t *testing.T) {
 	}
 }
 
+// TestMinSizeSemantics pins the --min-size rule: a known size below the floor
+// is dropped, a known size at or above it stays, and an unknown-size item
+// always stays — the size is simply not known yet, and hiding it would hide
+// potentially large rows from a space tool. Documented in user-guide.md.
+func TestMinSizeSemantics(t *testing.T) {
+	env := testEnv(t, true)
+	small := target("fake.small", engine.RiskLow, true, "")
+	big := target("fake.big", engine.RiskLow, true, "")
+	big.SizeBytes = 2 << 30
+	unknown := target("fake.unknown", engine.RiskLow, true, "")
+	unknown.SizeKnown = false
+	cat := fakeCategory{id: "fake", targets: []engine.Target{small, big, unknown}}
+	plan := engine.Build(context.Background(), env, engine.Options{
+		Categories: []engine.Category{cat},
+		MinSize:    1 << 30,
+	})
+	got := map[string]bool{}
+	for _, it := range plan.Items {
+		got[it.Target.ID] = true
+	}
+	if got["fake.small"] {
+		t.Fatal("a known size below the floor must be filtered out")
+	}
+	if !got["fake.big"] || !got["fake.unknown"] {
+		t.Fatalf("known-big and unknown items must stay: %v", got)
+	}
+}
+
+// TestExecuteSurfacesJournalErrors pins the fail-open fix: when journal writes
+// fail, the summary says so instead of silently losing the undo trail.
+func TestExecuteSurfacesJournalErrors(t *testing.T) {
+	env := testEnv(t, false)
+	// The journal path is a directory, so every append fails with EISDIR.
+	jpath := filepath.Join(t.TempDir(), "operations.jsonl")
+	if err := os.Mkdir(jpath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	jw, err := journal.NewWriter(jpath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tgt := target("fake.ok", engine.RiskLow, true, "")
+	cat := fakeCategory{id: "fake", targets: []engine.Target{tgt}}
+	plan := engine.Build(context.Background(), env, engine.Options{Categories: []engine.Category{cat}})
+	sum := engine.Execute(context.Background(), env, plan, jw)
+	if sum.OK != 1 {
+		t.Fatalf("the run itself must still succeed: %+v", sum)
+	}
+	if sum.JournalErrors == 0 || sum.JournalErr == nil {
+		t.Fatalf("failed journal writes must surface in the summary: %+v", sum)
+	}
+}
+
 // probeCategory records whether its Discover ran, so tests can prove that
 // --only scopes discovery instead of filtering after the fact.
 type probeCategory struct {

@@ -54,16 +54,20 @@ func (*Category) Discover(ctx context.Context, env *engine.Env) ([]engine.Target
 	return out, nil
 }
 
-// Reconcile drops docker sub-prunes that a broader selected prune already
-// covers, so a run never executes redundant prunes:
-// `docker system prune -a --volumes` supersedes every part, and
-// `docker image prune -a` supersedes the dangling-only prune.
+// Reconcile drops items a broader selected item already covers, so a run never
+// executes redundant work:
+// `docker system prune -a --volumes` supersedes every docker part,
+// `docker image prune -a` supersedes the dangling-only prune, and a selected
+// `docker builder prune` supersedes dev.docker-buildx — the dev category
+// trashes the same buildx cache bytes this prune clears, so both running
+// would double-count and churn the same tree twice.
 func (*Category) Reconcile(plan *engine.Plan) {
 	if plan == nil {
 		return
 	}
 	all := selected(plan, "containers.docker-all")
 	unused := all || selected(plan, "containers.docker-unused")
+	buildCache := all || selected(plan, "containers.docker-build-cache")
 	superseded := map[string]bool{}
 	if all {
 		superseded["containers.docker-build-cache"] = true
@@ -72,6 +76,9 @@ func (*Category) Reconcile(plan *engine.Plan) {
 	}
 	if unused {
 		superseded["containers.docker-dangling"] = true
+	}
+	if buildCache {
+		superseded["dev.docker-buildx"] = true
 	}
 	for _, it := range plan.Items {
 		if superseded[it.Target.ID] {

@@ -221,6 +221,50 @@ func TestReconcileImagePruneAllSupersedesDangling(t *testing.T) {
 	}
 }
 
+// TestReconcileBuildCachePruneSupersedesDevBuildx pins the cross-category
+// fix: dev.docker-buildx trashes the same buildx cache bytes that a selected
+// `docker builder prune` clears, so the dev row is deselected rather than
+// double-counted and run twice.
+func TestReconcileBuildCachePruneSupersedesDevBuildx(t *testing.T) {
+	useTestbin(t)
+	env := testEnv(t, true)
+	plan := build(t, env)
+	devBuildx := &engine.PlannedItem{
+		Target: engine.Target{
+			ID: "dev.docker-buildx", Category: "dev", Display: "Docker buildx cache",
+			Recovery: engine.RecoveryTrash, Risk: engine.RiskLow,
+		},
+		Selected: true,
+	}
+	plan.Items = append(plan.Items, devBuildx)
+	items := byID(plan)
+	items["containers.docker-build-cache"].Selected = true
+	New().Reconcile(plan)
+	if !items["containers.docker-build-cache"].Selected {
+		t.Fatal("the selected prune must stay selected")
+	}
+	if devBuildx.Selected {
+		t.Fatal("dev.docker-buildx must be deselected when the build-cache prune is selected")
+	}
+
+	// Without the prune selected, the dev row is the only cleanup for those
+	// bytes and must stay.
+	plan2 := build(t, env)
+	dev2 := &engine.PlannedItem{
+		Target: engine.Target{
+			ID: "dev.docker-buildx", Category: "dev", Display: "Docker buildx cache",
+			Recovery: engine.RecoveryTrash, Risk: engine.RiskLow,
+		},
+		Selected: true,
+	}
+	plan2.Items = append(plan2.Items, dev2)
+	byID(plan2)["containers.docker-build-cache"].Selected = false
+	New().Reconcile(plan2)
+	if !dev2.Selected {
+		t.Fatal("dev.docker-buildx must stay when no build-cache prune is selected")
+	}
+}
+
 func TestParseDockerDF(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "..", "..", "testdata", "containers", "docker-system-df.txt"))
 	if err != nil {

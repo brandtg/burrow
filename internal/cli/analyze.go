@@ -55,7 +55,7 @@ When stdout is not a terminal (or --json is set), analyze behaves like
 			}
 			env, err := a.Env()
 			if err != nil {
-				return err
+				return &ExitError{Code: ExitUsage, Err: err}
 			}
 			// Precedence: an explicit --cross-mounts disables the
 			// boundary, an explicit -x/--one-file-system enables it, otherwise

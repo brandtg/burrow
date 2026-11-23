@@ -1,10 +1,14 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"text/tabwriter"
 	"time"
 
@@ -25,7 +29,7 @@ func (a *App) newHistoryCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			env, err := a.Env()
 			if err != nil {
-				return err
+				return &ExitError{Code: ExitUsage, Err: err}
 			}
 			if restore {
 				if runID == "" {
@@ -87,6 +91,10 @@ func (a *App) printHistory(env *engine.Env, runID string) error {
 }
 
 func (a *App) restoreRun(env *engine.Env, runID string) error {
+	// A cross-device restore copies a multi-GiB tree; make it cancellable the
+	// same way clean and analyze are.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	records, err := journal.Read(env.Paths.Journal)
 	if err != nil {
 		return err
@@ -101,7 +109,9 @@ func (a *App) restoreRun(env *engine.Env, runID string) error {
 		return &ExitError{Code: ExitUsage, Err: fmt.Errorf("no run %q in journal", runID)}
 	}
 	tr := trash.New(env.Paths.TrashDir, env.UID())
-	entries, err := tr.List()
+	// ListAll, not List: a run may have trashed items on other filesystems,
+	// which land in per-mount trash directories the home trash never shows.
+	entries, err := tr.ListAll()
 	if err != nil {
 		return err
 	}
@@ -116,7 +126,7 @@ func (a *App) restoreRun(env *engine.Env, runID string) error {
 			fmt.Fprintf(a.ErrOut, "skip %s: no longer in trash\n", rec.Path)
 			continue
 		}
-		if err := tr.Restore(entry); err != nil {
+		if err := tr.Restore(ctx, entry); err != nil {
 			fmt.Fprintf(a.ErrOut, "skip %s: %v\n", rec.Path, err)
 			continue
 		}

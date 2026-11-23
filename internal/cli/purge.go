@@ -38,7 +38,7 @@ permanently deleted.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			env, err := a.Env()
 			if err != nil {
-				return err
+				return &ExitError{Code: ExitUsage, Err: err}
 			}
 			if opts.paths {
 				return a.printPurgePaths(env, projects.Roots(env))
