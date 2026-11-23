@@ -108,7 +108,7 @@ func (a *App) Root() *cobra.Command {
 	pf.BoolVar(&a.Flags.DryRun, "dry-run", false, "never mutate; print the plan and exit")
 	pf.BoolVarP(&a.Flags.Yes, "yes", "y", false, "skip the interactive confirm")
 	pf.BoolVar(&a.Flags.JSON, "json", false, "machine-readable output")
-	pf.BoolVar(&a.Flags.Plain, "plain", false, "non-interactive plain-text output instead of the TUI")
+	pf.BoolVar(&a.Flags.Plain, "plain", false, "skip the TUI: text preview for clean, JSON document for analyze")
 	pf.StringVar(&a.Flags.Color, "color", "auto", "terminal color policy: auto|always|never")
 	pf.BoolVar(&a.Flags.NoColor, "no-color", false, "disable color (same as --color=never)")
 	pf.StringVar(&a.Flags.Config, "config", "", "override the config file path")

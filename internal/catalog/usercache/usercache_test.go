@@ -138,7 +138,7 @@ func TestTrashIsDefaultOffAndHighRisk(t *testing.T) {
 	if err := os.WriteFile(src, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tr.Put(src); err != nil {
+	if _, err := tr.PutContext(context.Background(), src); err != nil {
 		t.Fatal(err)
 	}
 	got := ids(t, env)
@@ -149,13 +149,10 @@ func TestTrashIsDefaultOffAndHighRisk(t *testing.T) {
 	if item.Recovery != engine.RecoveryDelete || item.DefaultOn || item.Risk != engine.RiskHigh {
 		t.Fatalf("trash contract wrong: recovery=%v default=%v risk=%v", item.Recovery, item.DefaultOn, item.Risk)
 	}
-	plan, err := engine.Build(context.Background(), env, engine.Options{
+	plan := engine.Build(context.Background(), env, engine.Options{
 		Categories: []engine.Category{usercache.New()},
 		Only:       []string{"user-cache.trash"},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	if len(plan.Selected()) != 0 {
 		t.Fatal("user-cache.trash must never be selected by default")
 	}
@@ -188,12 +185,9 @@ func TestNoOverlapWithDevCategory(t *testing.T) {
 		filepath.Join(env.XDGCache, "typescript"),
 		filepath.Join(env.XDGCache, "randomcache"),
 	)
-	plan, err := engine.Build(context.Background(), env, engine.Options{
+	plan := engine.Build(context.Background(), env, engine.Options{
 		Categories: []engine.Category{dev.New(), usercache.New()},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	seen := map[string]bool{}
 	for _, it := range plan.Items {
 		seen[it.Target.ID] = true

@@ -94,13 +94,10 @@ func isolateSnap(t *testing.T) string {
 
 func build(t *testing.T, env *engine.Env, only ...string) *engine.Plan {
 	t.Helper()
-	plan, err := engine.Build(context.Background(), env, engine.Options{
+	plan := engine.Build(context.Background(), env, engine.Options{
 		Categories: []engine.Category{New()},
 		Only:       only,
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	return plan
 }
 

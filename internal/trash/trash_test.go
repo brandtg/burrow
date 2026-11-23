@@ -34,7 +34,7 @@ func TestPutListRestoreRoundTrip(t *testing.T) {
 	src := filepath.Join(dir, "cache-entry")
 	writeFile(t, src, "payload")
 
-	entry, err := tr.Put(src)
+	entry, err := tr.PutContext(context.Background(), src)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,11 +79,11 @@ func TestPutCollisionNaming(t *testing.T) {
 	writeFile(t, filepath.Join(a, "same"), "a")
 	writeFile(t, filepath.Join(b, "same"), "b")
 
-	e1, err := tr.Put(filepath.Join(a, "same"))
+	e1, err := tr.PutContext(context.Background(), filepath.Join(a, "same"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	e2, err := tr.Put(filepath.Join(b, "same"))
+	e2, err := tr.PutContext(context.Background(), filepath.Join(b, "same"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestPutWritesGoldenInfo(t *testing.T) {
 	tr, home := newTestTrash(t)
 	src := filepath.Join(t.TempDir(), "My File")
 	writeFile(t, src, "x")
-	entry, err := tr.Put(src)
+	entry, err := tr.PutContext(context.Background(), src)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +130,7 @@ func TestPutWritesGoldenInfo(t *testing.T) {
 
 func TestPutMissingSourceFailsClosed(t *testing.T) {
 	tr, _ := newTestTrash(t)
-	if _, err := tr.Put(filepath.Join(t.TempDir(), "nope")); err == nil {
+	if _, err := tr.PutContext(context.Background(), filepath.Join(t.TempDir(), "nope")); err == nil {
 		t.Fatal("expected error for missing source")
 	}
 }
@@ -147,7 +147,7 @@ func TestPutUnavailableTrashNeverUnlinks(t *testing.T) {
 	src := filepath.Join(t.TempDir(), "valuable")
 	writeFile(t, src, "keep me")
 
-	if _, err := tr.Put(src); err == nil {
+	if _, err := tr.PutContext(context.Background(), src); err == nil {
 		t.Fatal("expected Put to fail when trash is unavailable")
 	}
 	data, err := os.ReadFile(src)
@@ -163,7 +163,7 @@ func TestRestoreRefusesExistingTarget(t *testing.T) {
 	tr, _ := newTestTrash(t)
 	src := filepath.Join(t.TempDir(), "thing")
 	writeFile(t, src, "original")
-	entry, err := tr.Put(src)
+	entry, err := tr.PutContext(context.Background(), src)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +186,7 @@ func TestCrossDevice(t *testing.T) {
 
 	src := filepath.Join(other, "cross-device-entry")
 	writeFile(t, src, "payload")
-	entry, err := tr.Put(src)
+	entry, err := tr.PutContext(context.Background(), src)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +209,7 @@ func TestEmpty(t *testing.T) {
 	dir := t.TempDir()
 	for _, name := range []string{"a", "b", "c"} {
 		writeFile(t, filepath.Join(dir, name), "x")
-		if _, err := tr.Put(filepath.Join(dir, name)); err != nil {
+		if _, err := tr.PutContext(context.Background(), filepath.Join(dir, name)); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -38,8 +38,9 @@ func TestValidateForDeletionRejections(t *testing.T) {
 			if err == nil {
 				t.Fatalf("expected rejection for %q", tc.path)
 			}
-			if !errors.Is(err, safe.ErrUnsafe) {
-				t.Fatalf("expected ErrUnsafe for %q, got %v", tc.path, err)
+			var viol *safe.Violation
+			if !errors.As(err, &viol) {
+				t.Fatalf("expected a violation for %q, got %v", tc.path, err)
 			}
 		})
 	}

@@ -106,16 +106,17 @@ func (r Regen) String() string {
 	}
 }
 
-// Result is the outcome of executing an Action.
+// Result is the outcome of executing an Action. The engine classifies the
+// outcome from the returned error, so Result carries only the data the engine
+// and the progress callback consume: bytes freed, the executed argv, and
+// whether the run hit its timeout.
 type Result struct {
-	Status   string
 	Bytes    int64
-	Reason   string
 	Argv     []string
 	TimedOut bool
 }
 
-// Status values for a planned item and an action result.
+// Status values for a planned item.
 const (
 	StatusPending = "pending"
 	StatusOK      = "ok"
@@ -134,7 +135,6 @@ type ArgvPlanner interface {
 // Action performs a mutation. Implementations must be idempotent and must
 // re-validate identity at the moment of execution.
 type Action interface {
-	Describe() string
 	// Recovery declares the contract; it must be valid.
 	Recovery() Recovery
 	// Run executes; dryRun must compute the same plan without mutating.

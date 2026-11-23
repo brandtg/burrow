@@ -126,6 +126,3 @@ func (e *Env) UID() int {
 	}
 	return n
 }
-
-// Trash returns the resolved home trash directory.
-func (e *Env) Trash() string { return e.Paths.TrashDir }

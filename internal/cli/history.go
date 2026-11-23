@@ -76,10 +76,11 @@ func (a *App) printHistory(env *engine.Env, runID string) error {
 	}
 	tw := tabwriter.NewWriter(a.Out, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "TIME\tRUN\tCOMMAND\tOK\tSKIP\tFAIL\tFREED")
-	for _, r := range runs {
+	ids := shortIDs(runs)
+	for i, r := range runs {
 		freed := config.FormatBytes(r.Freed)
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%d\t%d\t%s\n",
-			r.Start.Local().Format(time.RFC3339), shortID(r.RunID), r.Command,
+			r.Start.Local().Format(time.RFC3339), ids[i], r.Command,
 			r.OK, r.Skipped, r.Failed, freed)
 	}
 	return tw.Flush()
@@ -131,11 +132,34 @@ func (a *App) restoreRun(env *engine.Env, runID string) error {
 	return nil
 }
 
-func shortID(id string) string {
-	if len(id) > 8 {
-		return id[:8]
+// shortIDs returns the display id for every run: the first 8 characters,
+// lengthened while that prefix is shared with another listed run (the git
+// short-hash rule). Distinct runs can share their first 8 ULID characters, and
+// printing identical ids for different runs is worse than printing longer ones.
+func shortIDs(runs []journal.Run) []string {
+	ids := make([]string, len(runs))
+	for i, r := range runs {
+		ids[i] = r.RunID
 	}
-	return id
+	out := make([]string, len(runs))
+	for i, id := range ids {
+		n := min(8, len(id))
+		for n < len(id) {
+			clash := false
+			for j, other := range ids {
+				if j != i && strings.HasPrefix(other, id[:n]) {
+					clash = true
+					break
+				}
+			}
+			if !clash {
+				break
+			}
+			n++
+		}
+		out[i] = id[:n]
+	}
+	return out
 }
 
 // resolveRunID accepts a full run id or a unique prefix of one, matching

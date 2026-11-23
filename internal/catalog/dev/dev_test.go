@@ -84,13 +84,10 @@ func discover(t *testing.T, env *engine.Env) map[string]engine.Target {
 
 func runOnly(t *testing.T, env *engine.Env, id string) *engine.Summary {
 	t.Helper()
-	plan, err := engine.Build(context.Background(), env, engine.Options{
+	plan := engine.Build(context.Background(), env, engine.Options{
 		Categories: []engine.Category{dev.New()},
 		Only:       []string{id},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	// The test exercises execution and guards; force-select regardless of the
 	// selection policy (idle gating, regeneration cost).
 	for _, it := range plan.Items {
@@ -175,13 +172,10 @@ func TestOwnerPathResolutionAndExecution(t *testing.T) {
 func TestOwnerPathChangeGuardStops(t *testing.T) {
 	env := testEnv(t, false)
 	useTestbin(t, env)
-	plan, err := engine.Build(context.Background(), env, engine.Options{
+	plan := engine.Build(context.Background(), env, engine.Options{
 		Categories: []engine.Category{dev.New()},
 		Only:       []string{"dev.npm"},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	// Dev caches are not pre-selected by default; the guard is being tested.
 	for _, it := range plan.Items {
 		it.Selected = true
@@ -532,10 +526,7 @@ func TestDevNotPreselectedByDefault(t *testing.T) {
 		}
 	}
 
-	plan, err := engine.Build(context.Background(), env, engine.Options{Categories: []engine.Category{dev.New()}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	plan := engine.Build(context.Background(), env, engine.Options{Categories: []engine.Category{dev.New()}})
 	if got := plan.Selected(); len(got) != 0 {
 		t.Fatalf("nothing in the dev category may be pre-selected, got %d items", len(got))
 	}

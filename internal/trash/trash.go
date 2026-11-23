@@ -87,15 +87,10 @@ func (t *Trash) dirFor(path string) (string, error) {
 	return dir, nil
 }
 
-// Put moves path into the trash and returns its entry. The original path is
-// recorded percent-encoded in the .trashinfo file.
-func (t *Trash) Put(path string) (Entry, error) {
-	return t.PutContext(context.Background(), path)
-}
-
-// PutContext is Put with cancellation: a cancelled or expired context aborts the
-// cross-device copy fallback before the source is removed, so the item is never
-// half-trashed (fail closed, invariant I5).
+// PutContext moves path into the trash and returns its entry, honoring ctx
+// cancellation: a cancelled or expired context aborts the cross-device copy
+// fallback before the source is removed, so the item is never half-trashed
+// (fail closed, invariant I5).
 func (t *Trash) PutContext(ctx context.Context, path string) (Entry, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {

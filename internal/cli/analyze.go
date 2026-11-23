@@ -104,8 +104,9 @@ func (a *App) runAnalyze(env *engine.Env, args []string, opts analyzeOptions) er
 		paths = []string{cwd}
 	}
 
-	// --plain means the non-interactive text path even on a terminal; --json
-	// and a non-TTY stdout select it too.
+	// --plain means the non-interactive path even on a terminal; its output is
+	// the JSON document (analyze has no plain-text renderer). --json and a
+	// non-TTY stdout select it too.
 	interactive := !a.Flags.JSON && !a.Flags.Plain && isTerminal(a.Out)
 	if !interactive && len(paths) > 1 {
 		return &ExitError{Code: ExitUsage, Err: errors.New("--json accepts a single path")}

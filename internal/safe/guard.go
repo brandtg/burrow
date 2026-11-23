@@ -13,6 +13,7 @@ const (
 	Unknown
 )
 
+// String renders the state for test and guard diagnostics.
 func (s State) String() string {
 	switch s {
 	case Safe:

@@ -67,13 +67,10 @@ func useOnlyTestbin(t *testing.T) string {
 
 func build(t *testing.T, env *engine.Env, only ...string) *engine.Plan {
 	t.Helper()
-	plan, err := engine.Build(context.Background(), env, engine.Options{
+	plan := engine.Build(context.Background(), env, engine.Options{
 		Categories: []engine.Category{New()},
 		Only:       only,
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	return plan
 }
 
@@ -181,7 +178,7 @@ func TestDockerDaemonUnreachableSkipsWithReason(t *testing.T) {
 		t.Fatalf("unreachable daemon must not fail items: %+v", sum)
 	}
 	for _, it := range plan.Selected() {
-		if it.Status != engine.StatusSkipped || it.Reason == "" || !it.GuardStop {
+		if it.Status != engine.StatusSkipped || it.Reason == "" {
 			t.Fatalf("item %s not skipped with reason: %+v", it.Target.ID, it)
 		}
 	}

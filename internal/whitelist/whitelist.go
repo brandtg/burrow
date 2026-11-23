@@ -54,14 +54,6 @@ func Parse(r io.Reader) (*Set, error) {
 	return set, nil
 }
 
-// Entries returns a copy of the whitelist entries.
-func (s *Set) Entries() []string {
-	if s == nil {
-		return nil
-	}
-	return append([]string(nil), s.entries...)
-}
-
 // Empty reports whether the set has no entries.
 func (s *Set) Empty() bool { return s == nil || len(s.entries) == 0 }
 

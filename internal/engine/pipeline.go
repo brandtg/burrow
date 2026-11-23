@@ -7,7 +7,6 @@ import (
 	"strings"
 	"sync"
 	"syscall"
-	"time"
 
 	"github.com/brandtg/burrow/internal/journal"
 	"github.com/brandtg/burrow/internal/owner"
@@ -25,8 +24,6 @@ type PlannedItem struct {
 	Reason        string
 	Freed         int64
 	Argv          []string
-	GuardStop     bool
-	TimedOut      bool
 	// Kept is true when the user pressed keep in the interactive preview. The
 	// item stays in the plan for transparency but is never executed.
 	Kept bool
@@ -88,12 +85,11 @@ type CategoryGroup struct {
 
 // Options configures Build.
 type Options struct {
-	Command         string
-	Categories      []Category
-	Only            []string
-	Exclude         []string
-	MinSize         int64
-	DiscoverTimeout time.Duration
+	Command    string
+	Categories []Category
+	Only       []string
+	Exclude    []string
+	MinSize    int64
 	// NoOwner leaves owner-contract items unselected (still shown).
 	NoOwner bool
 	// Progress, when non-nil, is called once per category as its discovery
@@ -116,8 +112,8 @@ func (p *Plan) Selected() []*PlannedItem {
 	return out
 }
 
-// TotalsOf sums a set of items.
-func TotalsOf(items []*PlannedItem) Totals {
+// totalsOf sums a set of items.
+func totalsOf(items []*PlannedItem) Totals {
 	var t Totals
 	for _, it := range items {
 		t.Count++
@@ -131,7 +127,7 @@ func TotalsOf(items []*PlannedItem) Totals {
 }
 
 // SelectedTotals sums the selected items.
-func (p *Plan) SelectedTotals() Totals { return TotalsOf(p.Selected()) }
+func (p *Plan) SelectedTotals() Totals { return totalsOf(p.Selected()) }
 
 // GroupedTree returns items as category -> optional group -> item, preserving
 // plan order at every level. The grouping is presentation-only; it never
@@ -185,12 +181,9 @@ func (p *Plan) GroupedTree() []CategoryGroup {
 // filter, and plan. Discovery is limited to categories --only can match, so a
 // narrow selector does not pay for scanning unrelated roots. It never mutates
 // the filesystem (invariant I1).
-func Build(ctx context.Context, env *Env, opts Options) (*Plan, error) {
+func Build(ctx context.Context, env *Env, opts Options) *Plan {
 	if opts.Command == "" {
 		opts.Command = "clean"
-	}
-	if opts.DiscoverTimeout <= 0 {
-		opts.DiscoverTimeout = owner.TimeoutScanPerRoot
 	}
 	plan := &Plan{RunID: journal.NewRunID(), Command: opts.Command}
 
@@ -214,7 +207,7 @@ func Build(ctx context.Context, env *Env, opts Options) (*Plan, error) {
 		wg.Add(1)
 		go func(c Category) {
 			defer wg.Done()
-			dctx, cancel := context.WithTimeout(ctx, opts.DiscoverTimeout)
+			dctx, cancel := context.WithTimeout(ctx, owner.TimeoutScanPerRoot)
 			defer cancel()
 			ts, err := c.Discover(dctx, env)
 			ch <- discovered{cat: c, targets: ts, err: err}
@@ -243,7 +236,7 @@ func Build(ctx context.Context, env *Env, opts Options) (*Plan, error) {
 			continue
 		}
 		targets := d.targets
-		Measure(ctx, env, targets)
+		measure(ctx, env, targets)
 		for _, t := range targets {
 			if !includeTarget(t, opts, env.Whitelist) {
 				continue
@@ -269,10 +262,14 @@ func Build(ctx context.Context, env *Env, opts Options) (*Plan, error) {
 			plan.Items = append(plan.Items, item)
 		}
 	}
-	if len(opts.Only) > 0 && !scoped && len(plan.Items) == 0 {
-		plan.Warnings = append(plan.Warnings, fmt.Sprintf("no category matched --only %s", strings.Join(opts.Only, ", ")))
+	if len(opts.Only) > 0 && len(plan.Items) == 0 {
+		if scoped {
+			plan.Warnings = append(plan.Warnings, fmt.Sprintf("no items matched --only %s", strings.Join(opts.Only, ", ")))
+		} else {
+			plan.Warnings = append(plan.Warnings, fmt.Sprintf("no category matched --only %s", strings.Join(opts.Only, ", ")))
+		}
 	}
-	return plan, nil
+	return plan
 }
 
 // ApplyHooks runs the optional category hooks against plan: every Reconciler
@@ -391,7 +388,6 @@ func matchSelector(t Target, list []string) bool {
 // Summary is the outcome of Execute (steps 7-9).
 type Summary struct {
 	RunID       string
-	Command     string
 	Plan        *Plan
 	OK          int
 	Skipped     int
@@ -440,7 +436,7 @@ func Execute(ctx context.Context, env *Env, plan *Plan, jw *journal.Writer) *Sum
 // must not block the pipeline, start its own long work, mutate the plan or
 // environment, or panic. Execute's behavior is unchanged when progress is nil.
 func ExecuteWithProgress(ctx context.Context, env *Env, plan *Plan, jw *journal.Writer, progress func(*PlannedItem, Result)) *Summary {
-	sum := &Summary{RunID: plan.RunID, Command: plan.Command, Plan: plan}
+	sum := &Summary{RunID: plan.RunID, Plan: plan}
 	if jw != nil {
 		sum.JournalPath = jw.Path()
 		_ = jw.Append(journal.Record{
@@ -491,7 +487,6 @@ func executeItem(ctx context.Context, env *Env, it *PlannedItem, sum *Summary) R
 		if err := it.Target.Guard.Check(ctx, env); err != nil {
 			it.Status = StatusSkipped
 			it.Reason = err.Error()
-			it.GuardStop = true
 			sum.Skipped++
 			sum.GuardStops++
 			return Result{}
@@ -525,13 +520,11 @@ func executeItem(ctx context.Context, env *Env, it *PlannedItem, sum *Summary) R
 		case errors.As(err, &gs):
 			it.Status = StatusSkipped
 			it.Reason = gs.Reason
-			it.GuardStop = true
 			sum.Skipped++
 			sum.GuardStops++
 		case res.TimedOut:
 			it.Status = StatusSkipped
 			it.Reason = err.Error()
-			it.TimedOut = true
 			sum.Skipped++
 			sum.Timeouts++
 		default:

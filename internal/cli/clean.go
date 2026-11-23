@@ -86,7 +86,7 @@ func (a *App) runClean(f cleanFlags) error {
 	progress := newScanProgress(a.ErrOut, !a.Flags.JSON)
 	defer progress.stop()
 
-	plan, err := engine.Build(ctx, env, engine.Options{
+	plan := engine.Build(ctx, env, engine.Options{
 		Command:    "clean",
 		Categories: cats,
 		Only:       a.Flags.Only,
@@ -95,9 +95,6 @@ func (a *App) runClean(f cleanFlags) error {
 		NoOwner:    a.Flags.NoOwner,
 		Progress:   progress.category,
 	})
-	if err != nil {
-		return err
-	}
 	// The scan is over: clear the progress line before anything is written to
 	// stdout or before the alternate screen opens.
 	progress.stop()

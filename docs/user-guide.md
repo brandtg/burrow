@@ -67,7 +67,7 @@ when the cache was used recently), and risk. Whether a row starts selected
 follows its category defaults; toggle anything before confirming.
 
 Keys: `space` toggles a row/group/category, `a` selects every auto-selectable
-row, `n` clears, `pgup`/`pgdn` (`ctrl+b`/`ctrl+f`) page, `g`/`G` jump to the
+row, `N` clears, `pgup`/`pgdn` (`ctrl+b`/`ctrl+f`) page, `g`/`G` jump to the
 top/bottom, `/` filters, `→`/`←` expand and collapse, `K` keeps
 (whitelists), `enter` moves to the review screen, `q` quits. After you
 choose, the review screen lists the exact owner argv and trash paths; large
@@ -164,8 +164,9 @@ bring those files back.
 
 `burrow analyze [path]` opens an interactive read-only tree (arrow keys to
 navigate). It has no delete keys — the review flow is the only deletion path
-in burrow. When stdout is not a terminal, or with `--json`, it emits a stable
-document:
+in burrow. When stdout is not a terminal, or with `--json` or `--plain`, it
+skips the TUI and emits a stable JSON document (`--plain` and `--json` are
+the same output here; analyze has no plain-text renderer):
 
 ```json
 {"path":"...","total_size":N,"total_files":N,
@@ -194,7 +195,6 @@ Trash burrow writes to is resolved from XDG, not configured. The keys:
 ```toml
 [general]
 color = "auto"                  # auto|always|never
-log_level = "info"
 
 [clean]
 default_categories = ["projects","dev","user-cache","desktop-pkgs","downloads"]
