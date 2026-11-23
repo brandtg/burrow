@@ -178,9 +178,6 @@ func trashEntry(env *engine.Env, id, display, path string, risk engine.Risk, reg
 // the owner contract, is high risk, and is default OFF and explicit.
 func trashItem(env *engine.Env) []engine.Target {
 	dir := env.Paths.TrashDir
-	if dir == "" {
-		dir = filepath.Join(env.XDGData, "Trash")
-	}
 	if !catalog.DirExists(dir) || !trashHasItems(dir) {
 		return nil
 	}

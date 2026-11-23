@@ -95,6 +95,25 @@ func TestReadMissingFile(t *testing.T) {
 	}
 }
 
+// TestReadSkipsTruncatedTrailingLine pins the crash tolerance: a truncated
+// final line (crash mid-append) is skipped, not fatal — history must stay
+// readable without hand-editing the journal.
+func TestReadSkipsTruncatedTrailingLine(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "operations.jsonl")
+	good := `{"ts":"2026-10-05T12:00:00Z","run_id":"01J","command":"clean","action":"run_start","status":"start"}`
+	content := good + "\n" + `{"ts":"2026-10-05T12:00:01Z","run_id":"01J","comm`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	records, err := Read(path)
+	if err != nil {
+		t.Fatalf("a truncated trailing line must not fail the read: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected 1 valid record, got %d", len(records))
+	}
+}
+
 func TestGroupMultipleRuns(t *testing.T) {
 	records := []Record{
 		{RunID: "a", Command: "clean", Action: ActionRunStart, Status: StatusStart, TS: "2026-10-05T12:00:00Z"},

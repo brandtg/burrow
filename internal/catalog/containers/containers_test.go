@@ -67,13 +67,10 @@ func useOnlyTestbin(t *testing.T) string {
 
 func build(t *testing.T, env *engine.Env, only ...string) *engine.Plan {
 	t.Helper()
-	plan, err := engine.Build(context.Background(), env, engine.Options{
+	plan := engine.Build(context.Background(), env, engine.Options{
 		Categories: []engine.Category{New()},
 		Only:       only,
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	return plan
 }
 
@@ -181,7 +178,7 @@ func TestDockerDaemonUnreachableSkipsWithReason(t *testing.T) {
 		t.Fatalf("unreachable daemon must not fail items: %+v", sum)
 	}
 	for _, it := range plan.Selected() {
-		if it.Status != engine.StatusSkipped || it.Reason == "" || !it.GuardStop {
+		if it.Status != engine.StatusSkipped || it.Reason == "" {
 			t.Fatalf("item %s not skipped with reason: %+v", it.Target.ID, it)
 		}
 	}
@@ -221,6 +218,50 @@ func TestReconcileImagePruneAllSupersedesDangling(t *testing.T) {
 	}
 	if items["containers.docker-dangling"].Selected {
 		t.Fatal("dangling must be deselected when image prune -a is selected")
+	}
+}
+
+// TestReconcileBuildCachePruneSupersedesDevBuildx pins the cross-category
+// fix: dev.docker-buildx trashes the same buildx cache bytes that a selected
+// `docker builder prune` clears, so the dev row is deselected rather than
+// double-counted and run twice.
+func TestReconcileBuildCachePruneSupersedesDevBuildx(t *testing.T) {
+	useTestbin(t)
+	env := testEnv(t, true)
+	plan := build(t, env)
+	devBuildx := &engine.PlannedItem{
+		Target: engine.Target{
+			ID: "dev.docker-buildx", Category: "dev", Display: "Docker buildx cache",
+			Recovery: engine.RecoveryTrash, Risk: engine.RiskLow,
+		},
+		Selected: true,
+	}
+	plan.Items = append(plan.Items, devBuildx)
+	items := byID(plan)
+	items["containers.docker-build-cache"].Selected = true
+	New().Reconcile(plan)
+	if !items["containers.docker-build-cache"].Selected {
+		t.Fatal("the selected prune must stay selected")
+	}
+	if devBuildx.Selected {
+		t.Fatal("dev.docker-buildx must be deselected when the build-cache prune is selected")
+	}
+
+	// Without the prune selected, the dev row is the only cleanup for those
+	// bytes and must stay.
+	plan2 := build(t, env)
+	dev2 := &engine.PlannedItem{
+		Target: engine.Target{
+			ID: "dev.docker-buildx", Category: "dev", Display: "Docker buildx cache",
+			Recovery: engine.RecoveryTrash, Risk: engine.RiskLow,
+		},
+		Selected: true,
+	}
+	plan2.Items = append(plan2.Items, dev2)
+	byID(plan2)["containers.docker-build-cache"].Selected = false
+	New().Reconcile(plan2)
+	if !dev2.Selected {
+		t.Fatal("dev.docker-buildx must stay when no build-cache prune is selected")
 	}
 }
 

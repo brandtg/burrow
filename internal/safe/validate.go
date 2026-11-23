@@ -7,7 +7,6 @@
 package safe
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,11 +15,9 @@ import (
 	"unicode"
 )
 
-// ErrUnsafe is the sentinel returned (via errors.Is) by every validation
-// failure. Callers use it to distinguish a safety refusal from an I/O error.
-var ErrUnsafe = errors.New("unsafe path")
-
-// Violation is a concrete reason a path was rejected.
+// Violation is a concrete reason a path was rejected. Every validation failure
+// is a *Violation, so callers can distinguish a safety refusal from an I/O
+// error with errors.As.
 type Violation struct {
 	Path   string
 	Reason string
@@ -29,9 +26,6 @@ type Violation struct {
 func (e *Violation) Error() string {
 	return fmt.Sprintf("unsafe path %q: %s", e.Path, e.Reason)
 }
-
-// Is lets errors.Is(err, ErrUnsafe) succeed for every violation.
-func (e *Violation) Is(target error) bool { return target == ErrUnsafe }
 
 func violation(path, reason string) *Violation {
 	return &Violation{Path: path, Reason: reason}

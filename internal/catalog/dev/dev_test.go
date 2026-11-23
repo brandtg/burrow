@@ -84,13 +84,10 @@ func discover(t *testing.T, env *engine.Env) map[string]engine.Target {
 
 func runOnly(t *testing.T, env *engine.Env, id string) *engine.Summary {
 	t.Helper()
-	plan, err := engine.Build(context.Background(), env, engine.Options{
+	plan := engine.Build(context.Background(), env, engine.Options{
 		Categories: []engine.Category{dev.New()},
 		Only:       []string{id},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	// The test exercises execution and guards; force-select regardless of the
 	// selection policy (idle gating, regeneration cost).
 	for _, it := range plan.Items {
@@ -175,13 +172,10 @@ func TestOwnerPathResolutionAndExecution(t *testing.T) {
 func TestOwnerPathChangeGuardStops(t *testing.T) {
 	env := testEnv(t, false)
 	useTestbin(t, env)
-	plan, err := engine.Build(context.Background(), env, engine.Options{
+	plan := engine.Build(context.Background(), env, engine.Options{
 		Categories: []engine.Category{dev.New()},
 		Only:       []string{"dev.npm"},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	// Dev caches are not pre-selected by default; the guard is being tested.
 	for _, it := range plan.Items {
 		it.Selected = true
@@ -320,23 +314,28 @@ func TestCPANKeepsSources(t *testing.T) {
 	}
 }
 
-func TestFrontendAndCloudCachesAreTrash(t *testing.T) {
+func TestCloudAndBuildxCachesAreTrash(t *testing.T) {
 	env := testEnv(t, true)
 	useTestbin(t, env)
 	mkdirs(t,
-		filepath.Join(env.XDGCache, "typescript"),
-		filepath.Join(env.XDGCache, "vite"),
 		filepath.Join(env.Home, ".kube", "cache"),
 		filepath.Join(env.Home, ".docker", "buildx", "cache"),
 	)
 	byID := discover(t, env)
-	for _, id := range []string{"dev.frontend-caches.typescript", "dev.frontend-caches.vite", "dev.cloud-cli.kube", "dev.docker-buildx"} {
+	// The frontend tool caches moved to the user-cache sweep (plain top-level
+	// XDG cache entries); only the cloud-cli logs and buildx remain dev rows.
+	for _, id := range []string{"dev.cloud-cli.kube", "dev.docker-buildx"} {
 		tg, ok := byID[id]
 		if !ok {
 			t.Fatalf("missing %s", id)
 		}
 		if tg.Recovery != engine.RecoveryTrash {
 			t.Fatalf("%s recovery = %v, want trash", id, tg.Recovery)
+		}
+	}
+	for _, id := range []string{"dev.frontend-caches.typescript", "dev.frontend-caches.vite"} {
+		if _, ok := byID[id]; ok {
+			t.Fatalf("%s must no longer exist (user-cache owns those entries)", id)
 		}
 	}
 }
@@ -487,10 +486,11 @@ func TestDevIdleGateAndRegen(t *testing.T) {
 	}
 }
 
-func TestDevExpensiveNotAutoSelectable(t *testing.T) {
+func TestDevExpensiveIdleIsSelectable(t *testing.T) {
 	env := testEnv(t, true)
 	t.Setenv("PATH", t.TempDir())
-	mkdirs(t, filepath.Join(env.Home, "go", "pkg", "mod"))
+	mod := filepath.Join(env.Home, "go", "pkg", "mod")
+	mkdirs(t, mod)
 	byID := discover(t, env)
 	tg, ok := byID["dev.go-mod"]
 	if !ok {
@@ -499,8 +499,26 @@ func TestDevExpensiveNotAutoSelectable(t *testing.T) {
 	if tg.Regen != engine.RegenExpensive {
 		t.Fatalf("go-mod regen = %v, want expensive", tg.Regen)
 	}
-	if tg.AutoSelectable() {
-		t.Fatal("expensive go-mod cache must not be auto-selectable")
+	// A freshly touched cache is gated: the owner is using it, so it stays
+	// out of bulk selection regardless of cost.
+	if !tg.Gated || tg.AutoSelectable() {
+		t.Fatalf("active expensive cache must stay gated: %+v", tg)
+	}
+	// The cost × activity fix: an idle expensive cache is the safest large
+	// target, so it is one keystroke away instead of walled off.
+	stale := time.Now().Add(-90 * 24 * time.Hour)
+	if err := filepath.WalkDir(mod, func(path string, _ os.DirEntry, _ error) error {
+		return os.Chtimes(path, stale, stale)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	byID = discover(t, env)
+	tg = byID["dev.go-mod"]
+	if tg.Gated {
+		t.Fatalf("stale cache must not be gated: %+v", tg)
+	}
+	if !tg.AutoSelectable() {
+		t.Fatalf("idle expensive cache must be bulk-selectable: %+v", tg)
 	}
 }
 
@@ -532,18 +550,16 @@ func TestDevNotPreselectedByDefault(t *testing.T) {
 		}
 	}
 
-	plan, err := engine.Build(context.Background(), env, engine.Options{Categories: []engine.Category{dev.New()}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	plan := engine.Build(context.Background(), env, engine.Options{Categories: []engine.Category{dev.New()}})
 	if got := plan.Selected(); len(got) != 0 {
 		t.Fatalf("nothing in the dev category may be pre-selected, got %d items", len(got))
 	}
 }
 
-// TestDevPreselectOptIn: [dev] preselect = true restores regen-cost-driven
-// pre-selection (free/cheap on, expensive off) and the idle gate still
-// applies; the opt-out note is gone.
+// TestDevPreselectOptIn: [dev] preselect = true restores pre-selection for
+// free/cheap caches and the idle gate still applies. Pre-selection stays
+// conservative — an idle expensive cache is one keystroke away ('a'), never
+// turned on by the opt-in.
 func TestDevPreselectOptIn(t *testing.T) {
 	env := testEnv(t, true)
 	t.Setenv("PATH", t.TempDir())
@@ -563,8 +579,19 @@ func TestDevPreselectOptIn(t *testing.T) {
 	if !byID["dev.pip"].DefaultOn {
 		t.Fatalf("cheap caches must be pre-selected when opted in: %+v", byID["dev.pip"])
 	}
-	if byID["dev.go-mod"].AutoSelectable() {
-		t.Fatalf("expensive caches stay out of bulk selection even when opted in: %+v", byID["dev.go-mod"])
+	if !byID["dev.go-mod"].AutoSelectable() {
+		t.Fatalf("idle expensive cache must be bulk-selectable: %+v", byID["dev.go-mod"])
+	}
+	plan := engine.Build(context.Background(), env, engine.Options{Categories: []engine.Category{dev.New()}})
+	sel := map[string]bool{}
+	for _, it := range plan.Selected() {
+		sel[it.Target.ID] = true
+	}
+	if !sel["dev.pip"] {
+		t.Fatalf("cheap cache must be pre-selected when opted in; got %v", sel)
+	}
+	if sel["dev.go-mod"] {
+		t.Fatal("expensive cache must not be pre-selected even when opted in")
 	}
 	for _, tg := range byID {
 		for _, e := range tg.Evidence {

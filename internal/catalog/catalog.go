@@ -32,16 +32,6 @@ func (r *Registry) Categories() []engine.Category {
 	return append([]engine.Category(nil), r.categories...)
 }
 
-// ByID returns the category with the given id.
-func (r *Registry) ByID(id string) (engine.Category, bool) {
-	for _, c := range r.categories {
-		if c.ID() == id {
-			return c, true
-		}
-	}
-	return nil, false
-}
-
 // Reconciler is an optional category hook run after Build and before preview.
 // It lets a category drop items that became redundant given the user's
 // selection (for example a superset prune superseding its parts) without the

@@ -130,10 +130,18 @@ func TestRootWithoutSudoRefuses(t *testing.T) {
 	app := New(out, errOut)
 	app.Geteuid = func() int { return 0 }
 	app.Getenv = func(string) string { return "" }
-	if code := app.Run([]string{"history"}); code != ExitGeneric {
-		t.Fatalf("exit code = %d, want %d", code, ExitGeneric)
+	// The refusal is the same invocation mistake on every command, so the
+	// code is the same: 2 (usage), not 1.
+	if code := app.Run([]string{"history"}); code != ExitUsage {
+		t.Fatalf("exit code = %d, want %d", code, ExitUsage)
 	}
 	if !strings.Contains(errOut.String(), "root") {
 		t.Fatalf("expected root refusal message, got %q", errOut.String())
+	}
+	if code := app.Run([]string{"analyze", "~"}); code != ExitUsage {
+		t.Fatalf("analyze exit code = %d, want %d", code, ExitUsage)
+	}
+	if code := app.Run([]string{"config"}); code != ExitUsage {
+		t.Fatalf("config exit code = %d, want %d", code, ExitUsage)
 	}
 }

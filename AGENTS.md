@@ -94,8 +94,6 @@ All gdu usage is confined to internal/scan. Other packages use the Node model.
 
 ## Known gaps
 
-- internal/trash.List reads only the home trash, so `history --restore`
-  misses items trashed on other mounts.
 - `TestLockHeldViaProcLocks` (internal/distro) fails on hosts where
   /proc/locks does not report the process's own flocks (btrfs homes: stat's
   device is an anonymous subvolume device, /proc/locks lists the superblock

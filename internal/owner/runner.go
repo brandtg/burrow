@@ -38,8 +38,6 @@ type Runner struct {
 	Env []string
 	// Dir is the working directory. "" inherits the current one.
 	Dir string
-	// Log, if set, receives a line per executed command.
-	Log func(string)
 	// UserCredential, when set, makes a per-user command (elevate=false) run
 	// with the invoking user's credentials when the process is elevated
 	// (euid 0). This ensures user state never runs
@@ -171,9 +169,6 @@ func (r *Runner) Run(ctx context.Context, argv []string, timeout time.Duration, 
 	res.Duration = time.Since(start)
 	res.Stdout = stdout.String()
 	res.Stderr = stderr.String()
-	if r.Log != nil {
-		r.Log(fmt.Sprintf("run %v (%s)", finalArgv, res.Duration))
-	}
 
 	if runCtx.Err() == context.DeadlineExceeded {
 		res.TimedOut = true

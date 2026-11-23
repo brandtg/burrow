@@ -13,8 +13,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// GlobalFlags are the flags shared by every command. NoOwner, Only, Exclude
-// and MinSize are only bound on the commands that run the clean flow; the
+// GlobalFlags are the flags shared by every command. NoOwner, Only, Exclude,
+// MinSize and Age are only bound on the commands that run the clean flow; the
 // fields stay here because that flow reads them through the App.
 type GlobalFlags struct {
 	DryRun  bool
@@ -25,6 +25,7 @@ type GlobalFlags struct {
 	Only    []string
 	Exclude []string
 	MinSize string
+	Age     string
 	Color   string
 	NoColor bool
 	Config  string
@@ -108,7 +109,7 @@ func (a *App) Root() *cobra.Command {
 	pf.BoolVar(&a.Flags.DryRun, "dry-run", false, "never mutate; print the plan and exit")
 	pf.BoolVarP(&a.Flags.Yes, "yes", "y", false, "skip the interactive confirm")
 	pf.BoolVar(&a.Flags.JSON, "json", false, "machine-readable output")
-	pf.BoolVar(&a.Flags.Plain, "plain", false, "non-interactive plain-text output instead of the TUI")
+	pf.BoolVar(&a.Flags.Plain, "plain", false, "skip the TUI: text preview for clean, JSON document for analyze")
 	pf.StringVar(&a.Flags.Color, "color", "auto", "terminal color policy: auto|always|never")
 	pf.BoolVar(&a.Flags.NoColor, "no-color", false, "disable color (same as --color=never)")
 	pf.StringVar(&a.Flags.Config, "config", "", "override the config file path")
@@ -117,7 +118,6 @@ func (a *App) Root() *cobra.Command {
 	// them (bare burrow, clean, purge) so `burrow analyze --min-size 1G` is a
 	// usage error instead of a silently ignored flag.
 	a.addSelectionFlags(root)
-	root.Flags().StringVar(&f.age, "age", "", "only artifacts with no activity in this window (default 7d)")
 
 	// docs and cobra's completion are packager tools, not product surface:
 	// still callable, just not advertised in the command menu.
@@ -137,13 +137,16 @@ func (a *App) Root() *cobra.Command {
 	return root
 }
 
-// addSelectionFlags binds the clean-flow selection flags as local flags of cmd.
+// addSelectionFlags binds the clean-flow selection flags as local flags of
+// cmd. They are defined exactly once here and bound on the three commands
+// that consume them (bare burrow, clean, purge).
 func (a *App) addSelectionFlags(cmd *cobra.Command) {
 	fs := cmd.Flags()
 	fs.BoolVar(&a.Flags.NoOwner, "no-owner", false, "skip all owner-command/system acts")
 	fs.StringSliceVar(&a.Flags.Only, "only", nil, "comma list of categories or item ids to include")
 	fs.StringSliceVar(&a.Flags.Exclude, "exclude", nil, "comma list of categories or item ids to exclude")
 	fs.StringVar(&a.Flags.MinSize, "min-size", "0", "only act on items >= size (e.g. 10M, 1G)")
+	fs.StringVar(&a.Flags.Age, "age", "", "only artifacts with no activity in this window (default 7d)")
 }
 
 // noArgs rejects positional arguments as a usage error, so a stray argument

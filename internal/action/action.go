@@ -14,7 +14,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"strings"
 
 	"github.com/brandtg/burrow/internal/engine"
 	"github.com/brandtg/burrow/internal/owner"
@@ -33,11 +32,6 @@ func NewOwnerCommand(cmd owner.OwnerCommand, r *owner.Runner) *OwnerCommandActio
 	return &OwnerCommandAction{Command: cmd, Runner: r}
 }
 
-// Describe renders a human description.
-func (a *OwnerCommandAction) Describe() string {
-	return "run " + strings.Join(owner.Plan(a.Command.Argv, a.Command.NeedsRoot), " ")
-}
-
 // Recovery declares the owner contract.
 func (a *OwnerCommandAction) Recovery() engine.Recovery { return engine.RecoveryOwner }
 
@@ -47,7 +41,8 @@ func (a *OwnerCommandAction) PlannedArgv() []string {
 }
 
 // Run executes the command under its bounded timeout. dryRun computes the same
-// argv without starting a process.
+// argv without starting a process. The error carries the outcome; the result
+// carries the executed argv and timeout flag.
 func (a *OwnerCommandAction) Run(ctx context.Context, dryRun bool) (engine.Result, error) {
 	r := a.Runner
 	if r == nil {
@@ -59,26 +54,9 @@ func (a *OwnerCommandAction) Run(ctx context.Context, dryRun bool) (engine.Resul
 	}
 	res, err := r.Run(ctx, a.Command.Argv, a.Command.Timeout, a.Command.NeedsRoot)
 	if res == nil {
-		return engine.Result{Status: engine.StatusFailed, Reason: errString(err)}, err
+		return engine.Result{}, err
 	}
-	out := engine.Result{Argv: res.Argv, TimedOut: res.TimedOut}
-	switch {
-	case dryRun:
-		out.Status = engine.StatusDryRun
-	case err == nil:
-		out.Status = engine.StatusOK
-	case res.TimedOut:
-		out.Status = engine.StatusSkipped
-		out.Reason = "timed out"
-	default:
-		out.Status = engine.StatusFailed
-		if s := strings.TrimSpace(res.Stderr); s != "" {
-			out.Reason = s
-		} else {
-			out.Reason = errString(err)
-		}
-	}
-	return out, err
+	return engine.Result{Argv: res.Argv, TimedOut: res.TimedOut}, err
 }
 
 // TrashAction moves a user-owned path to the Trash (recoverable).
@@ -97,64 +75,50 @@ func NewTrash(path string, t *trash.Trash, snapshot *safe.Snapshot, v *safe.Vali
 	return &TrashAction{Path: path, Trash: t, Snapshot: snapshot, Validator: v}
 }
 
-// Describe renders a human description.
-func (a *TrashAction) Describe() string {
-	return "trash " + a.Path
-}
-
 // Recovery declares the trash contract.
 func (a *TrashAction) Recovery() engine.Recovery { return engine.RecoveryTrash }
 
 // Run re-validates the path and identity, then moves the item. A path that is
 // already absent is treated as done (idempotent). The context is honored before
-// starting and through the cross-device copy fallback.
+// starting and through the cross-device copy fallback. Every refusal is a
+// guard-stop error carrying its own reason.
 func (a *TrashAction) Run(ctx context.Context, dryRun bool) (engine.Result, error) {
 	if err := ctx.Err(); err != nil {
-		return skip(err.Error()), err
+		return engine.Result{}, err
 	}
 	if a.Validator != nil {
 		if err := a.Validator.Validate(a.Path); err != nil {
-			return skip(err.Error()), safe.GuardStop("%s", err.Error())
+			return engine.Result{}, safe.GuardStop("%s", err.Error())
 		}
 	}
 	if _, err := os.Lstat(a.Path); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return engine.Result{Status: engine.StatusOK, Reason: "already absent"}, nil
+			return engine.Result{}, nil
 		}
-		return skip(err.Error()), safe.GuardStop("%s", err.Error())
+		return engine.Result{}, safe.GuardStop("%s", err.Error())
 	}
 	if a.Snapshot == nil {
 		// Fail closed: without an identity snapshot the TOCTOU check cannot run,
 		// so a present path must not be mutated (invariant I5).
-		return skip("no identity snapshot"), safe.GuardStop("%s", "no identity snapshot")
+		return engine.Result{}, safe.GuardStop("%s", "no identity snapshot")
 	}
 	if ok, err := a.Snapshot.Matches(); err != nil || !ok {
-		reason := "path identity changed since snapshot"
-		return skip(reason), safe.GuardStop("%s", reason)
+		return engine.Result{}, safe.GuardStop("%s", "path identity changed since snapshot")
 	}
 	if dryRun {
-		return engine.Result{Status: engine.StatusDryRun, Bytes: a.Size}, nil
+		return engine.Result{Bytes: a.Size}, nil
 	}
 	if a.Trash == nil {
-		return skip("trash is unavailable"), safe.GuardStop("%s", "trash is unavailable")
+		return engine.Result{}, safe.GuardStop("%s", "trash is unavailable")
 	}
 	entry, err := a.Trash.PutContext(ctx, a.Path)
 	if err != nil {
 		if entry.Name != "" {
-			return engine.Result{Status: engine.StatusOK, Bytes: a.Size, Reason: err.Error()}, nil
+			// The item is fully in the trash and restorable; the source-removal
+			// failure is reported but does not fail the item.
+			return engine.Result{Bytes: a.Size}, nil
 		}
-		return engine.Result{Status: engine.StatusFailed, Reason: err.Error()}, err
+		return engine.Result{}, err
 	}
-	return engine.Result{Status: engine.StatusOK, Bytes: a.Size}, nil
-}
-
-func skip(reason string) engine.Result {
-	return engine.Result{Status: engine.StatusSkipped, Reason: reason}
-}
-
-func errString(err error) string {
-	if err == nil {
-		return ""
-	}
-	return err.Error()
+	return engine.Result{Bytes: a.Size}, nil
 }

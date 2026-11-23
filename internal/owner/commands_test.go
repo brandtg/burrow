@@ -123,14 +123,8 @@ var parameterizedCtors = []string{
 	"SnapRemoveRevision",
 }
 
-// retiredCtors names constructors that are on another track's removal list
-// (the unused docker/podman info probes). They are excluded from the coverage
-// guard so it stays accurate before and after that track lands; once the
-// functions are gone the exclusion is vacuous.
-var retiredCtors = map[string]bool{
-	"DockerInfoProbe": true,
-	"PodmanInfoProbe": true,
-}
+// retiredCtors is gone: every constructor that returns an OwnerCommand is
+// either in catalogCommands() or parameterizedCtors below.
 
 func TestOwnerCommandExactArgv(t *testing.T) {
 	for _, r := range catalogCommands() {
@@ -269,9 +263,6 @@ func TestEveryRegisteredCommandIsTested(t *testing.T) {
 	reg, err := registeredOwnerCommands("commands.go")
 	if err != nil {
 		t.Fatalf("parse commands.go: %v", err)
-	}
-	for name := range retiredCtors {
-		delete(reg, name)
 	}
 	covered := map[string]bool{}
 	for _, r := range catalogCommands() {

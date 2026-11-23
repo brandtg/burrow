@@ -72,7 +72,6 @@ func TestI2EveryMutationDeclaresRecovery(t *testing.T) {
 
 type fakeAction struct{ recovery engine.Recovery }
 
-func (f fakeAction) Describe() string { return "fake" }
 func (f fakeAction) Recovery() engine.Recovery {
 	if f.recovery == 0 {
 		return engine.RecoveryTrash
@@ -80,7 +79,7 @@ func (f fakeAction) Recovery() engine.Recovery {
 	return f.recovery
 }
 func (f fakeAction) Run(context.Context, bool) (engine.Result, error) {
-	return engine.Result{Status: "ok"}, nil
+	return engine.Result{}, nil
 }
 
 // TestI3NoDeletionOutsideAllowedRoot asserts the allow-list primitive.
@@ -92,7 +91,8 @@ func TestI3NoDeletionOutsideAllowedRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	v := &safe.Validator{Roots: []string{allowed}, RequireRoot: true}
-	if err := v.Validate(file); !errors.Is(err, safe.ErrUnsafe) {
+	var viol *safe.Violation
+	if err := v.Validate(file); !errors.As(err, &viol) {
 		t.Fatalf("expected unsafe rejection, got %v", err)
 	}
 	if safe.WithinRoot(file, allowed) {
@@ -130,7 +130,7 @@ func TestI5TrashUnavailableNeverUnlinks(t *testing.T) {
 	if err := os.WriteFile(src, []byte("keep"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tr.Put(src); err == nil {
+	if _, err := tr.PutContext(context.Background(), src); err == nil {
 		t.Fatal("expected Put to fail when trash is unavailable")
 	}
 	if _, err := os.Stat(src); err != nil {

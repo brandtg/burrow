@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -32,7 +33,6 @@ import (
 type cleanFlags struct {
 	all        bool
 	whitelist  bool
-	age        string
 	minSizeSet bool
 }
 
@@ -49,7 +49,6 @@ func (a *App) newCleanCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&f.all, "all", false, "include every category (still respects whitelist and guards)")
 	cmd.Flags().BoolVar(&f.whitelist, "whitelist", false, "manage the whitelist")
-	cmd.Flags().StringVar(&f.age, "age", "", "only artifacts with no activity in this window (default 7d)")
 	a.addSelectionFlags(cmd)
 	return cmd
 }
@@ -69,12 +68,12 @@ func (a *App) runClean(f cleanFlags) error {
 	if err != nil {
 		return &ExitError{Code: ExitUsage, Err: err}
 	}
-	if f.age != "" {
-		if _, err := config.ParseDuration(f.age); err != nil {
+	if a.Flags.Age != "" {
+		if _, err := config.ParseDuration(a.Flags.Age); err != nil {
 			return &ExitError{Code: ExitUsage, Err: err}
 		}
 		// An explicit --age overrides the configured inactivity window.
-		env.Cfg.Purge.MaxAge = f.age
+		env.Cfg.Purge.MaxAge = a.Flags.Age
 	}
 
 	reg := catalog.NewRegistry(system.New(), projects.New(), dev.New(), usercache.New(), downloads.New(), containers.New(), desktoppkgs.New())
@@ -86,7 +85,7 @@ func (a *App) runClean(f cleanFlags) error {
 	progress := newScanProgress(a.ErrOut, !a.Flags.JSON)
 	defer progress.stop()
 
-	plan, err := engine.Build(ctx, env, engine.Options{
+	plan := engine.Build(ctx, env, engine.Options{
 		Command:    "clean",
 		Categories: cats,
 		Only:       a.Flags.Only,
@@ -95,9 +94,6 @@ func (a *App) runClean(f cleanFlags) error {
 		NoOwner:    a.Flags.NoOwner,
 		Progress:   progress.category,
 	})
-	if err != nil {
-		return err
-	}
 	// The scan is over: clear the progress line before anything is written to
 	// stdout or before the alternate screen opens.
 	progress.stop()
@@ -142,7 +138,9 @@ func (a *App) runClean(f cleanFlags) error {
 			return err
 		}
 		if aborted || !confirmed {
-			return nil
+			// Backing out is not a clean exit: scripts must be able to tell
+			// "the user quit" from "nothing was selected".
+			return &ExitError{Code: ExitAborted, Err: errors.New("aborted; nothing was changed")}
 		}
 		if env.DryRun {
 			// The read-only TUI showed the plan; nothing may run.
@@ -436,7 +434,14 @@ func (a *App) platformHeader(env *engine.Env) string {
 	if name == "" {
 		name = "unknown"
 	}
-	return fmt.Sprintf("%s \u00b7 %s \u00b7 %s free", name, env.Adapter.ID(), config.FormatBytes(int64(engine.FreeBytes("/"))))
+	// The headline free space is the filesystem burrow actually cleans — the
+	// user's home — not the root filesystem, which lies on machines with a
+	// separate /home.
+	free := engine.FreeBytes(env.Home)
+	if free == 0 {
+		free = engine.FreeBytes("/")
+	}
+	return fmt.Sprintf("%s \u00b7 %s \u00b7 %s free", name, env.Adapter.ID(), config.FormatBytes(int64(free)))
 }
 
 func cleanExit(sum *engine.Summary) error {
@@ -469,6 +474,7 @@ type cleanItemJSON struct {
 	Kept       bool     `json:"kept,omitempty"`
 	Status     string   `json:"status"`
 	Reason     string   `json:"reason,omitempty"`
+	Evidence   []string `json:"evidence,omitempty"`
 	Argv       []string `json:"argv,omitempty"`
 	Group      string   `json:"group,omitempty"`
 	GroupTitle string   `json:"group_title,omitempty"`
@@ -495,6 +501,9 @@ type cleanSummary struct {
 	DFAfter     uint64 `json:"df_after"`
 	JournalPath string `json:"journal_path,omitempty"`
 	Interrupted bool   `json:"interrupted"`
+	// JournalErrors is nonzero when the undo trail is incomplete for this run.
+	JournalErrors int    `json:"journal_errors,omitempty"`
+	JournalErr    string `json:"journal_error,omitempty"`
 }
 
 func (a *App) cleanJSON(plan *engine.Plan, sum *engine.Summary, dryRun bool) error {
@@ -521,6 +530,7 @@ func (a *App) cleanJSON(plan *engine.Plan, sum *engine.Summary, dryRun bool) err
 			Kept:       it.Kept,
 			Status:     it.Status,
 			Reason:     it.Reason,
+			Evidence:   it.Target.Evidence,
 			Argv:       it.Argv,
 			Group:      it.Target.Group,
 			GroupTitle: it.Target.GroupTitle,
@@ -533,6 +543,10 @@ func (a *App) cleanJSON(plan *engine.Plan, sum *engine.Summary, dryRun bool) err
 			Freed: sum.Freed, FreedKnown: sum.FreedKnown,
 			DFBefore: sum.DFBefore, DFAfter: sum.DFAfter,
 			JournalPath: sum.JournalPath, Interrupted: sum.Interrupted,
+			JournalErrors: sum.JournalErrors,
+		}
+		if sum.JournalErr != nil {
+			doc.Summary.JournalErr = sum.JournalErr.Error()
 		}
 	}
 	enc := json.NewEncoder(a.Out)

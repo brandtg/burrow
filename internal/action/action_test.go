@@ -28,12 +28,8 @@ func TestTrashActionMovesToTrash(t *testing.T) {
 	tr := trash.New(filepath.Join(dir, "Trash"), os.Getuid())
 	a := action.NewTrash(src, tr, snap, nil)
 
-	res, err := a.Run(context.Background(), false)
-	if err != nil {
+	if _, err := a.Run(context.Background(), false); err != nil {
 		t.Fatal(err)
-	}
-	if res.Status != engine.StatusOK {
-		t.Fatalf("status = %q", res.Status)
 	}
 	if _, err := os.Stat(src); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("source still present: %v", err)
@@ -107,12 +103,8 @@ func TestTrashActionIdempotentWhenAbsent(t *testing.T) {
 	dir := t.TempDir()
 	missing := filepath.Join(dir, "gone")
 	a := action.NewTrash(missing, trash.New(filepath.Join(dir, "Trash"), os.Getuid()), nil, nil)
-	res, err := a.Run(context.Background(), false)
-	if err != nil {
+	if _, err := a.Run(context.Background(), false); err != nil {
 		t.Fatal(err)
-	}
-	if res.Status != engine.StatusOK {
-		t.Fatalf("expected ok for already-absent path, got %q", res.Status)
 	}
 }
 
@@ -122,9 +114,6 @@ func TestOwnerCommandActionDryRun(t *testing.T) {
 	res, err := a.Run(context.Background(), true)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if res.Status != engine.StatusDryRun {
-		t.Fatalf("status = %q", res.Status)
 	}
 	if strings.Join(res.Argv, " ") != "sudo -- apt-get clean" {
 		t.Fatalf("argv = %v", res.Argv)
@@ -137,12 +126,8 @@ func TestOwnerCommandActionDryRun(t *testing.T) {
 func TestOwnerCommandActionFailure(t *testing.T) {
 	cmd := owner.OwnerCommand{ID: "x", Argv: []string{"/bin/false"}}
 	a := action.NewOwnerCommand(cmd, owner.New(false))
-	res, err := a.Run(context.Background(), false)
-	if err == nil {
+	if _, err := a.Run(context.Background(), false); err == nil {
 		t.Fatal("expected error from a failing command")
-	}
-	if res.Status != engine.StatusFailed {
-		t.Fatalf("status = %q", res.Status)
 	}
 }
 
@@ -153,7 +138,7 @@ func TestEmptyTrashAction(t *testing.T) {
 	if err := os.WriteFile(src, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tr.Put(src); err != nil {
+	if _, err := tr.PutContext(context.Background(), src); err != nil {
 		t.Fatal(err)
 	}
 	a := &action.EmptyTrashAction{Trash: tr, Path: tr.Home()}

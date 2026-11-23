@@ -29,10 +29,18 @@ import (
 const ID = "projects"
 
 // Category enumerates rebuildable project artifacts. The only state is the
-// warning sink and a git hook for tests; all protection rules live in this
-// package's discovery.
+// warning sink, the kept-by-policy tally from the last Discover, and a git
+// hook for tests; all protection rules live in this package's discovery.
 type Category struct {
 	warns []string
+	// keptCount/keptBytes summarize the artifacts Discover rejected under the
+	// keep rules (git-tracked, active project, unverifiable age, ...). They
+	// surface in PreviewNote so the bulk of a machine's footprint — the
+	// rebuildable material inside protected projects — is visible even though
+	// those artifacts never become rows.
+	keptCount int
+	keptBytes int64
+	keptKnown int
 	// git overrides the git implementation for tests. Nil uses ExecGit.
 	git Git
 }
@@ -46,9 +54,22 @@ func (*Category) ID() string { return ID }
 // Title is the human label.
 func (*Category) Title() string { return "Projects" }
 
-// PreviewNote is the category guidance shown in the preview.
-func (*Category) PreviewNote() string {
-	return "Rebuildable artifacts under the configured project roots, one row per project. Only bytecode caches are pre-selected; node_modules and build outputs stay off. Trashed, so recoverable."
+// PreviewNote is the category guidance shown in the preview, plus the
+// kept-by-policy tally from the last Discover call.
+func (c *Category) PreviewNote() string {
+	note := "Rebuildable artifacts under the configured project roots, one row per project. Only bytecode caches are pre-selected; node_modules and build outputs stay off. Trashed, so recoverable."
+	if c.keptCount > 0 {
+		noun := "artifacts"
+		if c.keptCount == 1 {
+			noun = "artifact"
+		}
+		tally := fmt.Sprintf("Kept by policy: %d %s", c.keptCount, noun)
+		if c.keptKnown > 0 {
+			tally = fmt.Sprintf("Kept by policy: %s across %d %s", config.FormatBytes(c.keptBytes), c.keptCount, noun)
+		}
+		note += " " + tally + " (git-tracked, active, or unverifiable)."
+	}
+	return note
 }
 
 // Warnings returns the non-fatal discovery notes (a configured root that does
@@ -65,9 +86,11 @@ func (c *Category) warn(msg string) { c.warns = append(c.warns, ID+": "+msg) }
 // Discovery is read-only; each candidate is validated and snapshotted before it
 // becomes a target, so an invalid candidate is skipped (fail closed).
 func (c *Category) Discover(ctx context.Context, env *engine.Env) ([]engine.Target, error) {
-	// Warnings accumulate on the category value, which is registered as a
-	// singleton. Reset them so repeated discovery is idempotent.
+	// Warnings and the kept-by-policy tally accumulate on the category value,
+	// which is registered as a singleton. Reset them so repeated discovery is
+	// idempotent.
 	c.warns = nil
+	c.keptCount, c.keptBytes, c.keptKnown = 0, 0, 0
 	if env == nil || env.Cfg == nil {
 		return nil, nil
 	}
@@ -97,6 +120,11 @@ func (c *Category) Discover(ctx context.Context, env *engine.Env) ([]engine.Targ
 	seen := map[string]bool{}
 	for _, a := range arts {
 		if a.Kept() {
+			if a.SizeKnown {
+				c.keptBytes += a.Size
+				c.keptKnown++
+			}
+			c.keptCount++
 			continue
 		}
 		t, err := c.target(env, roots, a, seen)
@@ -106,7 +134,64 @@ func (c *Category) Discover(ctx context.Context, env *engine.Env) ([]engine.Targ
 		}
 		out = append(out, t)
 	}
+	disambiguateGroupTitles(env, out)
 	return out, nil
+}
+
+// disambiguateGroupTitles appends the home-relative parent directory when two
+// projects share a display title (two repos both named "logiops"), so the
+// preview's identical group headers stay tellable apart. Every target of one
+// project gets the same replacement title; unambiguous titles are untouched.
+func disambiguateGroupTitles(env *engine.Env, targets []engine.Target) {
+	counts := map[string]int{}
+	for i := range targets {
+		counts[targets[i].GroupTitle]++
+	}
+	collides := false
+	for _, n := range counts {
+		if n > 1 {
+			collides = true
+			break
+		}
+	}
+	if !collides {
+		return
+	}
+	renamed := map[string]string{} // project path -> new title
+	for i := range targets {
+		t := &targets[i]
+		if counts[t.GroupTitle] <= 1 {
+			continue
+		}
+		if title, ok := renamed[t.Group]; ok {
+			t.GroupTitle = title
+			continue
+		}
+		t.GroupTitle = fmt.Sprintf("%s \u00b7 %s", t.GroupTitle, relFromHome(env, filepath.Dir(t.Group)))
+		renamed[t.Group] = t.GroupTitle
+	}
+}
+
+// relFromHome renders p relative to the invoking user's home ("~/…" form is
+// not needed here; the bare remainder reads better after a " · " separator).
+// Paths outside the home render as themselves.
+func relFromHome(env *engine.Env, p string) string {
+	home := ""
+	if env != nil {
+		home = env.Home
+		if resolved, err := filepath.EvalSymlinks(home); err == nil {
+			home = resolved
+		}
+	}
+	if home != "" {
+		if p == home {
+			return "~"
+		}
+		if strings.HasPrefix(p, home+string(filepath.Separator)) {
+			return strings.TrimPrefix(p, home+string(filepath.Separator))
+		}
+	}
+	return p
 }
 
 // target builds one trash-contract target for a discovered artifact. Roots is

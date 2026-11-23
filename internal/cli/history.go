@@ -1,10 +1,14 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"text/tabwriter"
 	"time"
 
@@ -23,9 +27,12 @@ func (a *App) newHistoryCmd() *cobra.Command {
 		Short: "read the operation journal",
 		Args:  noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := a.rejectCleanFlowFlags(cmd); err != nil {
+				return err
+			}
 			env, err := a.Env()
 			if err != nil {
-				return err
+				return &ExitError{Code: ExitUsage, Err: err}
 			}
 			if restore {
 				if runID == "" {
@@ -76,16 +83,21 @@ func (a *App) printHistory(env *engine.Env, runID string) error {
 	}
 	tw := tabwriter.NewWriter(a.Out, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "TIME\tRUN\tCOMMAND\tOK\tSKIP\tFAIL\tFREED")
-	for _, r := range runs {
+	ids := shortIDs(runs)
+	for i, r := range runs {
 		freed := config.FormatBytes(r.Freed)
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%d\t%d\t%s\n",
-			r.Start.Local().Format(time.RFC3339), shortID(r.RunID), r.Command,
+			r.Start.Local().Format(time.RFC3339), ids[i], r.Command,
 			r.OK, r.Skipped, r.Failed, freed)
 	}
 	return tw.Flush()
 }
 
 func (a *App) restoreRun(env *engine.Env, runID string) error {
+	// A cross-device restore copies a multi-GiB tree; make it cancellable the
+	// same way clean and analyze are.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	records, err := journal.Read(env.Paths.Journal)
 	if err != nil {
 		return err
@@ -100,7 +112,9 @@ func (a *App) restoreRun(env *engine.Env, runID string) error {
 		return &ExitError{Code: ExitUsage, Err: fmt.Errorf("no run %q in journal", runID)}
 	}
 	tr := trash.New(env.Paths.TrashDir, env.UID())
-	entries, err := tr.List()
+	// ListAll, not List: a run may have trashed items on other filesystems,
+	// which land in per-mount trash directories the home trash never shows.
+	entries, err := tr.ListAll()
 	if err != nil {
 		return err
 	}
@@ -115,7 +129,7 @@ func (a *App) restoreRun(env *engine.Env, runID string) error {
 			fmt.Fprintf(a.ErrOut, "skip %s: no longer in trash\n", rec.Path)
 			continue
 		}
-		if err := tr.Restore(entry); err != nil {
+		if err := tr.Restore(ctx, entry); err != nil {
 			fmt.Fprintf(a.ErrOut, "skip %s: %v\n", rec.Path, err)
 			continue
 		}
@@ -131,11 +145,34 @@ func (a *App) restoreRun(env *engine.Env, runID string) error {
 	return nil
 }
 
-func shortID(id string) string {
-	if len(id) > 8 {
-		return id[:8]
+// shortIDs returns the display id for every run: the first 8 characters,
+// lengthened while that prefix is shared with another listed run (the git
+// short-hash rule). Distinct runs can share their first 8 ULID characters, and
+// printing identical ids for different runs is worse than printing longer ones.
+func shortIDs(runs []journal.Run) []string {
+	ids := make([]string, len(runs))
+	for i, r := range runs {
+		ids[i] = r.RunID
 	}
-	return id
+	out := make([]string, len(runs))
+	for i, id := range ids {
+		n := min(8, len(id))
+		for n < len(id) {
+			clash := false
+			for j, other := range ids {
+				if j != i && strings.HasPrefix(other, id[:n]) {
+					clash = true
+					break
+				}
+			}
+			if !clash {
+				break
+			}
+			n++
+		}
+		out[i] = id[:n]
+	}
+	return out
 }
 
 // resolveRunID accepts a full run id or a unique prefix of one, matching

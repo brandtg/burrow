@@ -1,14 +1,33 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/brandtg/burrow/internal/journal"
 	"github.com/brandtg/burrow/internal/trash"
 )
+
+// TestShortIDsLengthenUntilUnique pins the git-style display rule: runs whose
+// ULIDs share a prefix print longer ids; ordinary runs keep the 8-char form.
+func TestShortIDsLengthenUntilUnique(t *testing.T) {
+	runs := []journal.Run{
+		{RunID: "01M5P6W7N9Y2QVFEJ5ZETAMETA"},
+		{RunID: "01M5P6W7Q88YXZVKG720KPMG10"},
+		{RunID: "01M6CEFYYDXXQAJVFXPMRQJ8R0"},
+	}
+	got := shortIDs(runs)
+	want := []string{"01M5P6W7N", "01M5P6W7Q", "01M6CEFY"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("shortIDs[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
 
 // TestHistoryRestoreAnalyzeItem exercises the full analyze -> trash -> journal
 // -> history --restore path for an item that landed in the home trash.
@@ -22,7 +41,7 @@ func TestHistoryRestoreAnalyzeItem(t *testing.T) {
 		t.Fatal(err)
 	}
 	tr := trash.New(filepath.Join(data, "Trash"), os.Getuid())
-	if _, err := tr.Put(victim); err != nil {
+	if _, err := tr.PutContext(context.Background(), victim); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(victim); !os.IsNotExist(err) {

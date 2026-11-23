@@ -50,12 +50,17 @@ When stdout is not a terminal (or --json is set), analyze behaves like
 --json and never waits for input. --json accepts a single path.`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// analyze reads --plain/--json/--color but not the clean-flow
+			// dry-run/--yes; a silent no-op is a usage error.
+			if err := noEffect(cmd, "dry-run", "yes"); err != nil {
+				return err
+			}
 			if err := validateMountFlags(cmd); err != nil {
 				return err
 			}
 			env, err := a.Env()
 			if err != nil {
-				return err
+				return &ExitError{Code: ExitUsage, Err: err}
 			}
 			// Precedence: an explicit --cross-mounts disables the
 			// boundary, an explicit -x/--one-file-system enables it, otherwise
@@ -104,8 +109,9 @@ func (a *App) runAnalyze(env *engine.Env, args []string, opts analyzeOptions) er
 		paths = []string{cwd}
 	}
 
-	// --plain means the non-interactive text path even on a terminal; --json
-	// and a non-TTY stdout select it too.
+	// --plain means the non-interactive path even on a terminal; its output is
+	// the JSON document (analyze has no plain-text renderer). --json and a
+	// non-TTY stdout select it too.
 	interactive := !a.Flags.JSON && !a.Flags.Plain && isTerminal(a.Out)
 	if !interactive && len(paths) > 1 {
 		return &ExitError{Code: ExitUsage, Err: errors.New("--json accepts a single path")}

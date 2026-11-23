@@ -1,8 +1,8 @@
 # burrow user guide
 
 `burrow` finds where disk space went and reclaims it safely. One flow does the
-work: a grouped preview of everything reclaimable, one review screen, one
-confirm. Every mutation is either a **Trash move** (recoverable via
+work: a grouped preview of everything reclaimable, one confirm. Every mutation
+is either a **Trash move** (recoverable via
 `burrow history --restore`) or an **allow-listed owner command** (permanent by
 nature, re-downloadable by definition). Nothing mutates before the preview,
 and any uncertainty skips the item and records why. The one mutation that is
@@ -63,15 +63,22 @@ On a terminal, the flow opens a preview TUI grouped by category, with a
 sub-group level where it helps (Projects are one collapsed row per project).
 Each row shows its size, recovery contract (`[trash]`/`[owner]`), a `(root)`
 marker, regeneration cost (`free`/`cheap`/`expensive`/`data`, plus `,active`
-when the cache was used recently), and risk. Whether a row starts selected
-follows its category defaults; toggle anything before confirming.
+when the cache was used recently), and risk. What a row is and why it exists
+sits one glance away: `--plain` prints the reason under each row, the TUI
+shows it for the cursor row above the footer, and `--json` carries it as the
+`evidence` field. The full help overlay (`?`) carries a legend for every mark
+and column. Whether a row starts selected follows its category defaults;
+toggle anything before confirming.
 
 Keys: `space` toggles a row/group/category, `a` selects every auto-selectable
-row, `n` clears, `pgup`/`pgdn` (`ctrl+b`/`ctrl+f`) page, `g`/`G` jump to the
+row, `N` clears, `pgup`/`pgdn` (`ctrl+b`/`ctrl+f`) page, `g`/`G` jump to the
 top/bottom, `/` filters, `→`/`←` expand and collapse, `K` keeps
-(whitelists), `enter` moves to the review screen, `q` quits. After you
-choose, the review screen lists the exact owner argv and trash paths; large
-trash selections are summarized by group. Only then does anything execute.
+(whitelists), `r` lists the exact owner argv and trash paths for the whole
+selection (large trash selections are summarized by group), `enter` runs the
+current selection, `q` quits. The `enter` key help always names what it will
+run (count and bytes), and the line above the footer explains the row under
+the cursor — what it is, why it exists, and for owner rows the exact command.
+Only then does anything execute.
 
 `--plain`, `--json`, `--yes`, or a non-TTY stdout skip the TUI. `--plain`
 prints a bounded preview (each group capped, with a pointer to `--json`).
@@ -79,15 +86,19 @@ prints a bounded preview (each group capped, with a pointer to `--json`).
 ## What gets selected by default
 
 Only free/cheap rows are ever pre-selected. Expensive rows (model caches,
-browser downloads, Go module cache, Nix store, conda) are shown but off.
-A row touched within its idle window is marked `,active` and left off so you
-do not churn something you are using.
+browser downloads, Go module cache, Nix store, conda) are shown but off, and
+are never turned on without a keystroke — but they are no longer walled off:
+an idle expensive row is selectable with `a` or individually, because a cache
+you have not touched in months is the safest large target in the catalog. A
+row touched within its idle window is marked `,active` and left off
+regardless of cost, so you do not churn something you are using.
 
 Dev caches go one step further: **nothing in the dev category is
 pre-selected, ever, by default** — you opt in per run (`--only dev` or by
 toggling rows) or with `[dev] preselect = true`. With the opt-in, the
-regen-cost and idle-gate policy applies again. Projects artifacts keep their
-own policy: free/cheap artifacts (`__pycache__`, `_cacache`) are
+idle-gate policy applies again and the pre-selection cost rule holds
+(free/cheap on, expensive off but bulk-selectable). Projects artifacts keep
+their own policy: free/cheap artifacts (`__pycache__`, `_cacache`) are
 pre-selected, expensive ones (`node_modules`, virtualenvs) are shown but off.
 
 ## Selecting what to clean
@@ -100,6 +111,10 @@ burrow --exclude containers             # drop a category
 burrow --min-size 100M                  # only items at/above a size
 burrow --no-owner                       # trash user caches, skip owner commands
 ```
+
+`--min-size` filters items whose size is known; items that report size only
+after their owner command runs (unknown now) are always shown, because hiding
+them could hide the largest rows on the machine.
 ## Whitelist
 
 The whitelist is a newline-delimited file at
@@ -164,8 +179,9 @@ bring those files back.
 
 `burrow analyze [path]` opens an interactive read-only tree (arrow keys to
 navigate). It has no delete keys — the review flow is the only deletion path
-in burrow. When stdout is not a terminal, or with `--json`, it emits a stable
-document:
+in burrow. When stdout is not a terminal, or with `--json` or `--plain`, it
+skips the TUI and emits a stable JSON document (`--plain` and `--json` are
+the same output here; analyze has no plain-text renderer):
 
 ```json
 {"path":"...","total_size":N,"total_files":N,
@@ -194,10 +210,9 @@ Trash burrow writes to is resolved from XDG, not configured. The keys:
 ```toml
 [general]
 color = "auto"                  # auto|always|never
-log_level = "info"
 
 [clean]
-default_categories = ["projects","dev","user-cache","desktop-pkgs","downloads"]
+default_categories = ["projects","dev","user-cache","downloads"]
 journald_max_size = "500M"      # journald_max_age is the alternative; size wins if both set
 min_size = "0"
 protected_paths = ["/etc","/usr","/var/lib"]
@@ -230,3 +245,11 @@ burrow completion zsh  > "${fpath[1]}/_burrow"
 burrow completion fish > ~/.config/fish/completions/burrow.fish
 go run ./cmd/burrow docs --dir docs/man   # regenerate the shipped man pages
 ```
+
+## Exit codes
+
+`0` clean run (including "nothing was selected"), `1` operational failure,
+`2` usage error (bad flags, bad config, root without `SUDO_USER`),
+`3` at least one item failed, `4` you backed out of the interactive preview
+or review, `75` every attempt was stopped by a safety guard, `124` every
+attempt timed out, `130` interrupted by SIGINT/SIGTERM.

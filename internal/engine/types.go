@@ -106,16 +106,17 @@ func (r Regen) String() string {
 	}
 }
 
-// Result is the outcome of executing an Action.
+// Result is the outcome of executing an Action. The engine classifies the
+// outcome from the returned error, so Result carries only the data the engine
+// and the progress callback consume: bytes freed, the executed argv, and
+// whether the run hit its timeout.
 type Result struct {
-	Status   string
 	Bytes    int64
-	Reason   string
 	Argv     []string
 	TimedOut bool
 }
 
-// Status values for a planned item and an action result.
+// Status values for a planned item.
 const (
 	StatusPending = "pending"
 	StatusOK      = "ok"
@@ -134,7 +135,6 @@ type ArgvPlanner interface {
 // Action performs a mutation. Implementations must be idempotent and must
 // re-validate identity at the moment of execution.
 type Action interface {
-	Describe() string
 	// Recovery declares the contract; it must be valid.
 	Recovery() Recovery
 	// Run executes; dryRun must compute the same plan without mutating.
@@ -177,11 +177,16 @@ type Target struct {
 	GroupTitle string
 }
 
-// AutoSelectable reports whether the target may be pre-selected or selected in
-// bulk. Expensive/data items and policy-gated items are excluded; the user can
-// still toggle them individually.
+// AutoSelectable reports whether the target may be selected in bulk (the `a`
+// key) or toggled as part of a group. Policy-gated items (a cache touched
+// within its idle window — the user is using it) and data items (not
+// regenerable at all) are excluded; everything else is fair game, including
+// expensive caches that have gone idle: an unused toolchain cache is the
+// safest large target in the catalog. Pre-selection (engine.Build) is
+// stricter: only free/cheap regen costs are ever turned on without a
+// keystroke. The user can always toggle a row individually.
 func (t Target) AutoSelectable() bool {
-	return !t.Gated && t.Risk != RiskHigh && t.Regen <= RegenCheap
+	return !t.Gated && t.Risk != RiskHigh && t.Regen != RegenData
 }
 
 // Validate enforces invariant I2: every mutation declares a valid recovery

@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 
+	"github.com/brandtg/burrow/internal/disk"
 	"github.com/brandtg/burrow/internal/owner"
 )
 
@@ -15,17 +15,16 @@ import (
 // `du -sk`, so the cap bounds both process count and disk contention.
 const measureWorkers = 8
 
-// Measure fills SizeBytes for targets that discovery left unknown. It is
+// measure fills SizeBytes for targets that discovery left unknown. It is
 // read-only: directory trees are measured with `du -sk` under the size-probe
 // timeout, single files with a stat. A failure or timeout leaves the size
 // unknown rather than reporting a false zero.
 //
 // Probes run concurrently, capped at measureWorkers, and stop promptly when ctx
 // is cancelled. Each goroutine writes only its own target, so no lock is needed.
-func Measure(ctx context.Context, env *Env, targets []Target) {
+func measure(ctx context.Context, env *Env, targets []*Target) {
 	var pending []*Target
-	for i := range targets {
-		t := &targets[i]
+	for _, t := range targets {
 		if t.SizeKnown || t.Path == "" {
 			continue
 		}
@@ -75,7 +74,7 @@ func measurePath(ctx context.Context, env *Env, path string) (int64, bool) {
 		return 0, false
 	}
 	if !fi.IsDir() {
-		return diskUsage(fi), true
+		return disk.Blocks512(fi), true
 	}
 	if env == nil || env.Run == nil {
 		return 0, false
@@ -93,12 +92,4 @@ func measurePath(ctx context.Context, env *Env, path string) (int64, bool) {
 		return 0, false
 	}
 	return kb * 1024, true
-}
-
-// diskUsage returns on-disk usage (blocks * 512) for a stat result.
-func diskUsage(fi os.FileInfo) int64 {
-	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
-		return st.Blocks * 512
-	}
-	return fi.Size()
 }

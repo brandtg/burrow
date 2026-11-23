@@ -82,6 +82,36 @@ func TestRenderPreviewShowsEmptyCategories(t *testing.T) {
 	}
 }
 
+// TestRenderPreviewHeadlineNamesBothTotals pins the labeled headline: the
+// pre-selected sum and the shown sum sit on one line with words saying what
+// each counts, so two unlabeled numbers can never sit two lines apart again.
+func TestRenderPreviewHeadlineNamesBothTotals(t *testing.T) {
+	var buf bytes.Buffer
+	RenderPreview(&buf, samplePlan(), "", false)
+	out := buf.String()
+	head := strings.SplitN(out, "\n", 2)[0]
+	if !strings.Contains(head, "pre-selected") || !strings.Contains(head, "shown across") {
+		t.Fatalf("headline must name both totals:\n%s", head)
+	}
+}
+
+// TestRenderPreviewShowsEvidenceAndNote pins the why-lines: a category's
+// note renders under its header and an item's evidence under its row.
+func TestRenderPreviewShowsEvidenceAndNote(t *testing.T) {
+	plan := samplePlan()
+	plan.Items[0].CategoryNote = "system policy note"
+	plan.Items[1].Target.Evidence = []string{"journald owns the journal", "vacuum is reversible"}
+	var buf bytes.Buffer
+	RenderPreview(&buf, plan, "", false)
+	out := buf.String()
+	if !strings.Contains(out, "system policy note") {
+		t.Fatalf("category note missing from preview:\n%s", out)
+	}
+	if !strings.Contains(out, "\u00b7 journald owns the journal; vacuum is reversible") {
+		t.Fatalf("item evidence missing from preview:\n%s", out)
+	}
+}
+
 func TestRenderReviewListsExactArgv(t *testing.T) {
 	var buf bytes.Buffer
 	RenderReview(&buf, samplePlan())
@@ -301,7 +331,7 @@ func TestCleanModelKeepWhitelists(t *testing.T) {
 	}
 }
 
-func TestSelectAllSkipsExpensiveAndGated(t *testing.T) {
+func TestSelectAllSkipsGatedAndData(t *testing.T) {
 	mk := func(id string, regen engine.Regen, gated bool) *engine.PlannedItem {
 		return &engine.PlannedItem{Target: engine.Target{
 			ID: id, Category: "dev", Display: id, Recovery: engine.RecoveryTrash,
@@ -311,17 +341,22 @@ func TestSelectAllSkipsExpensiveAndGated(t *testing.T) {
 	free := mk("dev.free", engine.RegenFree, false)
 	expensive := mk("dev.expensive", engine.RegenExpensive, false)
 	gated := mk("dev.gated", engine.RegenCheap, true)
-	plan := &engine.Plan{RunID: "T", Command: "clean", Items: []*engine.PlannedItem{free, expensive, gated}}
+	data := mk("dev.data", engine.RegenData, false)
+	plan := &engine.Plan{RunID: "T", Command: "clean", Items: []*engine.PlannedItem{free, expensive, gated, data}}
 	m := NewCleanModel(CleanConfig{Plan: plan})
 	m.selectAll()
 	if !free.Selected {
 		t.Fatal("free item should be selected by select-all")
 	}
-	if expensive.Selected {
-		t.Fatal("expensive item must not be selected by select-all")
+	// The cost × activity fix: an idle expensive cache is one keystroke away.
+	if !expensive.Selected {
+		t.Fatal("idle expensive item should be selected by select-all")
 	}
 	if gated.Selected {
 		t.Fatal("gated item must not be selected by select-all")
+	}
+	if data.Selected {
+		t.Fatal("data item must not be selected by select-all")
 	}
 }
 
@@ -488,6 +523,81 @@ func TestCleanSortSizeDescending(t *testing.T) {
 	}
 }
 
+// TestCleanExplainLineAndLegend pins the two legibility surfaces: the footer
+// shows the cursor row's why (item evidence, or the category note), and the
+// full help overlay opens with the row-vocabulary legend.
+func TestCleanExplainLineAndLegend(t *testing.T) {
+	plan := samplePlan()
+	plan.Items[0].CategoryNote = "system policy note"
+	plan.Items[1].Target.Evidence = []string{"journald owns the journal"}
+	m := NewCleanModel(CleanConfig{Plan: plan, Whitelist: nil})
+
+	// Cursor on the category row shows the category's note.
+	m.setCursor(0)
+	if got := m.explainLine(); got != "system policy note" {
+		t.Fatalf("category explain = %q", got)
+	}
+	// Cursor on an item shows its evidence (and, for owner rows, the exact
+	// argv — the review screen's per-row detail without leaving the preview).
+	for i, r := range m.rows {
+		if r.kind == rowItem && r.item.Target.ID == "system.journald" {
+			m.setCursor(i)
+			break
+		}
+	}
+	got := m.explainLine()
+	if !strings.HasPrefix(got, "runs sudo -- journalctl --vacuum-size=500M") ||
+		!strings.Contains(got, "journald owns the journal") {
+		t.Fatalf("item explain = %q", got)
+	}
+	if footer := m.footer(); !strings.Contains(footer, "\u00b7 runs sudo -- journalctl") {
+		t.Fatalf("footer must carry the explain line:\n%s", footer)
+	}
+
+	// The legend rides above the full help.
+	m.help.ShowAll = true
+	view := m.View()
+	for _, want := range []string{
+		"[trash] recoverable from the Trash",
+		"free/cheap/expensive",
+		"K writes the whitelist",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("legend missing %q:\n%s", want, view)
+		}
+	}
+}
+
+// TestCleanEnterConfirmsFromPreview pins the single-screen confirm: enter on
+// the preview confirms the run directly (no review round-trip), r still opens
+// the full review listing, and enter's help says what it will run.
+func TestCleanEnterConfirmsFromPreview(t *testing.T) {
+	plan := samplePlan()
+	m := NewCleanModel(CleanConfig{Plan: plan})
+	if cmd := pressKey(t, m, tea.KeyMsg{Type: tea.KeyEnter}); !isQuitCmd(cmd) {
+		t.Fatal("enter on the preview must confirm and quit")
+	}
+	if !m.confirmed || m.aborted {
+		t.Fatalf("confirmed=%v aborted=%v, want confirmed without abort", m.confirmed, m.aborted)
+	}
+
+	m2 := NewCleanModel(CleanConfig{Plan: samplePlan()})
+	pressKey(t, m2, runeKey('r'))
+	if m2.screen != 1 {
+		t.Fatal("r must open the review screen")
+	}
+	if cmd := pressKey(t, m2, tea.KeyMsg{Type: tea.KeyEnter}); !isQuitCmd(cmd) || !m2.confirmed {
+		t.Fatal("enter on the review must confirm")
+	}
+
+	// The enter help names the selection so the confirm is informed.
+	m3 := NewCleanModel(CleanConfig{Plan: samplePlan()})
+	m3.updateConfirmHelp()
+	if help := m3.keys.Confirm.Help(); !strings.Contains(help.Desc, "2 item(s)") {
+		t.Fatalf("enter help = %+v, want the selection summary", help)
+	}
+}
+
 // TestCleanFooterListsBindings asserts the footer names the keys it used to hide
 // and points at the full help for the rest.
 func TestCleanFooterListsBindings(t *testing.T) {
@@ -497,7 +607,7 @@ func TestCleanFooterListsBindings(t *testing.T) {
 	footer := m.footer()
 	for _, want := range []string{
 		"toggle", "expand", "collapse", "sort name", "sort size", "none", "all safe",
-		"keep", "search", "review", "all keys", "quit",
+		"keep", "search", "review", "run", "all keys", "quit",
 	} {
 		if !strings.Contains(footer, want) {
 			t.Fatalf("footer hides %q:\n%s", want, footer)

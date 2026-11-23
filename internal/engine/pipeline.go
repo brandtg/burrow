@@ -4,10 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
-	"time"
 
 	"github.com/brandtg/burrow/internal/journal"
 	"github.com/brandtg/burrow/internal/owner"
@@ -25,8 +26,6 @@ type PlannedItem struct {
 	Reason        string
 	Freed         int64
 	Argv          []string
-	GuardStop     bool
-	TimedOut      bool
 	// Kept is true when the user pressed keep in the interactive preview. The
 	// item stays in the plan for transparency but is never executed.
 	Kept bool
@@ -88,20 +87,22 @@ type CategoryGroup struct {
 
 // Options configures Build.
 type Options struct {
-	Command         string
-	Categories      []Category
-	Only            []string
-	Exclude         []string
-	MinSize         int64
-	DiscoverTimeout time.Duration
+	Command    string
+	Categories []Category
+	Only       []string
+	Exclude    []string
+	MinSize    int64
 	// NoOwner leaves owner-contract items unselected (still shown).
 	NoOwner bool
-	// Progress, when non-nil, is called once per category as its discovery
-	// completes, in the same stable category order the plan is built in, with
-	// the category id and the number of targets discovered for it (0 when
-	// discovery failed). It is never called from the discovery goroutines, so
-	// the call order is deterministic. It is informational only: it may report
-	// progress, but it must not block the pipeline, mutate the plan, or panic.
+	// Progress, when non-nil, is called once per category with the category id
+	// and the number of targets discovered for it (0 when discovery failed).
+	// Calls come in the same stable category order the plan is built in, but
+	// they are incremental: a category's line fires as soon as its discovery
+	// completes and every earlier category has completed, rather than in one
+	// burst after the whole scan. Progress is never called from the discovery
+	// goroutines themselves, so the call order is deterministic. It is
+	// informational only: it may report progress, but it must not block the
+	// pipeline, mutate the plan, or panic.
 	Progress func(categoryID string, targets int)
 }
 
@@ -116,8 +117,8 @@ func (p *Plan) Selected() []*PlannedItem {
 	return out
 }
 
-// TotalsOf sums a set of items.
-func TotalsOf(items []*PlannedItem) Totals {
+// totalsOf sums a set of items.
+func totalsOf(items []*PlannedItem) Totals {
 	var t Totals
 	for _, it := range items {
 		t.Count++
@@ -131,7 +132,12 @@ func TotalsOf(items []*PlannedItem) Totals {
 }
 
 // SelectedTotals sums the selected items.
-func (p *Plan) SelectedTotals() Totals { return TotalsOf(p.Selected()) }
+func (p *Plan) SelectedTotals() Totals { return totalsOf(p.Selected()) }
+
+// Totals sums every item in the plan, selected or not. Presentation layers
+// use it next to SelectedTotals so the headline can say what each number
+// counts instead of leaving two unlabeled sums two lines apart.
+func (p *Plan) Totals() Totals { return totalsOf(p.Items) }
 
 // GroupedTree returns items as category -> optional group -> item, preserving
 // plan order at every level. The grouping is presentation-only; it never
@@ -178,19 +184,40 @@ func (p *Plan) GroupedTree() []CategoryGroup {
 			ig.Unknown++
 		}
 	}
+	// Biggest rows first within every group (and within the category's flat
+	// list), unknown sizes last: a space tool's default order should put the
+	// 88.8 GiB row where the eye lands, not below a 100 MiB one. Groups and
+	// categories keep their plan order; this is presentation-only.
+	for i := range groups {
+		sortItemsBySize(groups[i].Items)
+		for j := range groups[i].Groups {
+			sortItemsBySize(groups[i].Groups[j].Items)
+		}
+	}
 	return groups
+}
+
+// sortItemsBySize orders items largest-first; unknown sizes sort last.
+func sortItemsBySize(items []*PlannedItem) {
+	sort.SliceStable(items, func(i, j int) bool {
+		return itemSizeKey(items[i]) > itemSizeKey(items[j])
+	})
+}
+
+func itemSizeKey(it *PlannedItem) int64 {
+	if !it.Target.SizeKnown {
+		return -1
+	}
+	return it.Target.SizeBytes
 }
 
 // Build runs steps 2-5: discover (parallel, per-category timeout), measure,
 // filter, and plan. Discovery is limited to categories --only can match, so a
 // narrow selector does not pay for scanning unrelated roots. It never mutates
 // the filesystem (invariant I1).
-func Build(ctx context.Context, env *Env, opts Options) (*Plan, error) {
+func Build(ctx context.Context, env *Env, opts Options) *Plan {
 	if opts.Command == "" {
 		opts.Command = "clean"
-	}
-	if opts.DiscoverTimeout <= 0 {
-		opts.DiscoverTimeout = owner.TimeoutScanPerRoot
 	}
 	plan := &Plan{RunID: journal.NewRunID(), Command: opts.Command}
 
@@ -200,51 +227,98 @@ func Build(ctx context.Context, env *Env, opts Options) (*Plan, error) {
 	}
 
 	type discovered struct {
-		cat     Category
-		targets []Target
-		err     error
+		excluded bool
+		cat      Category
+		targets  []Target
+		err      error
 	}
-	results := make(map[string]discovered, len(cats))
-	ch := make(chan discovered, len(cats))
-	var wg sync.WaitGroup
-	for _, cat := range cats {
+	// Excluded categories hold a sentinel so the ordered progress drain can
+	// advance past them; they are never discovered or measured.
+	results := make([]*discovered, len(cats))
+	for i, cat := range cats {
 		if !categoryIncluded(cat.ID(), opts.Exclude) {
+			results[i] = &discovered{excluded: true, cat: cat}
+		}
+	}
+	type landing struct {
+		idx int
+		d   discovered
+	}
+	ch := make(chan landing, len(cats))
+	var wg sync.WaitGroup
+	for i, cat := range cats {
+		if results[i] != nil {
 			continue
 		}
 		wg.Add(1)
-		go func(c Category) {
+		go func(i int, c Category) {
 			defer wg.Done()
-			dctx, cancel := context.WithTimeout(ctx, opts.DiscoverTimeout)
+			dctx, cancel := context.WithTimeout(ctx, owner.TimeoutScanPerRoot)
 			defer cancel()
 			ts, err := c.Discover(dctx, env)
-			ch <- discovered{cat: c, targets: ts, err: err}
-		}(cat)
+			ch <- landing{idx: i, d: discovered{cat: c, targets: ts, err: err}}
+		}(i, cat)
 	}
-	wg.Wait()
-	close(ch)
-	for d := range ch {
-		results[d.cat.ID()] = d
+	go func() {
+		wg.Wait()
+		close(ch)
+	}()
+
+	// Drain incrementally: fire Progress for category i the moment it and
+	// every category before it have landed, so the lines stream out in plan
+	// order while later categories are still scanning.
+	next := 0
+	pending := map[int]discovered{}
+	for l := range ch {
+		pending[l.idx] = l.d
+		for next < len(results) {
+			if results[next] != nil {
+				// Excluded sentinel: nothing to report, just advance.
+				next++
+				continue
+			}
+			d, ok := pending[next]
+			if !ok {
+				break
+			}
+			results[next] = &d
+			delete(pending, next)
+			if opts.Progress != nil {
+				opts.Progress(d.cat.ID(), len(d.targets))
+			}
+			next++
+		}
 	}
 
-	// Step 2/3/4/5 in category order for a stable plan.
-	for _, cat := range cats {
+	// One measure over the union of targets: the du probes from every
+	// category share the worker pool instead of running back-to-back per
+	// category. Pointers, so the measured sizes land on the targets the plan
+	// loop reads.
+	var all []*Target
+	for _, r := range results {
+		if r == nil || r.excluded {
+			continue
+		}
+		for i := range r.targets {
+			all = append(all, &r.targets[i])
+		}
+	}
+	measure(ctx, env, all)
+
+	// Step 3/4/5 in category order for a stable plan.
+	for i, cat := range cats {
 		if !categoryIncluded(cat.ID(), opts.Exclude) {
 			continue
 		}
-		d, ok := results[cat.ID()]
-		if !ok {
+		d := results[i]
+		if d == nil {
 			continue
-		}
-		if opts.Progress != nil {
-			opts.Progress(cat.ID(), len(d.targets))
 		}
 		if d.err != nil {
 			plan.Warnings = append(plan.Warnings, fmt.Sprintf("%s: discovery failed: %v", cat.ID(), d.err))
 			continue
 		}
-		targets := d.targets
-		Measure(ctx, env, targets)
-		for _, t := range targets {
+		for _, t := range d.targets {
 			if !includeTarget(t, opts, env.Whitelist) {
 				continue
 			}
@@ -252,7 +326,11 @@ func Build(ctx context.Context, env *Env, opts Options) (*Plan, error) {
 				plan.Warnings = append(plan.Warnings, fmt.Sprintf("%s: %v", t.ID, err))
 				continue
 			}
-			selected := t.DefaultOn && t.AutoSelectable()
+			// Pre-selection stays conservative: only free/cheap regen costs
+			// are turned on without a keystroke. Expensive-but-idle rows are
+			// bulk-selectable (AutoSelectable) but never pre-selected — a
+			// surprise multi-GiB re-download must not hide behind enter.
+			selected := t.DefaultOn && t.AutoSelectable() && t.Regen <= RegenCheap
 			if opts.NoOwner && t.Recovery == RecoveryOwner {
 				selected = false
 			}
@@ -269,10 +347,14 @@ func Build(ctx context.Context, env *Env, opts Options) (*Plan, error) {
 			plan.Items = append(plan.Items, item)
 		}
 	}
-	if len(opts.Only) > 0 && !scoped && len(plan.Items) == 0 {
-		plan.Warnings = append(plan.Warnings, fmt.Sprintf("no category matched --only %s", strings.Join(opts.Only, ", ")))
+	if len(opts.Only) > 0 && len(plan.Items) == 0 {
+		if scoped {
+			plan.Warnings = append(plan.Warnings, fmt.Sprintf("no items matched --only %s", strings.Join(opts.Only, ", ")))
+		} else {
+			plan.Warnings = append(plan.Warnings, fmt.Sprintf("no category matched --only %s", strings.Join(opts.Only, ", ")))
+		}
 	}
-	return plan, nil
+	return plan
 }
 
 // ApplyHooks runs the optional category hooks against plan: every Reconciler
@@ -391,7 +473,6 @@ func matchSelector(t Target, list []string) bool {
 // Summary is the outcome of Execute (steps 7-9).
 type Summary struct {
 	RunID       string
-	Command     string
 	Plan        *Plan
 	OK          int
 	Skipped     int
@@ -404,6 +485,11 @@ type Summary struct {
 	DFAfter     uint64
 	JournalPath string
 	Interrupted bool
+	// JournalErrors counts journal records that could not be written, with the
+	// last error. The journal is what history --restore reads, so a failed
+	// write means the run is not fully undoable and must be visible.
+	JournalErrors int
+	JournalErr    error
 }
 
 // Executed returns the items that were attempted.
@@ -440,17 +526,17 @@ func Execute(ctx context.Context, env *Env, plan *Plan, jw *journal.Writer) *Sum
 // must not block the pipeline, start its own long work, mutate the plan or
 // environment, or panic. Execute's behavior is unchanged when progress is nil.
 func ExecuteWithProgress(ctx context.Context, env *Env, plan *Plan, jw *journal.Writer, progress func(*PlannedItem, Result)) *Summary {
-	sum := &Summary{RunID: plan.RunID, Command: plan.Command, Plan: plan}
+	sum := &Summary{RunID: plan.RunID, Plan: plan}
 	if jw != nil {
 		sum.JournalPath = jw.Path()
-		_ = jw.Append(journal.Record{
+		sum.noteJournal(jw.Append(journal.Record{
 			RunID:   plan.RunID,
 			Command: plan.Command,
 			Action:  journal.ActionRunStart,
 			Status:  journal.StatusStart,
-		})
+		}))
 	}
-	sum.DFBefore = FreeBytes("/")
+	sum.DFBefore = freeBytesFor(dfPaths(plan))
 
 	for _, it := range plan.Items {
 		if !it.Selected || it.Kept {
@@ -461,26 +547,93 @@ func ExecuteWithProgress(ctx context.Context, env *Env, plan *Plan, jw *journal.
 			break
 		}
 		res := executeItem(ctx, env, it, sum)
-		appendRecord(jw, plan, it)
+		sum.noteJournal(appendRecord(jw, plan, it))
 		if progress != nil {
 			progress(it, res)
 		}
 	}
-	sum.DFAfter = FreeBytes("/")
+	sum.DFAfter = freeBytesFor(dfPaths(plan))
 	if ctx.Err() != nil {
 		sum.Interrupted = true
 	}
 
 	if jw != nil {
-		_ = jw.Append(journal.Record{
+		sum.noteJournal(jw.Append(journal.Record{
 			RunID:   plan.RunID,
 			Command: plan.Command,
 			Action:  journal.ActionRunEnd,
 			Status:  journal.StatusEnd,
 			Bytes:   sum.Freed,
-		})
+		}))
 	}
 	return sum
+}
+
+// noteJournal records a journal write outcome. A failed append is not fatal
+// (the run continues — stopping mid-run would leave the tree in a worse,
+// less-traceable state), but it must be visible: the journal is the undo trail.
+func (s *Summary) noteJournal(err error) {
+	if err == nil {
+		return
+	}
+	s.JournalErrors++
+	s.JournalErr = err
+}
+
+// dfPaths returns the paths whose common filesystem should back the df
+// before/after numbers: the run's own targets, not the root filesystem.
+func dfPaths(plan *Plan) []string {
+	var paths []string
+	for _, it := range plan.Items {
+		if it.Selected && !it.Kept && it.Target.Path != "" {
+			paths = append(paths, it.Target.Path)
+		}
+	}
+	return paths
+}
+
+// freeBytesFor stats the common ancestor of paths (the filesystem holding the
+// run's targets). It falls back to the home directory, then to /, so a run
+// with no paths still reports something meaningful.
+func freeBytesFor(paths []string) uint64 {
+	if p := commonAncestor(paths); p != "" {
+		if n := FreeBytes(p); n > 0 {
+			return n
+		}
+	}
+	if n := FreeBytes("/home"); n > 0 {
+		return n
+	}
+	return FreeBytes("/")
+}
+
+// commonAncestor returns the longest directory that contains every path, or ""
+// when there are no paths. Paths must be absolute; they are cleaned first.
+func commonAncestor(paths []string) string {
+	var prefix []string
+	for _, p := range paths {
+		if p == "" {
+			continue
+		}
+		parts := strings.Split(filepath.Clean(p), string(filepath.Separator))
+		if prefix == nil {
+			prefix = parts
+			continue
+		}
+		n := len(prefix)
+		if len(parts) < n {
+			n = len(parts)
+		}
+		i := 0
+		for i < n && prefix[i] == parts[i] {
+			i++
+		}
+		prefix = prefix[:i]
+	}
+	if len(prefix) == 0 {
+		return ""
+	}
+	return strings.Join(prefix, string(filepath.Separator))
 }
 
 // executeItem runs one planned item and returns the action's result (zero when
@@ -491,7 +644,6 @@ func executeItem(ctx context.Context, env *Env, it *PlannedItem, sum *Summary) R
 		if err := it.Target.Guard.Check(ctx, env); err != nil {
 			it.Status = StatusSkipped
 			it.Reason = err.Error()
-			it.GuardStop = true
 			sum.Skipped++
 			sum.GuardStops++
 			return Result{}
@@ -525,13 +677,11 @@ func executeItem(ctx context.Context, env *Env, it *PlannedItem, sum *Summary) R
 		case errors.As(err, &gs):
 			it.Status = StatusSkipped
 			it.Reason = gs.Reason
-			it.GuardStop = true
 			sum.Skipped++
 			sum.GuardStops++
 		case res.TimedOut:
 			it.Status = StatusSkipped
 			it.Reason = err.Error()
-			it.TimedOut = true
 			sum.Skipped++
 			sum.Timeouts++
 		default:
@@ -555,9 +705,9 @@ func estimateFreed(it *PlannedItem, res Result) int64 {
 	return 0
 }
 
-func appendRecord(jw *journal.Writer, plan *Plan, it *PlannedItem) {
+func appendRecord(jw *journal.Writer, plan *Plan, it *PlannedItem) error {
 	if jw == nil {
-		return
+		return nil
 	}
 	action := journal.ActionOwner
 	recovery := journal.RecoveryOwner
@@ -578,7 +728,7 @@ func appendRecord(jw *journal.Writer, plan *Plan, it *PlannedItem) {
 	case StatusDryRun:
 		status = journal.StatusDryRun
 	}
-	_ = jw.Append(journal.Record{
+	return jw.Append(journal.Record{
 		RunID:    plan.RunID,
 		Command:  plan.Command,
 		Item:     it.Target.ID,

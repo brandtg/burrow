@@ -179,13 +179,10 @@ func TestDiscoverFindsAptItems(t *testing.T) {
 func TestExecuteRunsExactDnfArgv(t *testing.T) {
 	logPath := useTestbin(t)
 	env := stubEnvFor(t, false, distro.For(distro.Info{ID: "fedora"}))
-	plan, err := engine.Build(context.Background(), env, engine.Options{
+	plan := engine.Build(context.Background(), env, engine.Options{
 		Categories: []engine.Category{system.New()},
 		Only:       []string{"system.pkg-cache"},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	if len(plan.Items) != 1 || !plan.Items[0].Selected {
 		t.Fatalf("expected one selected pkg-cache item, got %d", len(plan.Items))
 	}
@@ -202,13 +199,10 @@ func TestExecuteRunsExactDnfArgv(t *testing.T) {
 func TestExecuteRunsExactAptArgv(t *testing.T) {
 	logPath := useTestbin(t)
 	env := stubEnv(t, false)
-	plan, err := engine.Build(context.Background(), env, engine.Options{
+	plan := engine.Build(context.Background(), env, engine.Options{
 		Categories: []engine.Category{system.New()},
 		Only:       []string{"system.pkg-cache"},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	if len(plan.Items) != 1 || !plan.Items[0].Selected {
 		t.Fatalf("expected one selected pkg-cache item, got %d", len(plan.Items))
 	}
@@ -236,13 +230,10 @@ func TestExecuteRunsExactAptArgv(t *testing.T) {
 func TestDryRunProducesPlanWithZeroMutations(t *testing.T) {
 	logPath := useTestbin(t)
 	env := stubEnv(t, true)
-	plan, err := engine.Build(context.Background(), env, engine.Options{
+	plan := engine.Build(context.Background(), env, engine.Options{
 		Categories: []engine.Category{system.New()},
 		Only:       []string{"system.pkg-cache"},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	sum := engine.Execute(context.Background(), env, plan, nil)
 	if sum.OK != 0 {
 		t.Fatalf("dry-run must not report ok, got %+v", sum)

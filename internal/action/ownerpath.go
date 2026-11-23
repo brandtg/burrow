@@ -3,7 +3,6 @@ package action
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/brandtg/burrow/internal/engine"
 	"github.com/brandtg/burrow/internal/owner"
@@ -28,11 +27,6 @@ type OwnerPathAction struct {
 	AllowedRoots []string
 }
 
-// Describe renders a human description.
-func (a *OwnerPathAction) Describe() string {
-	return "run " + strings.Join(owner.Plan(a.Command.Argv, a.Command.NeedsRoot), " ")
-}
-
 // Recovery declares the owner contract.
 func (a *OwnerPathAction) Recovery() engine.Recovery { return engine.RecoveryOwner }
 
@@ -46,15 +40,13 @@ func (a *OwnerPathAction) Run(ctx context.Context, dryRun bool) (engine.Result, 
 	if a.Resolve != nil {
 		got, err := a.Resolve(ctx, a.Runner)
 		if err != nil {
-			return skip(err.Error()), safe.GuardStop("%s", err.Error())
+			return engine.Result{}, safe.GuardStop("%s", err.Error())
 		}
 		if got != a.Expected {
-			reason := fmt.Sprintf("owner path changed: %s -> %s", a.Expected, got)
-			return skip(reason), safe.GuardStop("%s", reason)
+			return engine.Result{}, safe.GuardStop("%s", fmt.Sprintf("owner path changed: %s -> %s", a.Expected, got))
 		}
 		if len(a.AllowedRoots) > 0 && !safe.WithinAnyRoot(got, a.AllowedRoots) {
-			reason := fmt.Sprintf("owner path %s is outside the allowed parent", got)
-			return skip(reason), safe.GuardStop("%s", reason)
+			return engine.Result{}, safe.GuardStop("%s", fmt.Sprintf("owner path %s is outside the allowed parent", got))
 		}
 	}
 	return (&OwnerCommandAction{Command: a.Command, Runner: a.Runner}).Run(ctx, dryRun)

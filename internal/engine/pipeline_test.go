@@ -45,7 +45,6 @@ type fakeAction struct {
 	run      func(context.Context, bool) (engine.Result, error)
 }
 
-func (a fakeAction) Describe() string { return "fake" }
 func (a fakeAction) Recovery() engine.Recovery {
 	if a.recovery == 0 {
 		return engine.RecoveryOwner
@@ -56,7 +55,7 @@ func (a fakeAction) Run(ctx context.Context, dryRun bool) (engine.Result, error)
 	if a.run != nil {
 		return a.run(ctx, dryRun)
 	}
-	return engine.Result{Status: engine.StatusOK}, nil
+	return engine.Result{}, nil
 }
 
 type fakeGuard struct{ err error }
@@ -118,10 +117,7 @@ func TestBuildFilterSelectAndTotals(t *testing.T) {
 		target("fake.med", engine.RiskMed, false, "/keep/med"),
 		target("fake.skip", engine.RiskLow, true, "/skip/me"),
 	}}
-	plan, err := engine.Build(context.Background(), env, engine.Options{Categories: []engine.Category{cat}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	plan := engine.Build(context.Background(), env, engine.Options{Categories: []engine.Category{cat}})
 	if len(plan.Items) != 3 {
 		t.Fatalf("whitelist should drop one item, got %d (warnings: %v)", len(plan.Items), plan.Warnings)
 	}
@@ -135,6 +131,9 @@ func TestBuildFilterSelectAndTotals(t *testing.T) {
 	if tot := plan.SelectedTotals(); tot.Count != 1 || tot.Bytes != 100 {
 		t.Fatalf("unexpected totals %+v", tot)
 	}
+	if tot := plan.Totals(); tot.Count != 3 || tot.Bytes != 300 {
+		t.Fatalf("all-items totals must count every shown row: %+v", tot)
+	}
 	if len(plan.Scanned) != 1 || plan.Scanned[0].ID != "fake" {
 		t.Fatalf("Scanned should record the category, got %+v", plan.Scanned)
 	}
@@ -143,10 +142,7 @@ func TestBuildFilterSelectAndTotals(t *testing.T) {
 func TestBuildScannedIncludesEmptyCategories(t *testing.T) {
 	env := testEnv(t, true)
 	empty := fakeCategory{id: "empty"}
-	plan, err := engine.Build(context.Background(), env, engine.Options{Categories: []engine.Category{empty}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	plan := engine.Build(context.Background(), env, engine.Options{Categories: []engine.Category{empty}})
 	if len(plan.Items) != 0 {
 		t.Fatalf("expected no items, got %d", len(plan.Items))
 	}
@@ -164,10 +160,7 @@ func TestBuildNoOwner(t *testing.T) {
 		target("fake.owner", engine.RiskLow, true, ""),
 		trashT,
 	}}
-	plan, err := engine.Build(context.Background(), env, engine.Options{Categories: []engine.Category{cat}, NoOwner: true})
-	if err != nil {
-		t.Fatal(err)
-	}
+	plan := engine.Build(context.Background(), env, engine.Options{Categories: []engine.Category{cat}, NoOwner: true})
 	for _, it := range plan.Items {
 		if it.Target.Recovery == engine.RecoveryOwner && it.Selected {
 			t.Fatalf("owner item %s should not be selected under --no-owner", it.Target.ID)
@@ -196,10 +189,7 @@ func TestExecuteDryRunDoesNotMutate(t *testing.T) {
 		Action: act, Recovery: engine.RecoveryTrash, Risk: engine.RiskLow, DefaultOn: true,
 	}
 	cat := fakeCategory{id: "fake", targets: []engine.Target{tgt}}
-	plan, err := engine.Build(context.Background(), env, engine.Options{Categories: []engine.Category{cat}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	plan := engine.Build(context.Background(), env, engine.Options{Categories: []engine.Category{cat}})
 	sum := engine.Execute(context.Background(), env, plan, nil)
 	if _, err := os.Stat(victim); err != nil {
 		t.Fatalf("dry-run mutated the filesystem: %v", err)
@@ -218,18 +208,14 @@ func TestExecuteGuardStopSkipsAndJournals(t *testing.T) {
 	tgt := target("fake.guarded", engine.RiskLow, true, "")
 	tgt.Guard = fakeGuard{err: safe.GuardStop("owner busy")}
 	cat := fakeCategory{id: "fake", targets: []engine.Target{tgt}}
-	plan, err := engine.Build(context.Background(), env, engine.Options{Categories: []engine.Category{cat}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	plan := engine.Build(context.Background(), env, engine.Options{Categories: []engine.Category{cat}})
 	sum := engine.Execute(context.Background(), env, plan, jw)
 	if sum.Skipped != 1 || sum.GuardStops != 1 || sum.OK != 0 {
 		t.Fatalf("unexpected summary %+v", sum)
 	}
-	if !plan.Items[0].GuardStop || plan.Items[0].Reason == "" {
+	if plan.Items[0].Reason == "" {
 		t.Fatalf("guard stop not recorded: %+v", plan.Items[0])
 	}
-
 	records, err := journal.Read(env.Paths.Journal)
 	if err != nil {
 		t.Fatal(err)
@@ -257,13 +243,10 @@ func TestExecuteFailureIsPartial(t *testing.T) {
 	env := testEnv(t, false)
 	tgt := target("fake.fail", engine.RiskLow, true, "")
 	tgt.Action = fakeAction{recovery: engine.RecoveryOwner, run: func(context.Context, bool) (engine.Result, error) {
-		return engine.Result{Status: engine.StatusFailed}, errors.New("boom")
+		return engine.Result{}, errors.New("boom")
 	}}
 	cat := fakeCategory{id: "fake", targets: []engine.Target{tgt}}
-	plan, err := engine.Build(context.Background(), env, engine.Options{Categories: []engine.Category{cat}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	plan := engine.Build(context.Background(), env, engine.Options{Categories: []engine.Category{cat}})
 	sum := engine.Execute(context.Background(), env, plan, nil)
 	if sum.Failed != 1 {
 		t.Fatalf("expected 1 failure, got %+v", sum)
@@ -276,13 +259,10 @@ func TestSelectorMatchesCategoryAndPrefix(t *testing.T) {
 		target("system.pkg-cache", engine.RiskLow, true, ""),
 		target("system.journald", engine.RiskLow, true, ""),
 	}}
-	plan, err := engine.Build(context.Background(), env, engine.Options{
+	plan := engine.Build(context.Background(), env, engine.Options{
 		Categories: []engine.Category{cat},
 		Only:       []string{"system.journald"},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	if len(plan.Items) != 1 || plan.Items[0].Target.ID != "system.journald" {
 		t.Fatalf("selector failed: %v", ids(plan.Items))
 	}
@@ -294,6 +274,83 @@ func ids(items []*engine.PlannedItem) []string {
 		out = append(out, it.Target.ID)
 	}
 	return out
+}
+
+// TestBuildOnlyWarnsWhenNothingMatched pins both empty-match warnings: a
+// scoped --only whose item filter drops everything names the items; an
+// unscoped one (unknown category prefix) names the categories.
+func TestBuildOnlyWarnsWhenNothingMatched(t *testing.T) {
+	env := testEnv(t, true)
+	scoped := fakeCategory{id: "dev", targets: []engine.Target{catTarget("dev", "npm")}}
+	plan := engine.Build(context.Background(), env, engine.Options{
+		Categories: []engine.Category{scoped},
+		Only:       []string{"dev.golang"},
+	})
+	if len(plan.Warnings) != 1 || !strings.Contains(plan.Warnings[0], "no items matched --only dev.golang") {
+		t.Fatalf("scoped empty run must warn, got %v", plan.Warnings)
+	}
+
+	foreign := fakeCategory{id: "other", targets: []engine.Target{catTarget("other", "x")}}
+	plan = engine.Build(context.Background(), env, engine.Options{
+		Categories: []engine.Category{foreign},
+		Only:       []string{"flatpak.app"},
+	})
+	if len(plan.Warnings) != 1 || !strings.Contains(plan.Warnings[0], "no category matched --only flatpak.app") {
+		t.Fatalf("unscoped empty run must warn, got %v", plan.Warnings)
+	}
+}
+
+// TestMinSizeSemantics pins the --min-size rule: a known size below the floor
+// is dropped, a known size at or above it stays, and an unknown-size item
+// always stays — the size is simply not known yet, and hiding it would hide
+// potentially large rows from a space tool. Documented in user-guide.md.
+func TestMinSizeSemantics(t *testing.T) {
+	env := testEnv(t, true)
+	small := target("fake.small", engine.RiskLow, true, "")
+	big := target("fake.big", engine.RiskLow, true, "")
+	big.SizeBytes = 2 << 30
+	unknown := target("fake.unknown", engine.RiskLow, true, "")
+	unknown.SizeKnown = false
+	cat := fakeCategory{id: "fake", targets: []engine.Target{small, big, unknown}}
+	plan := engine.Build(context.Background(), env, engine.Options{
+		Categories: []engine.Category{cat},
+		MinSize:    1 << 30,
+	})
+	got := map[string]bool{}
+	for _, it := range plan.Items {
+		got[it.Target.ID] = true
+	}
+	if got["fake.small"] {
+		t.Fatal("a known size below the floor must be filtered out")
+	}
+	if !got["fake.big"] || !got["fake.unknown"] {
+		t.Fatalf("known-big and unknown items must stay: %v", got)
+	}
+}
+
+// TestExecuteSurfacesJournalErrors pins the fail-open fix: when journal writes
+// fail, the summary says so instead of silently losing the undo trail.
+func TestExecuteSurfacesJournalErrors(t *testing.T) {
+	env := testEnv(t, false)
+	// The journal path is a directory, so every append fails with EISDIR.
+	jpath := filepath.Join(t.TempDir(), "operations.jsonl")
+	if err := os.Mkdir(jpath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	jw, err := journal.NewWriter(jpath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tgt := target("fake.ok", engine.RiskLow, true, "")
+	cat := fakeCategory{id: "fake", targets: []engine.Target{tgt}}
+	plan := engine.Build(context.Background(), env, engine.Options{Categories: []engine.Category{cat}})
+	sum := engine.Execute(context.Background(), env, plan, jw)
+	if sum.OK != 1 {
+		t.Fatalf("the run itself must still succeed: %+v", sum)
+	}
+	if sum.JournalErrors == 0 || sum.JournalErr == nil {
+		t.Fatalf("failed journal writes must surface in the summary: %+v", sum)
+	}
 }
 
 // probeCategory records whether its Discover ran, so tests can prove that
@@ -324,13 +381,10 @@ func TestBuildOnlyScopesDiscovery(t *testing.T) {
 	dev := probeCategory{id: "dev", discovered: &devRan, targets: []engine.Target{catTarget("dev", "npm")}}
 	sys := probeCategory{id: "system", discovered: &sysRan, targets: []engine.Target{catTarget("system", "pkg-cache")}}
 
-	plan, err := engine.Build(context.Background(), env, engine.Options{
+	plan := engine.Build(context.Background(), env, engine.Options{
 		Categories: []engine.Category{dev, sys},
 		Only:       []string{"dev"},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	if !devRan {
 		t.Fatal("dev.Discover did not run under --only dev")
 	}
@@ -351,13 +405,10 @@ func TestBuildOnlyItemSelectorStillNarrowsItems(t *testing.T) {
 		catTarget("system", "journald"),
 	}}
 
-	plan, err := engine.Build(context.Background(), env, engine.Options{
+	plan := engine.Build(context.Background(), env, engine.Options{
 		Categories: []engine.Category{dev, sys},
 		Only:       []string{"system.journald"},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	if devRan {
 		t.Fatal("dev.Discover ran under --only system.journald")
 	}
@@ -373,13 +424,10 @@ func TestBuildOnlyNoCategoryMatchWarns(t *testing.T) {
 	env := testEnv(t, true)
 	dev := probeCategory{id: "dev", discovered: new(bool), targets: []engine.Target{catTarget("dev", "npm")}}
 
-	plan, err := engine.Build(context.Background(), env, engine.Options{
+	plan := engine.Build(context.Background(), env, engine.Options{
 		Categories: []engine.Category{dev},
 		Only:       []string{"nope"},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	if len(plan.Items) != 0 {
 		t.Fatalf("items = %v, want none", ids(plan.Items))
 	}
@@ -399,13 +447,10 @@ func TestBuildOnlyForeignItemPrefixStillMatches(t *testing.T) {
 	}}
 	desk.targets[0].Category = "desktop-pkgs"
 
-	plan, err := engine.Build(context.Background(), env, engine.Options{
+	plan := engine.Build(context.Background(), env, engine.Options{
 		Categories: []engine.Category{dev, desk},
 		Only:       []string{"flatpak.unused"},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	if !deskRan {
 		t.Fatal("desktop-pkgs.Discover did not run for --only flatpak.unused")
 	}
@@ -499,10 +544,14 @@ func TestAutoSelectable(t *testing.T) {
 	}{
 		{"free-low", engine.Target{Risk: engine.RiskLow, Regen: engine.RegenFree}, true},
 		{"cheap-low", engine.Target{Risk: engine.RiskLow, Regen: engine.RegenCheap}, true},
-		{"expensive-low", engine.Target{Risk: engine.RiskLow, Regen: engine.RegenExpensive}, false},
+		// The cost × activity fix: expensive is a rating that binds when the
+		// cache is active (gated), not a permanent veto. An idle expensive
+		// cache is bulk-selectable.
+		{"expensive-low", engine.Target{Risk: engine.RiskLow, Regen: engine.RegenExpensive}, true},
 		{"data-low", engine.Target{Risk: engine.RiskLow, Regen: engine.RegenData}, false},
 		{"high-free", engine.Target{Risk: engine.RiskHigh, Regen: engine.RegenFree}, false},
 		{"gated-cheap", engine.Target{Risk: engine.RiskLow, Regen: engine.RegenCheap, Gated: true}, false},
+		{"gated-expensive", engine.Target{Risk: engine.RiskLow, Regen: engine.RegenExpensive, Gated: true}, false},
 	}
 	for _, c := range cases {
 		if got := c.tgt.AutoSelectable(); got != c.want {
@@ -519,10 +568,7 @@ func TestBuildNeverPreselectsExpensiveOrGated(t *testing.T) {
 	gated := target("fake.gated", engine.RiskLow, true, "")
 	gated.Gated = true
 	cat := fakeCategory{id: "fake", targets: []engine.Target{free, expensive, gated}}
-	plan, err := engine.Build(context.Background(), env, engine.Options{Categories: []engine.Category{cat}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	plan := engine.Build(context.Background(), env, engine.Options{Categories: []engine.Category{cat}})
 	sel := map[string]bool{}
 	for _, it := range plan.Selected() {
 		sel[it.Target.ID] = true
@@ -531,7 +577,7 @@ func TestBuildNeverPreselectsExpensiveOrGated(t *testing.T) {
 		t.Fatalf("free item must be pre-selected; got %v", ids(plan.Selected()))
 	}
 	if sel["fake.expensive"] {
-		t.Fatal("expensive item must not be pre-selected")
+		t.Fatal("expensive item must not be pre-selected (one keystroke away, not on)")
 	}
 	if sel["fake.gated"] {
 		t.Fatal("gated item must not be pre-selected")
@@ -544,13 +590,10 @@ func TestKeptItemNeverExecutes(t *testing.T) {
 	ran := false
 	tgt.Action = fakeAction{recovery: engine.RecoveryOwner, run: func(context.Context, bool) (engine.Result, error) {
 		ran = true
-		return engine.Result{Status: engine.StatusOK}, nil
+		return engine.Result{}, nil
 	}}
 	cat := fakeCategory{id: "fake", targets: []engine.Target{tgt}}
-	plan, err := engine.Build(context.Background(), env, engine.Options{Categories: []engine.Category{cat}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	plan := engine.Build(context.Background(), env, engine.Options{Categories: []engine.Category{cat}})
 	plan.Items[0].Kept = true
 	sum := engine.Execute(context.Background(), env, plan, nil)
 	if ran || sum.OK != 0 {
@@ -605,15 +648,12 @@ func TestBuildProgressFiresInCategoryOrder(t *testing.T) {
 		targets int
 	}
 	var got []call
-	plan, err := engine.Build(context.Background(), env, engine.Options{
+	plan := engine.Build(context.Background(), env, engine.Options{
 		Categories: cats,
 		Progress: func(id string, n int) {
 			got = append(got, call{id, n})
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	want := []call{{"a", 2}, {"b", 1}, {"c", 0}}
 	if len(got) != len(want) {
@@ -632,9 +672,7 @@ func TestBuildProgressFiresInCategoryOrder(t *testing.T) {
 func TestBuildProgressNilIsSafe(t *testing.T) {
 	env := testEnv(t, true)
 	cat := fakeCategory{id: "fake", targets: []engine.Target{target("fake.one", engine.RiskLow, true, "")}}
-	if _, err := engine.Build(context.Background(), env, engine.Options{Categories: []engine.Category{cat}}); err != nil {
-		t.Fatal(err)
-	}
+	engine.Build(context.Background(), env, engine.Options{Categories: []engine.Category{cat}})
 }
 
 func TestExecuteWithProgressFiresOncePerAttemptedItem(t *testing.T) {
@@ -643,7 +681,7 @@ func TestExecuteWithProgressFiresOncePerAttemptedItem(t *testing.T) {
 	guarded.Guard = fakeGuard{err: safe.GuardStop("owner busy")}
 	failed := target("fake.fail", engine.RiskLow, true, "")
 	failed.Action = fakeAction{recovery: engine.RecoveryOwner, run: func(context.Context, bool) (engine.Result, error) {
-		return engine.Result{Status: engine.StatusFailed}, errors.New("boom")
+		return engine.Result{}, errors.New("boom")
 	}}
 	off := target("fake.off", engine.RiskHigh, true, "")
 	cat := fakeCategory{id: "fake", targets: []engine.Target{
@@ -653,10 +691,7 @@ func TestExecuteWithProgressFiresOncePerAttemptedItem(t *testing.T) {
 		failed,
 		off,
 	}}
-	plan, err := engine.Build(context.Background(), env, engine.Options{Categories: []engine.Category{cat}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	plan := engine.Build(context.Background(), env, engine.Options{Categories: []engine.Category{cat}})
 
 	type seenItem struct {
 		id     string
@@ -687,10 +722,7 @@ func TestExecuteWithProgressFiresOncePerAttemptedItem(t *testing.T) {
 	}
 
 	// Execute with no callback must produce the same outcome.
-	plan2, err := engine.Build(context.Background(), env, engine.Options{Categories: []engine.Category{cat}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	plan2 := engine.Build(context.Background(), env, engine.Options{Categories: []engine.Category{cat}})
 	sum2 := engine.Execute(context.Background(), env, plan2, nil)
 	if sum2.OK != sum.OK || sum2.Skipped != sum.Skipped || sum2.Failed != sum.Failed || sum2.Freed != sum.Freed {
 		t.Fatalf("Execute summary %+v differs from ExecuteWithProgress %+v", sum2, sum)
@@ -703,10 +735,7 @@ func TestExecuteWithProgressSkipsKeptAndUnselected(t *testing.T) {
 		target("fake.kept", engine.RiskLow, true, ""),
 		target("fake.off", engine.RiskHigh, true, ""),
 	}}
-	plan, err := engine.Build(context.Background(), env, engine.Options{Categories: []engine.Category{cat}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	plan := engine.Build(context.Background(), env, engine.Options{Categories: []engine.Category{cat}})
 	plan.Items[0].Kept = true
 
 	calls := 0
@@ -730,10 +759,7 @@ func TestExecuteProgressRecordsMidItemCancelAsInterrupt(t *testing.T) {
 		return engine.Result{}, ctx.Err()
 	}}
 	cat := fakeCategory{id: "fake", targets: []engine.Target{tgt}}
-	plan, err := engine.Build(context.Background(), env, engine.Options{Categories: []engine.Category{cat}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	plan := engine.Build(context.Background(), env, engine.Options{Categories: []engine.Category{cat}})
 
 	calls := 0
 	sum := engine.ExecuteWithProgress(ctx, env, plan, nil, func(*engine.PlannedItem, engine.Result) {

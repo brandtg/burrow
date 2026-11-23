@@ -11,12 +11,11 @@ func TestParseIgnoresCommentsAndBlanks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := set.Entries()
-	if len(got) != 2 {
-		t.Fatalf("expected 2 entries, got %v", got)
+	if !set.Contains("/home/u/.cache/keep") || !set.Contains("/home/u/src") {
+		t.Fatalf("expected both entries to match, got none")
 	}
-	if got[0] != "/home/u/.cache/keep" || got[1] != "/home/u/src" {
-		t.Fatalf("entries = %v", got)
+	if set.Contains("/other") {
+		t.Fatal("unexpected extra entry matched")
 	}
 }
 

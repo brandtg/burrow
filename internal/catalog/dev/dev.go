@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/brandtg/burrow/internal/action"
 	"github.com/brandtg/burrow/internal/catalog"
@@ -88,10 +89,14 @@ type ownerSpec struct {
 
 // itemSpec is one row of the dev catalog. An item with both an owner and a
 // trash fallback uses the owner when it is installed and the fallback otherwise,
-// so the two never produce duplicate rows.
+// so the two never produce duplicate rows. regen classifies how expensive the
+// cache is to rebuild; it gates pre-selection and bulk selection only and never
+// changes how an item executes. Every row declares it — there is no silent
+// default.
 type itemSpec struct {
 	id        string
 	display   string
+	regen     engine.Regen
 	risk      engine.Risk
 	defaultOn bool
 	guard     engine.Guard
@@ -101,155 +106,123 @@ type itemSpec struct {
 
 var itemSpecs = []itemSpec{
 	{
-		id: "dev.npm", display: "npm cache", risk: engine.RiskLow, defaultOn: true, guard: npmGuard,
+		id: "dev.npm", display: "npm cache", regen: engine.RegenCheap, risk: engine.RiskLow, defaultOn: true, guard: npmGuard,
 		owner: &ownerSpec{binary: "npm", command: owner.NpmCacheClean, probe: owner.NpmCacheProbe, evidence: "npm owns its cache"},
 		// Prefer the content-addressable cache so _logs and _update-notifier
 		// are left alone; fall back to the whole ~/.npm only on older layouts.
 		trash: &trashSpec{base: homeBase, paths: []string{".npm/_cacache", ".npm"}, evidence: "documented npm cache root"},
 	},
 	{
-		id: "dev.pnpm", display: "pnpm store", risk: engine.RiskLow, defaultOn: true, guard: pnpmGuard,
+		id: "dev.pnpm", display: "pnpm store", regen: engine.RegenCheap, risk: engine.RiskLow, defaultOn: true, guard: pnpmGuard,
 		owner: &ownerSpec{binary: "pnpm", command: owner.PnpmStorePrune, probe: owner.PnpmStoreProbe, evidence: "pnpm owns its content-addressable store"},
 		trash: &trashSpec{base: homeBase, paths: []string{".local/share/pnpm/store", ".pnpm-store"}, evidence: "documented pnpm store root"},
 	},
 	{
-		id: "dev.yarn", display: "yarn cache", risk: engine.RiskLow, defaultOn: true,
+		id: "dev.yarn", display: "yarn cache", regen: engine.RegenFree, risk: engine.RiskLow, defaultOn: true,
 		trash: &trashSpec{base: homeBase, paths: []string{".yarn/cache"}, evidence: "yarn cache is regenerable"},
 	},
 	{
-		id: "dev.yarn-cache", display: "yarn cache", risk: engine.RiskLow, defaultOn: true,
+		id: "dev.yarn-cache", display: "yarn cache", regen: engine.RegenFree, risk: engine.RiskLow, defaultOn: true,
 		trash: &trashSpec{base: xdgCacheBase, paths: []string{"yarn"}, evidence: "yarn cache is regenerable"},
 	},
 	{
-		id: "dev.bun", display: "bun cache", risk: engine.RiskLow, defaultOn: true,
+		id: "dev.bun", display: "bun cache", regen: engine.RegenCheap, risk: engine.RiskLow, defaultOn: true,
 		owner: &ownerSpec{binary: "bun", command: owner.BunCacheRm, probe: owner.BunCacheProbe, evidence: "bun owns its cache"},
 		trash: &trashSpec{base: homeBase, paths: []string{".bun/install/cache"}, evidence: "documented bun cache root"},
 	},
 	{
-		id: "dev.go-mod", display: "Go module cache", risk: engine.RiskLow, defaultOn: true, guard: goGuard,
+		id: "dev.go-mod", display: "Go module cache", regen: engine.RegenExpensive, risk: engine.RiskLow, defaultOn: true, guard: goGuard,
 		owner: &ownerSpec{binary: "go", command: owner.GoCleanModCache, probe: owner.GoModCacheProbe, evidence: "go owns GOMODCACHE"},
 		trash: &trashSpec{base: homeBase, paths: []string{"go/pkg/mod"}, evidence: "documented GOMODCACHE root"},
 	},
 	{
-		id: "dev.go-build", display: "Go build cache", risk: engine.RiskLow, defaultOn: true,
+		id: "dev.go-build", display: "Go build cache", regen: engine.RegenFree, risk: engine.RiskLow, defaultOn: true,
 		owner: &ownerSpec{binary: "go", command: owner.GoCleanCache, probe: owner.GoBuildCacheProbe, evidence: "go owns GOCACHE; cleaning is concurrent-safe"},
 		trash: &trashSpec{base: xdgCacheBase, paths: []string{"go-build"}, evidence: "documented GOCACHE root"},
 	},
 	{
-		id: "dev.rust-registry-cache", display: "Cargo registry cache", risk: engine.RiskLow, defaultOn: true, guard: cargoGuard,
+		id: "dev.rust-registry-cache", display: "Cargo registry cache", regen: engine.RegenExpensive, risk: engine.RiskLow, defaultOn: true, guard: cargoGuard,
 		// Keep registry/src, registry/index, git, bin, and toolchains: only the
 		// downloaded crate archives under registry/cache are disposable.
 		trash: &trashSpec{base: cargoHomeBase, paths: []string{"registry/cache"}, evidence: "keep registry/src, registry/index, git, bin, toolchains"},
 	},
 	{
-		id: "dev.rustup-downloads", display: "rustup downloads", risk: engine.RiskLow, defaultOn: true,
+		id: "dev.rustup-downloads", display: "rustup downloads", regen: engine.RegenExpensive, risk: engine.RiskLow, defaultOn: true,
 		trash: &trashSpec{base: rustupHomeBase, paths: []string{"downloads"}, evidence: "downloaded toolchain archives are re-fetchable"},
 	},
 	{
-		id: "dev.pip", display: "pip cache", risk: engine.RiskLow, defaultOn: true,
+		id: "dev.pip", display: "pip cache", regen: engine.RegenCheap, risk: engine.RiskLow, defaultOn: true,
 		owner: &ownerSpec{binary: "pip3", command: owner.PipCachePurge, probe: owner.PipCacheDirProbe, evidence: "pip owns its wheel cache"},
 		trash: &trashSpec{base: xdgCacheBase, paths: []string{"pip"}, evidence: "documented pip cache root"},
 	},
 	{
-		id: "dev.uv", display: "uv cache", risk: engine.RiskLow, defaultOn: true,
+		id: "dev.uv", display: "uv cache", regen: engine.RegenCheap, risk: engine.RiskLow, defaultOn: true,
 		owner: &ownerSpec{binary: "uv", command: owner.UvCachePrune, probe: owner.UvCacheDirProbe, evidence: "uv owns its cache"},
 		trash: &trashSpec{base: xdgCacheBase, paths: []string{"uv"}, evidence: "documented uv cache root"},
 	},
 	{
-		id: "dev.poetry.artifacts", display: "Poetry artifacts", risk: engine.RiskLow, defaultOn: true,
+		id: "dev.poetry.artifacts", display: "Poetry artifacts", regen: engine.RegenCheap, risk: engine.RiskLow, defaultOn: true,
 		trash: &trashSpec{base: xdgCacheBase, paths: []string{"pypoetry/artifacts"}, evidence: "keep pypoetry/virtualenvs"},
 	},
 	{
-		id: "dev.poetry.cache", display: "Poetry cache", risk: engine.RiskLow, defaultOn: true,
+		id: "dev.poetry.cache", display: "Poetry cache", regen: engine.RegenCheap, risk: engine.RiskLow, defaultOn: true,
 		trash: &trashSpec{base: xdgCacheBase, paths: []string{"pypoetry/cache"}, evidence: "keep pypoetry/virtualenvs"},
 	},
 	{
-		id: "dev.conda", display: "conda cache", risk: engine.RiskLow, defaultOn: true,
+		id: "dev.conda", display: "conda cache", regen: engine.RegenExpensive, risk: engine.RiskLow, defaultOn: true,
 		owner: &ownerSpec{binary: "conda", command: owner.CondaClean, evidence: "conda owns its package caches"},
 	},
 	{
-		id: "dev.gem", display: "RubyGems cache", risk: engine.RiskLow, defaultOn: true,
+		id: "dev.gem", display: "RubyGems cache", regen: engine.RegenCheap, risk: engine.RiskLow, defaultOn: true,
 		trash: &trashSpec{base: homeBase, glob: ".gem/ruby/*/cache", evidence: "gem cache is regenerable"},
 	},
 	{
-		id: "dev.gem-bundle", display: "Bundler cache", risk: engine.RiskLow, defaultOn: true,
+		id: "dev.gem-bundle", display: "Bundler cache", regen: engine.RegenCheap, risk: engine.RiskLow, defaultOn: true,
 		trash: &trashSpec{base: homeBase, paths: []string{".bundle/cache"}, evidence: "bundler cache is regenerable"},
 	},
 	{
-		id: "dev.rbenv", display: "rbenv cache", risk: engine.RiskLow, defaultOn: true,
+		id: "dev.rbenv", display: "rbenv cache", regen: engine.RegenFree, risk: engine.RiskLow, defaultOn: true,
 		trash: &trashSpec{base: homeBase, paths: []string{".rbenv/cache"}, evidence: "rbenv cache is regenerable"},
 	},
 	{
-		id: "dev.cpan-build", display: "CPAN build dir", risk: engine.RiskLow, defaultOn: true,
+		id: "dev.cpan-build", display: "CPAN build dir", regen: engine.RegenFree, risk: engine.RiskLow, defaultOn: true,
 		trash: &trashSpec{base: homeBase, paths: []string{".cpan/build"}, evidence: "keep ~/.cpan/sources"},
 	},
 	{
-		id: "dev.nix", display: "Nix store garbage", risk: engine.RiskLow, defaultOn: true,
+		id: "dev.nix", display: "Nix store garbage", regen: engine.RegenExpensive, risk: engine.RiskLow, defaultOn: true,
 		owner: &ownerSpec{binary: "nix-collect-garbage", command: owner.NixCollectGarbage, evidence: "nix-collect-garbage owns the store"},
 	},
 	{
-		id: "dev.corepack", display: "corepack cache", risk: engine.RiskLow, defaultOn: true,
+		id: "dev.corepack", display: "corepack cache", regen: engine.RegenCheap, risk: engine.RiskLow, defaultOn: true,
 		owner: &ownerSpec{binary: "corepack", command: owner.CorepackCacheClean, base: xdgCacheBase, path: "node/corepack", evidence: "corepack owns its cache"},
 	},
 	{
-		id: "dev.mise", display: "mise cache", risk: engine.RiskLow, defaultOn: true,
+		id: "dev.mise", display: "mise cache", regen: engine.RegenCheap, risk: engine.RiskLow, defaultOn: true,
 		owner: &ownerSpec{binary: "mise", command: owner.MiseCacheClear, probe: owner.MiseCachePathProbe, evidence: "mise owns its cache"},
 		trash: &trashSpec{base: xdgCacheBase, paths: []string{"mise"}, evidence: "documented mise cache root"},
 	},
 	{
-		id: "dev.frontend-caches.typescript", display: "typescript cache", risk: engine.RiskLow, defaultOn: true,
-		trash: &trashSpec{base: xdgCacheBase, paths: []string{"typescript"}, evidence: "frontend tool caches are regenerable"},
-	},
-	{
-		id: "dev.frontend-caches.electron", display: "electron cache", risk: engine.RiskLow, defaultOn: true,
-		trash: &trashSpec{base: xdgCacheBase, paths: []string{"electron"}, evidence: "frontend tool caches are regenerable"},
-	},
-	{
-		id: "dev.frontend-caches.node-gyp", display: "node-gyp cache", risk: engine.RiskLow, defaultOn: true,
-		trash: &trashSpec{base: xdgCacheBase, paths: []string{"node-gyp"}, evidence: "frontend tool caches are regenerable"},
-	},
-	{
-		id: "dev.frontend-caches.vite", display: "vite cache", risk: engine.RiskLow, defaultOn: true,
-		trash: &trashSpec{base: xdgCacheBase, paths: []string{"vite"}, evidence: "frontend tool caches are regenerable"},
-	},
-	{
-		id: "dev.frontend-caches.webpack", display: "webpack cache", risk: engine.RiskLow, defaultOn: true,
-		trash: &trashSpec{base: xdgCacheBase, paths: []string{"webpack"}, evidence: "frontend tool caches are regenerable"},
-	},
-	{
-		id: "dev.frontend-caches.eslint", display: "eslint cache", risk: engine.RiskLow, defaultOn: true,
-		trash: &trashSpec{base: xdgCacheBase, paths: []string{"eslint"}, evidence: "frontend tool caches are regenerable"},
-	},
-	{
-		id: "dev.frontend-caches.prettier", display: "prettier cache", risk: engine.RiskLow, defaultOn: true,
-		trash: &trashSpec{base: xdgCacheBase, paths: []string{"prettier"}, evidence: "frontend tool caches are regenerable"},
-	},
-	{
-		id: "dev.frontend-caches.parcel-cache", display: "parcel-cache cache", risk: engine.RiskLow, defaultOn: true,
-		trash: &trashSpec{base: xdgCacheBase, paths: []string{"parcel-cache"}, evidence: "frontend tool caches are regenerable"},
-	},
-	{
-		id: "dev.docker-buildx", display: "Docker buildx cache", risk: engine.RiskLow, defaultOn: true,
+		id: "dev.docker-buildx", display: "Docker buildx cache", regen: engine.RegenFree, risk: engine.RiskLow, defaultOn: true,
 		trash: &trashSpec{base: homeBase, paths: []string{".docker/buildx/cache"}, evidence: "buildx cache is regenerable"},
 	},
 	{
-		id: "dev.cloud-cli.kube", display: "kubectl cache", risk: engine.RiskLow, defaultOn: true,
+		id: "dev.cloud-cli.kube", display: "kubectl cache", regen: engine.RegenFree, risk: engine.RiskLow, defaultOn: true,
 		trash: &trashSpec{base: homeBase, paths: []string{".kube/cache"}, evidence: "kubectl discovery cache"},
 	},
 	{
-		id: "dev.cloud-cli.aws", display: "AWS CLI cache", risk: engine.RiskLow, defaultOn: true,
+		id: "dev.cloud-cli.aws", display: "AWS CLI cache", regen: engine.RegenFree, risk: engine.RiskLow, defaultOn: true,
 		trash: &trashSpec{base: homeBase, paths: []string{".aws/cli/cache"}, evidence: "AWS CLI cache"},
 	},
 	{
-		id: "dev.cloud-cli.gcloud", display: "gcloud logs", risk: engine.RiskLow, defaultOn: true,
+		id: "dev.cloud-cli.gcloud", display: "gcloud logs", regen: engine.RegenFree, risk: engine.RiskLow, defaultOn: true,
 		trash: &trashSpec{base: xdgConfigBase, paths: []string{"gcloud/logs"}, evidence: "gcloud logs"},
 	},
 	{
-		id: "dev.cloud-cli.azure", display: "Azure logs", risk: engine.RiskLow, defaultOn: true,
+		id: "dev.cloud-cli.azure", display: "Azure logs", regen: engine.RegenFree, risk: engine.RiskLow, defaultOn: true,
 		trash: &trashSpec{base: homeBase, paths: []string{".azure/logs"}, evidence: "Azure CLI logs"},
 	},
 	{
-		id: "dev.gh-cli", display: "GitHub CLI cache", risk: engine.RiskLow, defaultOn: true,
+		id: "dev.gh-cli", display: "GitHub CLI cache", regen: engine.RegenCheap, risk: engine.RiskLow, defaultOn: true,
 		owner: &ownerSpec{binary: "gh", command: owner.GhClearCache, base: xdgCacheBase, path: "gh", evidence: "gh owns its cache"},
 	},
 }
@@ -262,9 +235,12 @@ func (*Category) Discover(ctx context.Context, env *engine.Env) ([]engine.Target
 	}
 	var out []engine.Target
 	for _, s := range itemSpecs {
-		out = append(out, s.discover(ctx, env)...)
+		ts := s.discover(ctx, env)
+		for i := range ts {
+			ts[i].Regen = s.regen
+		}
+		out = append(out, ts...)
 	}
-	out = applyRegen(out)
 	out = applyIdleGate(env, out)
 	out = applyPreselect(env, out)
 	return out, nil
@@ -280,29 +256,6 @@ func (s itemSpec) discover(ctx context.Context, env *engine.Env) []engine.Target
 		return s.trash.discover(env, s)
 	}
 	return nil
-}
-
-// regenFor classifies how expensive a dev cache is to rebuild. It gates
-// pre-selection only; it never changes how an item executes.
-func regenFor(id string) engine.Regen {
-	switch id {
-	case "dev.go-mod", "dev.rust-registry-cache", "dev.rustup-downloads", "dev.conda", "dev.nix":
-		return engine.RegenExpensive
-	case "dev.npm", "dev.pnpm", "dev.bun", "dev.pip", "dev.uv",
-		"dev.poetry.artifacts", "dev.poetry.cache", "dev.mise", "dev.corepack", "dev.gh-cli":
-		return engine.RegenCheap
-	}
-	if strings.HasPrefix(id, "dev.gem") {
-		return engine.RegenCheap
-	}
-	return engine.RegenFree
-}
-
-func applyRegen(targets []engine.Target) []engine.Target {
-	for i := range targets {
-		targets[i].Regen = regenFor(targets[i].ID)
-	}
-	return targets
 }
 
 // applyIdleGate marks a dev cache touched within [dev] max_age as gated: it is
@@ -325,17 +278,27 @@ func applyIdleGate(env *engine.Env, targets []engine.Target) []engine.Target {
 		recent, known := catalog.IsRecent(t.Path, within)
 		if known && recent {
 			t.Gated = true
-			t.Evidence = append(t.Evidence, fmt.Sprintf("active within %s; shown but not pre-selected", within))
+			t.Evidence = append(t.Evidence, "active within "+humanWindow(within))
 		}
 	}
 	return targets
 }
 
+// humanWindow renders a policy window as whole days when it is a multiple of
+// 24h, else hours — evidence reads "active within 30d", not "720h0m0s".
+func humanWindow(d time.Duration) string {
+	if d%(24*time.Hour) == 0 {
+		return fmt.Sprintf("%dd", d/(24*time.Hour))
+	}
+	return d.String()
+}
+
 // applyPreselect implements the v2 default: the owner of the machine actively
 // uses their toolchain caches, so nothing in this category is pre-selected
 // unless [dev] preselect opts in. Rows stay visible and individually
-// toggleable; the idle gate and regen cost still apply to bulk selection when
-// preselect is enabled.
+// toggleable; the idle gate still applies to bulk selection when preselect is
+// enabled, and expensive rows stay out of pre-selection (they are one
+// keystroke away, not walled off).
 func applyPreselect(env *engine.Env, targets []engine.Target) []engine.Target {
 	if env == nil || env.Cfg == nil || env.Cfg.Dev.Preselect {
 		return targets

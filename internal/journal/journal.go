@@ -171,7 +171,10 @@ func Hostname() string {
 	return h
 }
 
-// Read parses all records from path. A missing file yields no records.
+// Read parses all records from path. A missing file yields no records. A line
+// that fails to parse is skipped rather than failing the whole read: a crash
+// mid-append can leave a truncated trailing line, and an unopenable history
+// after a crash is worse than one skipped record.
 func Read(path string) ([]Record, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -191,7 +194,7 @@ func Read(path string) ([]Record, error) {
 		}
 		var r Record
 		if err := json.Unmarshal(line, &r); err != nil {
-			return out, fmt.Errorf("journal: bad line: %w", err)
+			continue
 		}
 		out = append(out, r)
 	}

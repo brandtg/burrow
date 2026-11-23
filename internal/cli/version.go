@@ -13,6 +13,9 @@ func (a *App) newVersionCmd() *cobra.Command {
 		Short: "print the burrow version",
 		Args:  noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := a.rejectCleanFlowFlags(cmd); err != nil {
+				return err
+			}
 			if a.Flags.JSON {
 				return json.NewEncoder(a.Out).Encode(map[string]string{"version": a.Version})
 			}

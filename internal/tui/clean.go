@@ -36,19 +36,29 @@ const reviewItemCap = 20
 // group starts collapsed in the TUI.
 const collapseThreshold = 20
 
-// RenderPreview writes the grouped preview table. The reclaimable total leads
-// (one honest number, details below); large groups are capped so a category
-// with hundreds of similar entries does not swamp the output.
+// RenderPreview writes the grouped preview table. The headline leads with the
+// two numbers that matter and names what each counts: what is pre-selected
+// (what runs if you confirm) and what is shown (everything the scan found).
+// Large groups are capped so a category with hundreds of similar entries does
+// not swamp the output.
 func RenderPreview(w io.Writer, plan *engine.Plan, platform string, color bool) {
 	if platform != "" {
 		fmt.Fprintln(w, platform)
 	}
 	t := plan.SelectedTotals()
-	fmt.Fprintf(w, "Reclaimable now: %s across %d items\n", config.FormatBytes(t.Bytes), t.Count)
+	all := plan.Totals()
+	head := config.FormatBytes(t.Bytes) + " pre-selected"
+	if t.Count == 0 {
+		head = "nothing pre-selected"
+	}
+	fmt.Fprintf(w, "Reclaimable now: %s; %s shown across %d items\n", head, config.FormatBytes(all.Bytes), all.Count)
 	cw := planItemWidths(plan)
 	unknown := 0
 	for _, g := range plan.GroupedTree() {
 		fmt.Fprintf(w, "\u25b8 %s  %s / %d items\n", g.Title, config.FormatBytes(g.Bytes), len(g.Items))
+		if g.Note != "" {
+			fmt.Fprintf(w, "  %s\n", faint(g.Note, color))
+		}
 		for _, ig := range g.Groups {
 			for _, it := range ig.Items {
 				if !it.Target.SizeKnown {
@@ -73,6 +83,9 @@ func RenderPreview(w io.Writer, plan *engine.Plan, platform string, color bool) 
 					indent = "    "
 				}
 				fmt.Fprintf(w, "%s%s\n", indent, itemLine(it, cw, color))
+				if ev := evidenceLine(it); ev != "" {
+					fmt.Fprintf(w, "%s    %s\n", indent, faint("\u00b7 "+ev, color))
+				}
 				shown++
 			}
 			if extra := len(ig.Items) - shown; extra > 0 {
@@ -95,6 +108,20 @@ func RenderPreview(w io.Writer, plan *engine.Plan, platform string, color bool) 
 	if unknown > 0 {
 		fmt.Fprintf(w, "%d item(s) report size after the owner command runs (unknown now)\n", unknown)
 	}
+}
+
+// evidenceLine joins a target's evidence into the one-line why that sits under
+// the row: what this is and why the tool thinks it exists.
+func evidenceLine(it *engine.PlannedItem) string {
+	return strings.Join(it.Target.Evidence, "; ")
+}
+
+// faint dims text when color is on; plain output keeps it verbatim.
+func faint(s string, color bool) string {
+	if !color {
+		return s
+	}
+	return lipgloss.NewStyle().Faint(true).Render(s)
 }
 
 // RenderReview writes the exact argv/path that will run, aggregating large
@@ -176,6 +203,10 @@ func RenderSummary(w io.Writer, sum *engine.Summary, color bool) {
 	}
 	fmt.Fprintf(w, "Freed %s (df: %s -> %s)\n",
 		freed, config.FormatBytes(int64(sum.DFBefore)), config.FormatBytes(int64(sum.DFAfter)))
+	if sum.JournalErrors > 0 {
+		fmt.Fprintf(w, "warning: %d journal record(s) could not be written: %v; this run may not be restorable\n",
+			sum.JournalErrors, sum.JournalErr)
+	}
 	fmt.Fprintf(w, "ok %d  skipped %d  failed %d\n", sum.OK, sum.Skipped, sum.Failed)
 	if sum.JournalPath != "" {
 		fmt.Fprintf(w, "journal: %s\n", sum.JournalPath)
@@ -606,6 +637,12 @@ func (m *CleanModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, m.keys.Review):
 		m.screen = 1
 		m.reviewOffset = 0
+	case key.Matches(msg, m.keys.Confirm):
+		// Single-screen confirm: enter runs the current selection from the
+		// preview. The exact argv is one cursor-move away (the explain line),
+		// and the full review listing stays on r for those who want it.
+		m.confirmed = true
+		return m, tea.Quit
 	}
 	return m, nil
 }
@@ -822,8 +859,8 @@ func (m *CleanModel) toggleSort(mode sortMode) {
 }
 
 // sortMode is the preview's row ordering. sortDefault keeps the plan's
-// discovery order (categories in scan order, projects by path); the other
-// modes re-sort every level of the tree.
+// category and group order with items largest-first inside each group (the
+// GroupedTree order); the other modes re-sort every level of the tree.
 type sortMode int
 
 const (
@@ -977,8 +1014,12 @@ func (m *CleanModel) ensureVisible() {
 
 func (m *CleanModel) listHeight() int {
 	// Two header lines, a blank line before the list, a blank line before the
-	// footer, and the footer (plus the status line when there is one).
+	// footer, the explain line (when the cursor row has one to show), the
+	// footer, and the status line when there is one.
 	overhead := 4 + len(m.footerLines())
+	if m.explainLine() != "" {
+		overhead++
+	}
 	if m.status != "" {
 		overhead++
 	}
@@ -991,8 +1032,9 @@ func (m *CleanModel) listHeight() int {
 
 // View implements tea.Model.
 func (m *CleanModel) View() string {
+	m.updateConfirmHelp()
 	if m.help.ShowAll {
-		return m.help.FullHelpView(m.keys.fullHelp())
+		return m.legend() + "\n\n" + m.help.FullHelpView(m.keys.fullHelp())
 	}
 	if m.screen == 1 {
 		return m.reviewView()
@@ -1006,12 +1048,28 @@ func (m *CleanModel) View() string {
 	return b.String()
 }
 
+// updateConfirmHelp makes the enter binding say what it will run: the count
+// and bytes of the current selection, so the single-screen confirm is an
+// informed keystroke rather than a leap of faith.
+func (m *CleanModel) updateConfirmHelp() {
+	t := m.plan.SelectedTotals()
+	switch {
+	case m.dryRun:
+		m.keys.Confirm.SetHelp("enter", "confirm (dry-run)")
+	case t.Count == 0:
+		m.keys.Confirm.SetHelp("enter", "run (nothing selected)")
+	default:
+		m.keys.Confirm.SetHelp("enter", fmt.Sprintf("run %d item(s), %s", t.Count, config.FormatBytes(t.Bytes)))
+	}
+}
+
 func (m *CleanModel) header() string {
 	line1 := m.styles.header.Render("clean \u2014 categorized cleanup")
 	if m.platform != "" {
 		line1 = m.styles.header.Render(m.platform)
 	}
 	t := m.plan.SelectedTotals()
+	all := m.plan.Totals()
 	mode := ""
 	if m.dryRun {
 		mode = " \u00b7 dry-run"
@@ -1024,8 +1082,9 @@ func (m *CleanModel) header() string {
 		sortLabel = "size"
 	}
 	line2 := m.styles.subtle.Render(fmt.Sprintf(
-		"%d category(ies) \u00b7 %d item(s) \u00b7 selected %s across %d \u00b7 sort %s%s",
-		len(m.cats), len(m.plan.Items), config.FormatBytes(t.Bytes), t.Count, sortLabel, mode))
+		"%d category(ies) \u00b7 pre-selected %s across %d \u00b7 shown %s across %d \u00b7 sort %s%s",
+		len(m.cats), config.FormatBytes(t.Bytes), t.Count,
+		config.FormatBytes(all.Bytes), all.Count, sortLabel, mode))
 	return line1 + "\n" + line2
 }
 
@@ -1152,11 +1211,64 @@ func (m *CleanModel) clampReviewOffset(n, height int) {
 }
 
 func (m *CleanModel) footer() string {
-	out := strings.Join(m.footerLines(), "\n")
+	lines := m.footerLines()
+	if explain := m.explainLine(); explain != "" {
+		lines = append([]string{m.styles.subtle.Render("\u00b7 " + explain)}, lines...)
+	}
+	out := strings.Join(lines, "\n")
 	if m.status != "" {
 		out += "\n" + m.styles.subtle.Render(m.status)
 	}
 	return out
+}
+
+// explainLine is the why-line for whatever the cursor is on: an item's
+// evidence plus its path (and, for an owner item, the exact argv it will
+// run — the review screen's per-row detail, available without leaving the
+// preview), or a category's note (its selection policy).
+func (m *CleanModel) explainLine() string {
+	if m.cursor < 0 || m.cursor >= len(m.rows) {
+		return ""
+	}
+	switch r := m.rows[m.cursor]; r.kind {
+	case rowItem:
+		var parts []string
+		if len(r.item.Argv) > 0 {
+			parts = append(parts, "runs "+strings.Join(r.item.Argv, " "))
+		}
+		parts = append(parts, r.item.Target.Evidence...)
+		line := strings.Join(parts, "; ")
+		if p := r.item.Target.Path; p != "" {
+			if line == "" {
+				line = p
+			} else {
+				line += " \u00b7 " + p
+			}
+		}
+		return line
+	case rowCategory:
+		return r.cat.Note
+	default:
+		return ""
+	}
+}
+
+// legend explains the row vocabulary the key help cannot carry: the marks,
+// the contracts, the cost and risk columns, and the whitelist key. It is
+// shown above the full help overlay (?).
+func (m *CleanModel) legend() string {
+	lines := []string{
+		"[x] selected   [~] partly selected   [ ] off   [kept] whitelisted",
+		"[trash] recoverable from the Trash   [owner] re-runnable owner command",
+		"free/cheap/expensive = rebuild cost;  ,active = used within the idle window",
+		"low/med/high = blast radius if this guess is wrong",
+	}
+	if m.whitelist != nil {
+		lines = append(lines, "K writes the whitelist; undo by editing "+m.whitelist.Path())
+	} else {
+		lines = append(lines, "K writes the whitelist (unavailable this run)")
+	}
+	return m.styles.subtle.Render(strings.Join(lines, "\n"))
 }
 
 // footerLines renders the short help as at most two lines so the list keeps a
@@ -1189,13 +1301,16 @@ type cleanKeyMap struct {
 	Keep      key.Binding
 	Filter    key.Binding
 	Review    key.Binding
+	Confirm   key.Binding
 	Help      key.Binding
 	Quit      key.Binding
 }
 
-// Shared keymap rationale: enter acts on the selected row (here: opens the
-// review screen) and →/← navigate the tree in both models. n means sort by name
-// and s means sort by size in both models, so select-none moved to N.
+// Shared keymap rationale: enter acts on the selected row — in the preview it
+// confirms the run (the exact argv for the cursor row is in the explain line;
+// the full review listing is one key away on r), on the review screen it
+// confirms. n means sort by name and s means sort by size in both models, so
+// select-none moved to N.
 func defaultCleanKeys() cleanKeyMap {
 	return cleanKeyMap{
 		Up:        key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("\u2191/k", "up")),
@@ -1213,11 +1328,12 @@ func defaultCleanKeys() cleanKeyMap {
 		SortSize:  key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "sort size")),
 		// Shift-K: lowercase k is the vim "up" binding, so the whitelist key
 		// must be distinct or it is unreachable.
-		Keep:   key.NewBinding(key.WithKeys("K"), key.WithHelp("K", "keep")),
-		Filter: key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search")),
-		Review: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "review")),
-		Help:   key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "all keys")),
-		Quit:   key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
+		Keep:    key.NewBinding(key.WithKeys("K"), key.WithHelp("K", "keep")),
+		Filter:  key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search")),
+		Review:  key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "review")),
+		Confirm: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "run")),
+		Help:    key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "all keys")),
+		Quit:    key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
 	}
 }
 
@@ -1228,7 +1344,7 @@ func (k cleanKeyMap) shortHelp() []key.Binding {
 	return []key.Binding{
 		k.Up, k.Down, k.Toggle, k.Expand, k.Collapse,
 		k.SortName, k.SortSize, k.SelectAll, k.Clear, k.Keep, k.Filter,
-		k.Review, k.Help, k.Quit,
+		k.Review, k.Confirm, k.Help, k.Quit,
 	}
 }
 
@@ -1236,7 +1352,7 @@ func (k cleanKeyMap) fullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.PageUp, k.PageDown, k.Top, k.Bottom},
 		{k.Expand, k.Collapse, k.Toggle, k.SelectAll, k.Clear},
-		{k.SortName, k.SortSize, k.Keep, k.Filter, k.Review, k.Help, k.Quit},
+		{k.SortName, k.SortSize, k.Keep, k.Filter, k.Review, k.Confirm, k.Help, k.Quit},
 	}
 }
 

@@ -9,7 +9,8 @@ import (
 
 // Snapshot records the identity of a path and its parent immediately before a
 // mutation. Re-stat'ing and comparing immediately before the sink defeats a
-// path swap between discovery and execution (TOCTOU).
+// path swap between discovery and execution (TOCTOU), and the size/mode
+// comparison catches an in-place rewrite that keeps the same inode.
 //
 // Provenance: independent reimplementation of Mole's
 // _mole_snapshot_path_identity / _mole_path_matches_identity.
@@ -59,9 +60,13 @@ func TakeSnapshot(path string) (*Snapshot, error) {
 }
 
 // Matches re-stats the target and parent and reports whether the identity is
-// unchanged. Any error is reported as a non-match so callers fail closed.
+// unchanged: same device/inode for target and parent, and — because a swap is
+// not the only mutation that matters — same apparent size and mode. An in-place
+// rewrite (same inode, new bytes) or a permission change between snapshot and
+// execution is exactly the kind of mutation the guard must refuse. Any error is
+// reported as a non-match so callers fail closed.
 func (s *Snapshot) Matches() (bool, error) {
-	dev, ino, _, _, err := statIdentity(s.Path)
+	dev, ino, size, mode, err := statIdentity(s.Path)
 	if err != nil {
 		return false, err
 	}
@@ -71,6 +76,9 @@ func (s *Snapshot) Matches() (bool, error) {
 	}
 	if dev != s.TargetDev || ino != s.TargetIno || pdev != s.ParentDev || pino != s.ParentIno {
 		return false, &Violation{Path: s.Path, Reason: "path identity changed since snapshot"}
+	}
+	if size != s.Size || mode != s.Mode {
+		return false, &Violation{Path: s.Path, Reason: "path content or mode changed since snapshot"}
 	}
 	return true, nil
 }

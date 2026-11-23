@@ -9,11 +9,7 @@
 package containers
 
 import (
-	"bytes"
 	"context"
-	"os"
-	"path/filepath"
-	"strconv"
 	"strings"
 
 	"github.com/brandtg/burrow/internal/action"
@@ -54,16 +50,20 @@ func (*Category) Discover(ctx context.Context, env *engine.Env) ([]engine.Target
 	return out, nil
 }
 
-// Reconcile drops docker sub-prunes that a broader selected prune already
-// covers, so a run never executes redundant prunes:
-// `docker system prune -a --volumes` supersedes every part, and
-// `docker image prune -a` supersedes the dangling-only prune.
+// Reconcile drops items a broader selected item already covers, so a run never
+// executes redundant work:
+// `docker system prune -a --volumes` supersedes every docker part,
+// `docker image prune -a` supersedes the dangling-only prune, and a selected
+// `docker builder prune` supersedes dev.docker-buildx — the dev category
+// trashes the same buildx cache bytes this prune clears, so both running
+// would double-count and churn the same tree twice.
 func (*Category) Reconcile(plan *engine.Plan) {
 	if plan == nil {
 		return
 	}
 	all := selected(plan, "containers.docker-all")
 	unused := all || selected(plan, "containers.docker-unused")
+	buildCache := all || selected(plan, "containers.docker-build-cache")
 	superseded := map[string]bool{}
 	if all {
 		superseded["containers.docker-build-cache"] = true
@@ -72,6 +72,9 @@ func (*Category) Reconcile(plan *engine.Plan) {
 	}
 	if unused {
 		superseded["containers.docker-dangling"] = true
+	}
+	if buildCache {
+		superseded["dev.docker-buildx"] = true
 	}
 	for _, it := range plan.Items {
 		if superseded[it.Target.ID] {
@@ -107,9 +110,6 @@ func dockerItems(ctx context.Context, env *engine.Env) []engine.Target {
 	evidence := []string{"docker is installed; the daemon is re-checked before pruning"}
 	if dfKnown {
 		evidence = append(evidence, dockerEvidence(df)...)
-	}
-	if dockerBuildRunning() {
-		evidence = append(evidence, "a docker build is in progress")
 	}
 	guard := runtimeGuard{binary: "docker"}
 	total, totalKnown := df.reclaimableTotal()
@@ -255,34 +255,4 @@ func isAllDigits(s string) bool {
 		}
 	}
 	return true
-}
-
-// dockerBuildRunning reports whether a docker client build is in progress. It
-// is read-only and best-effort: a build does not necessarily make the prune
-// unsafe, but it is recorded in the item's evidence.
-func dockerBuildRunning() bool {
-	entries, err := os.ReadDir("/proc")
-	if err != nil {
-		return false
-	}
-	for _, de := range entries {
-		if !de.IsDir() {
-			continue
-		}
-		if _, err := strconv.Atoi(de.Name()); err != nil {
-			continue
-		}
-		comm, err := os.ReadFile(filepath.Join("/proc", de.Name(), "comm"))
-		if err != nil || strings.TrimSpace(string(comm)) != "docker" {
-			continue
-		}
-		args, err := os.ReadFile(filepath.Join("/proc", de.Name(), "cmdline"))
-		if err != nil {
-			continue
-		}
-		if bytes.Contains(args, []byte("build")) {
-			return true
-		}
-	}
-	return false
 }
